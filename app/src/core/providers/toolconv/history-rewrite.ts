@@ -40,12 +40,82 @@ function renderHermesResult(name: string, content: string): string {
   return `<tool_response>\n${JSON.stringify({ name, content })}\n</tool_response>`;
 }
 
-function renderCall(call: ToolCall, dialect: ToolFormat): string {
-  return dialect === "xml" ? renderXmlCall(call) : renderHermesCall(call);
+import { DS_TOOL_CALLS_BEGIN, DS_TOOL_CALL_BEGIN, DS_TOOL_SEP, DS_TOOL_CALL_END, DS_TOOL_CALLS_END } from "./deepseek";
+import { GEMMA_CALL_OPEN, GEMMA_CALL_CLOSE, GEMMA_STR } from "./gemma";
+
+/** JSON args for a call, with an unparsable blob replayed as {} (never invented). */
+function argsOf(call: ToolCall): Record<string, unknown> {
+  return parseArgs(call.arguments);
+}
+
+function renderDeepseekCall(call: ToolCall): string {
+  return `${DS_TOOL_CALLS_BEGIN}${DS_TOOL_CALL_BEGIN}${call.name}${DS_TOOL_SEP}${JSON.stringify(argsOf(call))}${DS_TOOL_CALL_END}${DS_TOOL_CALLS_END}`;
+}
+
+function renderGlmCall(call: ToolCall): string {
+  const body = Object.entries(argsOf(call))
+    .map(([k, v]) => `<arg_key>${k}</arg_key><arg_value>${typeof v === "string" ? v : JSON.stringify(v)}</arg_value>`)
+    .join("");
+  return `<tool_call>${call.name}\n${body}</tool_call>`;
+}
+
+function renderMinimaxCall(call: ToolCall): string {
+  const body = Object.entries(argsOf(call))
+    .map(([k, v]) => `<parameter name="${k}">${typeof v === "string" ? v : JSON.stringify(v)}</parameter>`)
+    .join("");
+  return `<invoke name="${call.name}">${body}</invoke>`;
+}
+
+function renderGeminiCall(call: ToolCall): string {
+  const kwargs = Object.entries(argsOf(call))
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(", ");
+  return "```tool_code\n" + `${call.name}(${kwargs})` + "\n```";
+}
+
+function renderGemmaCall(call: ToolCall): string {
+  const body = Object.entries(argsOf(call))
+    .map(([k, v]) => `${k}:${typeof v === "string" ? `${GEMMA_STR}${v}${GEMMA_STR}` : JSON.stringify(v)}`)
+    .join(",");
+  return `${GEMMA_CALL_OPEN}call:${call.name}{${body}}${GEMMA_CALL_CLOSE}`;
+}
+
+function renderHarmonyCall(call: ToolCall): string {
+  return `<|start|>assistant<|channel|>commentary to=functions.${call.name} <|constrain|>json<|message|>${JSON.stringify(argsOf(call))}<|call|>`;
+}
+
+function renderKimiCall(call: ToolCall, index: number): string {
+  return `<|tool_call_begin|>functions.${call.name}:${index}<|tool_call_argument_begin|>${JSON.stringify(argsOf(call))}<|tool_call_end|>`;
+}
+
+/**
+ * D-8: render a call in the dialect the wrapper actually parses. Before this,
+ * every non-XML dialect replayed Hermes blocks, so seven wrappers replayed text
+ * their own drain/parse function could not read. Each branch is the inverse of
+ * that dialect parser and is round-trip tested in
+ * `tests/core/toolconv-history-rewrite.test.ts`.
+ */
+function renderCall(call: ToolCall, dialect: ToolFormat, index: number): string {
+  switch (dialect) {
+    case "xml": return renderXmlCall(call);
+    case "deepseek": return renderDeepseekCall(call);
+    case "glm": return renderGlmCall(call);
+    case "minimax":
+    case "anthropic": return renderMinimaxCall(call);
+    case "gemini": return renderGeminiCall(call);
+    case "gemma": return renderGemmaCall(call);
+    case "harmony": return renderHarmonyCall(call);
+    case "kimi": return renderKimiCall(call, index);
+    default: return renderHermesCall(call);
+  }
 }
 
 function renderResult(name: string, content: string, dialect: ToolFormat): string {
-  return dialect === "xml" ? renderXmlResult(name, content) : renderHermesResult(name, content);
+  if (dialect === "xml") return renderXmlResult(name, content);
+  if (dialect === "hermes") return renderHermesResult(name, content);
+  // The in-band dialects have no result grammar; a labelled JSON response is
+  // readable and is never mistaken for a call.
+  return `<tool_response>\n${JSON.stringify({ name, content })}\n</tool_response>`;
 }
 
 function appendBlock(base: string, block: string): string {
@@ -81,8 +151,8 @@ export function rewriteHistoryForTextToolconv(messages: ChatMsg[], dialect: Tool
     const calls = msg.toolCalls ?? [];
     let content = typeof msg.content === "string" ? msg.content : "";
     if (calls.length > 0) {
-      for (const call of calls) {
-        content = appendBlock(content, renderCall(call, dialect));
+      for (const [index, call] of calls.entries()) {
+        content = appendBlock(content, renderCall(call, dialect, index));
       }
       const responseBlocks: string[] = [];
       for (const call of calls) {

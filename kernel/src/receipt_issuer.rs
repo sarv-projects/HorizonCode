@@ -26,15 +26,16 @@ pub fn load_or_create(state_dir: &Path, create: bool) -> Result<Option<Vec<u8>>,
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     fs::create_dir_all(state_dir)
         .map_err(|e| format!("cannot create {}: {}", state_dir.display(), e))?;
-    permm::private_dir(state_dir);
+    permm::private_dir(state_dir)
+        .map_err(|e| format!("cannot secure {}: {}", state_dir.display(), e))?;
     permm::write_new(&path, hex.as_bytes())
         .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
     Ok(Some(raw.to_vec()))
 }
 
 fn read_key_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
     let hex = text.trim();
     if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("HZ_PRECONDITION_FAILED: invalid receipt issuer key file".into());
@@ -52,15 +53,28 @@ fn fill_random(out: &mut [u8]) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::io::Read;
-        let mut file = std::fs::File::open("/dev/urandom")
-            .map_err(|_| "HZ_PRECONDITION_FAILED: cannot generate receipt issuer key".to_string())?;
+        let mut file = std::fs::File::open("/dev/urandom").map_err(|_| {
+            "HZ_PRECONDITION_FAILED: cannot generate receipt issuer key".to_string()
+        })?;
         file.read_exact(out)
             .map_err(|_| "HZ_PRECONDITION_FAILED: cannot generate receipt issuer key".to_string())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let mut offset = 0;
+        while offset < out.len() {
+            let u = uuid::Uuid::new_v4();
+            let bytes = u.as_bytes();
+            let chunk = std::cmp::min(bytes.len(), out.len() - offset);
+            out[offset..offset + chunk].copy_from_slice(&bytes[..chunk]);
+            offset += chunk;
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = out;
-        Err("HZ_PRECONDITION_FAILED: receipt issuer key requires Unix".into())
+        Err("HZ_PRECONDITION_FAILED: receipt issuer key requires Unix or Windows".into())
     }
 }
 

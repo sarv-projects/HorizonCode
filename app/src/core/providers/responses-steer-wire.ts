@@ -190,7 +190,10 @@ export class ResponsesSteerWire {
         if (index >= 0) this.#pending.splice(index, 1);
         resolve({ accepted: false, error: `response.steer acknowledgement timed out after ${this.#ackTimeoutMs}ms` });
       }, this.#ackTimeoutMs);
-      if ((timer as { unref?: () => void }).unref) (timer as { unref?: () => void }).unref?.();
+      // Keep the timer referenced: a pending steer is real outstanding work,
+      // and an unref'd ack timeout can never fire when nothing else holds the
+      // event loop open (the caller would wait forever instead of failing
+      // closed). This also makes the timeout hermetically testable.
       this.#pending.push({ resolve, timer });
       try {
         socket.send(JSON.stringify(frame));

@@ -28,7 +28,8 @@ pub fn parse_tls_client_hello_sni(bytes: &[u8]) -> Option<String> {
     if handshake.len() < 4 || handshake[0] != HANDSHAKE_CLIENT_HELLO {
         return None;
     }
-    let hello_len = ((handshake[1] as usize) << 16) | ((handshake[2] as usize) << 8) | handshake[3] as usize;
+    let hello_len =
+        ((handshake[1] as usize) << 16) | ((handshake[2] as usize) << 8) | handshake[3] as usize;
     if handshake.len() < 4 + hello_len {
         return None;
     }
@@ -127,7 +128,16 @@ mod tests {
         let session_id_len = 0usize;
         let cipher_suites: [u8; 2] = [0x13, 0x01];
         let compression: [u8; 1] = [0x00];
-        let hello_body_len = 2 + 32 + 1 + session_id_len + 2 + cipher_suites.len() + 1 + compression.len() + 2 + sni_ext_len;
+        let hello_body_len = 2
+            + 32
+            + 1
+            + session_id_len
+            + 2
+            + cipher_suites.len()
+            + 1
+            + compression.len()
+            + 2
+            + sni_ext_len;
         let mut hello_body = vec![0u8; hello_body_len];
         let mut o = 0usize;
         hello_body[o..o + 2].copy_from_slice(&0x0303u16.to_be_bytes());

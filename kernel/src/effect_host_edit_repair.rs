@@ -103,7 +103,11 @@ fn trim_line(s: &str) -> String {
 }
 
 fn to_file_lines(text: &str) -> Vec<String> {
-    let mut lines: Vec<String> = text.replace("\r\n", "\n").split('\n').map(String::from).collect();
+    let mut lines: Vec<String> = text
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(String::from)
+        .collect();
     if (text.ends_with('\n') || text.ends_with("\r\n"))
         && lines.last().map(String::is_empty).unwrap_or(false)
     {
@@ -113,7 +117,11 @@ fn to_file_lines(text: &str) -> Vec<String> {
 }
 
 fn leading_indent(line: &str) -> &str {
-    let n = line.as_bytes().iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+    let n = line
+        .as_bytes()
+        .iter()
+        .take_while(|&&b| b == b' ' || b == b'\t')
+        .count();
     &line[..n]
 }
 
@@ -176,16 +184,22 @@ fn resolve_relative_indent_unique(
         }
     }
     let Some(start) = found else { return Ok(None) };
-    let mut span = span_for_line_window(content, start, want.len())
-        .ok_or(EditResolveFail::NotFound)?;
+    let mut span =
+        span_for_line_window(content, start, want.len()).ok_or(EditResolveFail::NotFound)?;
     span.indent_prefix = Some(common_indent_prefix(&file_lines[start..start + want.len()]));
     Ok(Some(span))
 }
 
 /// Only relative-indent matches rebase the new block. Exact / other repairs
 /// keep historical replacement behavior; emit the matched region's CRLF style.
-pub fn render_fs_edit_replacement(new_content: &str, span: &EditResolveOk, original: &str) -> String {
-    let Some(prefix) = &span.indent_prefix else { return new_content.to_string() };
+pub fn render_fs_edit_replacement(
+    new_content: &str,
+    span: &EditResolveOk,
+    original: &str,
+) -> String {
+    let Some(prefix) = &span.indent_prefix else {
+        return new_content.to_string();
+    };
     let normalized = newline_norm(new_content);
     let lines: Vec<String> = normalized.split('\n').map(str::to_string).collect();
     let own_indent = common_indent_prefix(&lines);
@@ -301,7 +315,11 @@ fn line_starts(original: &str) -> Vec<usize> {
     starts
 }
 
-fn span_for_line_window(original: &str, start_line: usize, line_count: usize) -> Option<EditResolveOk> {
+fn span_for_line_window(
+    original: &str,
+    start_line: usize,
+    line_count: usize,
+) -> Option<EditResolveOk> {
     let starts = line_starts(original);
     let file_lines = to_file_lines(original);
     if line_count == 0 || start_line + line_count > file_lines.len() {
@@ -314,13 +332,20 @@ fn span_for_line_window(original: &str, start_line: usize, line_count: usize) ->
         original.len()
     };
     if end > start {
-        if end >= 2 && original.as_bytes()[end - 2] == b'\r' && original.as_bytes()[end - 1] == b'\n' {
+        if end >= 2
+            && original.as_bytes()[end - 2] == b'\r'
+            && original.as_bytes()[end - 1] == b'\n'
+        {
             end -= 2;
         } else if original.as_bytes()[end - 1] == b'\n' {
             end -= 1;
         }
     }
-    Some(EditResolveOk { start, end, indent_prefix: None })
+    Some(EditResolveOk {
+        start,
+        end,
+        indent_prefix: None,
+    })
 }
 
 fn resolve_trim_end_line_window_unique(content: &str, old: &str) -> Option<EditResolveOk> {
@@ -341,7 +366,9 @@ fn resolve_trim_line_window_unique(content: &str, old: &str) -> Option<EditResol
     let file_lines = to_file_lines(content);
     let start_line = find_unique_trim_line_window(&file_lines, &want)?;
     let mut span = span_for_line_window(content, start_line, want.len())?;
-    span.indent_prefix = Some(common_indent_prefix(&file_lines[start_line..start_line + want.len()]));
+    span.indent_prefix = Some(common_indent_prefix(
+        &file_lines[start_line..start_line + want.len()],
+    ));
     Some(span)
 }
 
@@ -414,11 +441,22 @@ fn count_unicode_fold_line_windows(file_lines: &[String], want: &[String]) -> us
 
 /// Last-resort two-anchor line patch. It must be the only matching window;
 /// repairing an ambiguous target would let a model edit an unrelated block.
-fn resolve_line_patch_unique(content: &str, old: &str) -> Result<Option<EditResolveOk>, EditResolveFail> {
+fn resolve_line_patch_unique(
+    content: &str,
+    old: &str,
+) -> Result<Option<EditResolveOk>, EditResolveFail> {
     let file_lines = to_file_lines(content);
     let want = to_file_lines(old);
-    let anchors: Vec<usize> = want.iter().enumerate()
-        .filter_map(|(i, line)| if line.trim().is_empty() { None } else { Some(i) })
+    let anchors: Vec<usize> = want
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            if line.trim().is_empty() {
+                None
+            } else {
+                Some(i)
+            }
+        })
         .collect();
     if anchors.len() < 2 || want.len() > file_lines.len() {
         return Ok(None);
@@ -428,7 +466,8 @@ fn resolve_line_patch_unique(content: &str, old: &str) -> Result<Option<EditReso
     let mut found: Option<usize> = None;
     for start in 0..=(file_lines.len() - want.len()) {
         if file_lines[start + first_at].trim() != want[first_at].trim()
-            || file_lines[start + last_at].trim() != want[last_at].trim() {
+            || file_lines[start + last_at].trim() != want[last_at].trim()
+        {
             continue;
         }
         if found.is_some() {
@@ -436,9 +475,11 @@ fn resolve_line_patch_unique(content: &str, old: &str) -> Result<Option<EditReso
         }
         found = Some(start);
     }
-    let Some(start) = found else { return Ok(None); };
-    let mut span = span_for_line_window(content, start, want.len())
-        .ok_or(EditResolveFail::NotFound)?;
+    let Some(start) = found else {
+        return Ok(None);
+    };
+    let mut span =
+        span_for_line_window(content, start, want.len()).ok_or(EditResolveFail::NotFound)?;
     span.indent_prefix = Some(common_indent_prefix(&file_lines[start..start + want.len()]));
     Ok(Some(span))
 }
@@ -451,7 +492,11 @@ fn resolve_normalized_unique(content: &str, old: &str) -> Option<EditResolveOk> 
     }
     let span = unique_span(&norm_content, &norm_old)?;
     let (start, end) = span_in_original_from_normalized(content, span.0, norm_old.len())?;
-    Some(EditResolveOk { start, end, indent_prefix: None })
+    Some(EditResolveOk {
+        start,
+        end,
+        indent_prefix: None,
+    })
 }
 
 pub fn resolve_kernel_fs_edit_old_string(
@@ -459,7 +504,11 @@ pub fn resolve_kernel_fs_edit_old_string(
     old_string: &str,
 ) -> Result<EditResolveOk, EditResolveFail> {
     if let Some((start, end)) = unique_span(content, old_string) {
-        return Ok(EditResolveOk { start, end, indent_prefix: None });
+        return Ok(EditResolveOk {
+            start,
+            end,
+            indent_prefix: None,
+        });
     }
     if count_occurrences(content, old_string) > 1 {
         return Err(EditResolveFail::Ambiguous);
@@ -472,7 +521,11 @@ pub fn resolve_kernel_fs_edit_old_string(
     let trimmed = old_string.trim();
     if trimmed != old_string && !trimmed.is_empty() {
         if let Some((start, end)) = unique_span(content, trimmed) {
-            return Ok(EditResolveOk { start, end, indent_prefix: None });
+            return Ok(EditResolveOk {
+                start,
+                end,
+                indent_prefix: None,
+            });
         }
         if count_occurrences(content, trimmed) > 1 {
             return Err(EditResolveFail::Ambiguous);
@@ -617,10 +670,16 @@ mod tests {
         let content = "fn main() {\n    if ready {\n        emit();\n    }\n}\n";
         let old = "if ready {\n    emit();\n}";
         std::env::remove_var("HZ_EFFECT_HOST_EDIT_REPAIR");
-        assert_eq!(resolve_kernel_fs_edit_old_string(content, old), Err(EditResolveFail::NotFound));
+        assert_eq!(
+            resolve_kernel_fs_edit_old_string(content, old),
+            Err(EditResolveFail::NotFound)
+        );
         std::env::set_var("HZ_EFFECT_HOST_EDIT_REPAIR", "1");
         let span = resolve_kernel_fs_edit_old_string(content, old).unwrap();
-        assert_eq!(&content[span.start..span.end], "    if ready {\n        emit();\n    }");
+        assert_eq!(
+            &content[span.start..span.end],
+            "    if ready {\n        emit();\n    }"
+        );
         assert_eq!(span.indent_prefix.as_deref(), Some("    "));
         assert_eq!(
             render_fs_edit_replacement("if ready {\n    send();\n}", &span, content),
@@ -633,7 +692,8 @@ mod tests {
         let _guard = edit_repair_env_lock().lock().unwrap();
         let _clear = ClearEditRepairEnv;
         std::env::set_var("HZ_EFFECT_HOST_EDIT_REPAIR", "1");
-        let content = "    if ready {\n        emit();\n    }\n\n  if ready {\n      emit();\n  }\n";
+        let content =
+            "    if ready {\n        emit();\n    }\n\n  if ready {\n      emit();\n  }\n";
         assert_eq!(
             resolve_kernel_fs_edit_old_string(content, "if ready {\n    emit();\n}"),
             Err(EditResolveFail::Ambiguous)
@@ -660,7 +720,8 @@ mod tests {
         let _clear = ClearEditRepairEnv;
         std::env::set_var("HZ_EFFECT_HOST_EDIT_REPAIR", "1");
         let original = "top\n  begin\n    unexpected();\n  end\nbottom\n";
-        let span = resolve_kernel_fs_edit_old_string(original, "begin\n    expected();\nend").unwrap();
+        let span =
+            resolve_kernel_fs_edit_old_string(original, "begin\n    expected();\nend").unwrap();
         assert_eq!(span.indent_prefix.as_deref(), Some("  "));
         assert_eq!(
             render_fs_edit_replacement("begin\n    replacement();\nend", &span, original),

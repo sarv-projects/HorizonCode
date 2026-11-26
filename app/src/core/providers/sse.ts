@@ -49,13 +49,23 @@ export async function* readSse(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const idleMs = resolveIdleTimeoutMs(options.idleTimeoutMs);
+  const MAX_SSE_BUFFER_CHARS = 16 * 1024 * 1024;
   let buffer = "";
+  let trailingCr = false;
   try {
     for (;;) {
       const { done, value } = await readWithIdleTimeout(reader, idleMs);
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      let chunk = decoder.decode(value, { stream: true });
+      if (trailingCr) {
+        chunk = "\r" + chunk;
+        trailingCr = false;
+      }
+      if (chunk.endsWith("\r")) {
+        trailingCr = true;
+        chunk = chunk.slice(0, -1);
+      }
+      buffer += chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
       let index = buffer.indexOf("\n\n");
       while (index >= 0) {
         const block = buffer.slice(0, index);
@@ -64,8 +74,21 @@ export async function* readSse(
         if (message) yield message;
         index = buffer.indexOf("\n\n");
       }
+      if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+        throw new Error(`SSE stream buffer exceeded maximum size (${MAX_SSE_BUFFER_CHARS} chars)`);
+      }
     }
-    buffer += decoder.decode();
+    let tailChunk = decoder.decode();
+    if (trailingCr) tailChunk = "\r" + tailChunk;
+    buffer += tailChunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let index = buffer.indexOf("\n\n");
+    while (index >= 0) {
+      const block = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+      const message = parseBlock(block);
+      if (message) yield message;
+      index = buffer.indexOf("\n\n");
+    }
     const tail = parseBlock(buffer);
     if (tail) yield tail;
   } finally {

@@ -18,13 +18,47 @@ pub struct SocketPeerAuthPosture {
 }
 
 pub fn socket_peer_auth_posture() -> SocketPeerAuthPosture {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         SocketPeerAuthPosture {
             platform: "unix",
             method: "SO_PEERCRED_same_uid",
             peer_check_on_accept: true,
             socket_serve_available: true,
+        }
+    }
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        SocketPeerAuthPosture {
+            platform: "unix",
+            method: "getpeereid_same_uid",
+            peer_check_on_accept: true,
+            socket_serve_available: true,
+        }
+    }
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))
+    ))]
+    {
+        SocketPeerAuthPosture {
+            platform: "unix",
+            method: "unavailable",
+            peer_check_on_accept: false,
+            socket_serve_available: false,
         }
     }
     #[cfg(not(unix))]
@@ -48,8 +82,10 @@ pub fn socket_peer_auth_json() -> Value {
     })
 }
 
-#[cfg(unix)]
-pub fn authorize_same_uid_unix_stream(stream: &std::os::unix::net::UnixStream) -> Result<(), String> {
+#[cfg(target_os = "linux")]
+pub fn authorize_same_uid_unix_stream(
+    stream: &std::os::unix::net::UnixStream,
+) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
 
     let fd = stream.as_raw_fd();
@@ -77,6 +113,52 @@ pub fn authorize_same_uid_unix_stream(stream: &std::os::unix::net::UnixStream) -
     Ok(())
 }
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+pub fn authorize_same_uid_unix_stream(
+    stream: &std::os::unix::net::UnixStream,
+) -> Result<(), String> {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = stream.as_raw_fd();
+    let mut euid: libc::uid_t = 0;
+    let mut egid: libc::gid_t = 0;
+    let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+    if rc != 0 {
+        return Err("getpeereid unavailable".into());
+    }
+    let self_uid = unsafe { libc::getuid() };
+    if euid != self_uid {
+        return Err(format!(
+            "peer uid {} != kernel uid {} (getpeereid)",
+            euid, self_uid
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+pub fn authorize_same_uid_unix_stream(
+    _stream: &std::os::unix::net::UnixStream,
+) -> Result<(), String> {
+    Err("peer credential check unavailable on this Unix target".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,11 +171,23 @@ mod tests {
         assert_eq!(j["method"], p.method);
         assert_eq!(j["peerCheckOnAccept"], p.peer_check_on_accept);
         assert_eq!(j["socketServeAvailable"], p.socket_serve_available);
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             assert!(p.peer_check_on_accept);
             assert!(p.socket_serve_available);
             assert_eq!(p.method, "SO_PEERCRED_same_uid");
+        }
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        {
+            assert!(p.peer_check_on_accept);
+            assert!(p.socket_serve_available);
+            assert_eq!(p.method, "getpeereid_same_uid");
         }
         #[cfg(not(unix))]
         {

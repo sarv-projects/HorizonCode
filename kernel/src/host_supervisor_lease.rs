@@ -116,8 +116,11 @@ impl HostSupervisorLease {
             ensure_parent(&path)?;
             match ExclusiveOsFileLock::try_acquire(&path) {
                 Ok(lock) => {
-                    let _ = fs::write(&path, format!("{}\n", std::process::id()));
-                    Ok(Self { lock: Some(lock), path })
+                    let _ = lock.write_pid(std::process::id());
+                    Ok(Self {
+                        lock: Some(lock),
+                        path,
+                    })
                 }
                 Err(()) => {
                     let held_pid = read_host_lock_pid(&path);
@@ -135,9 +138,8 @@ impl HostSupervisorLease {
 
 fn ensure_parent(path: &Path) -> Result<(), String> {
     let parent = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| {
-        format!("HZ_PRECONDITION_FAILED: host supervisor lease unavailable: {e}")
-    })
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("HZ_PRECONDITION_FAILED: host supervisor lease unavailable: {e}"))
 }
 
 fn read_host_lock_pid(path: &Path) -> Option<u32> {

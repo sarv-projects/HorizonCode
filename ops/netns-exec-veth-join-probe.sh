@@ -18,11 +18,14 @@ if ! ip netns add "$NS"; then
   exit 0
 fi
 
-trap 'ip netns del "'"$NS"'" 2>/dev/null || true' EXIT
+cleanup() {
+  ip netns del "$NS" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 if ! env \
   HZ_SANDBOX_CHILD_NET=off HZ_SANDBOX_VETH_JOIN=1 HZ_SANDBOX_VETH_NETNS="$NS" \
-  "$SBX_BIN" -- python3 -c 'import os; print(open("/proc/self/ns/net").readlink())' 2>/tmp/hz-veth-join-probe.err; then
+  "$SBX_BIN" -- python3 -c 'import os; print(os.readlink("/proc/self/ns/net"))' 2>/tmp/hz-veth-join-probe.err; then
   echo "veth join pre_exec failed (expected on some hosts):" >&2
   cat /tmp/hz-veth-join-probe.err >&2 || true
   exit 0

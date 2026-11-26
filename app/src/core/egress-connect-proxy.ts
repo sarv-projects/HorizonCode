@@ -18,9 +18,10 @@ import {
   type EgressDecision,
 } from "./egress-decider";
 import { appendJsonlSync } from "./jsonl-append";
+import { assertDialAddressStillPinned, resolveAndPin } from "./egress-dial-pin";
 import { EGRESS_TLS_INTERCEPT_REFUSE_BODY, egressTlsInterceptRefuseForward } from "./egress-tls-intercept-ca";
 import { egressTlsPeekEnabled, parseTlsClientHelloSni } from "./egress-tls-peek";
-import { egressTlsTerminateAttempt, terminateTlsOnConnectSocket } from "./egress-tls-terminate";
+import { egressTlsTerminateAttempt, terminateTlsOnConnectSocket, type TlsCredentialInjection } from "./egress-tls-terminate";
 
 export type EgressTlsSniPeekRecord = {
   authority: string;
@@ -64,6 +65,13 @@ export type StartEgressConnectProxyOptions = {
   /** Log ClientHello SNI on forward (default from `HZ_EGRESS_TLS_PEEK=1` when forward is on). */
   tlsPeek?: boolean;
   env?: Record<string, string | undefined>;
+  /**
+   * ADDITIVE opt-in MITM credential injection: when TLS terminate + upstream
+   * pipe is active, scoped credential headers are injected into the decrypted
+   * request before forwarding. Default absent = byte-identical. Advisory only;
+   * never shell-net `enforced`.
+   */
+  credentialInjection?: TlsCredentialInjection;
 };
 
 export function egressForwardEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -165,6 +173,7 @@ function handleConnectClient(
   sniPeeks: EgressTlsSniPeekRecord[],
   terminateObservations: EgressTlsTerminateRecord[],
   env: Record<string, string | undefined>,
+  credentialInjection?: TlsCredentialInjection,
 ): void {
   let buffer = Buffer.alloc(0);
   const onData = (chunk: Buffer) => {
@@ -242,6 +251,7 @@ function handleConnectClient(
           });
         },
         upstreamTarget ?? undefined,
+        credentialInjection,
       );
       return;
     }
@@ -288,7 +298,7 @@ export function startEgressConnectProxy(opts: StartEgressConnectProxyOptions = {
 
   return new Promise((resolve, reject) => {
     const server = net.createServer((socket) => {
-      handleConnectClient(socket, policy, forward, tlsPeek, records, sniPeeks, terminateObservations, env);
+      handleConnectClient(socket, policy, forward, tlsPeek, records, sniPeeks, terminateObservations, env, opts.credentialInjection);
     });
     server.on("error", (err) => reject(err));
     server.listen(port, listenHost, () => {
@@ -380,6 +390,27 @@ export interface StartBoundedEgressConnectProxyOptions {
   onRecord?: (row: BoundedEgressAuditRow) => void;
   /** Emit the advisory banner to stderr on start (default true). */
   notice?: boolean;
+  /**
+   * ADDITIVE advisory dial pin: when supplied, the CONNECT target is resolved
+   * and the dial is re-checked against the pinned answer set immediately
+   * before connecting. Absent = byte-identical existing behavior. This is not
+   * OS enforcement; shell-net egress is never claimed `enforced`.
+   */
+  resolve?: (host: string) => Promise<readonly string[]>;
+  /**
+   * ADDITIVE advisory SSRF guard: when `resolve` is supplied AND this is true,
+   * resolved non-public IPs (loopback/private/link-local/metadata) are refused
+   * before the dial. Default false = byte-identical existing behavior. Advisory
+   * only; shell-net egress is never claimed `enforced`.
+   */
+  refuseNonPublic?: boolean;
+  /**
+   * ADDITIVE opt-in MITM credential injection: when TLS terminate + upstream
+   * pipe is active, scoped credential headers are injected into the decrypted
+   * request before forwarding. Default absent = byte-identical. Advisory only;
+   * never shell-net `enforced`.
+   */
+  credentialInjection?: TlsCredentialInjection;
 }
 
 /** `HZ_EGRESS_PROXY_BIND`: absent/0 = not opted in; 1/true = loopback default. */
@@ -497,7 +528,7 @@ export function startBoundedEgressConnectProxy(
       active = Math.max(0, active - 1);
     };
 
-    server.on("connect", (req, clientSocket, head) => {
+    server.on("connect", async (req, clientSocket, head) => {
       const client = clientSocket as net.Socket;
       liveClients.add(client);
       active += 1;
@@ -556,6 +587,23 @@ export function startBoundedEgressConnectProxy(
         return;
       }
       request(authority, decision.kind, 200);
+      if (opts.resolve !== undefined) {
+        try {
+          const pin = await resolveAndPin(target.host, target.port, {
+            resolve: opts.resolve,
+            now: () => Date.now(),
+            refuseNonPublic: opts.refuseNonPublic ?? true,
+          });
+          const chosen = pin.addresses[0]!;
+          assertDialAddressStillPinned(pin, chosen);
+          pipeTunnel(client, chosen, target.port, head, release);
+        } catch {
+          writeHttpResponse(client, 502, "CONNECT dial pin refused\n");
+          release();
+          liveClients.delete(client);
+        }
+        return;
+      }
       pipeTunnel(client, target.host, target.port, head, release);
     });
 

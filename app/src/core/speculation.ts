@@ -279,6 +279,14 @@ export interface SpeculativeHost {
   validate?(candidate: SpeculativeToolCandidate): boolean | Promise<boolean>;
 }
 
+/** Lifecycle hook parity callbacks for speculative operations. */
+export interface SpeculativeHookCallbacks {
+  onCandidateAdmitted?(candidate: SpeculativeToolCandidate): void | Promise<void>;
+  onCandidateDiscarded?(candidate: SpeculativeToolCandidate, reason: string): void | Promise<void>;
+  onCandidateCommitted?(candidate: SpeculativeToolCandidate): void | Promise<void>;
+  onRollback?(discarded: SpeculativeToolCandidate[]): void | Promise<void>;
+}
+
 /** The record of one admitted candidate's outcome. */
 export interface SpeculativeOutcome {
   id: string;
@@ -299,6 +307,7 @@ export interface SpeculativeOutcome {
 export class SpeculativeOperationCoordinator {
   private readonly maxInFlight: number;
   private readonly host: SpeculativeHost;
+  private hooks?: SpeculativeHookCallbacks;
   private readonly candidates = new Map<string, SpeculativeToolCandidate>();
   /** The immutable snapshot of admitted fingerprints, keyed by candidate id. */
   private readonly admittedFingerprints = new Map<string, string>();
@@ -307,12 +316,21 @@ export class SpeculativeOperationCoordinator {
   /** Serializes admission so the bound and snapshot are observed in order. */
   private admissionChain: Promise<void> = Promise.resolve();
 
-  constructor(host: SpeculativeHost, maxInFlight: number = DEFAULT_MAX_IN_FLIGHT) {
+  constructor(
+    host: SpeculativeHost,
+    maxInFlight: number = DEFAULT_MAX_IN_FLIGHT,
+    hooks?: SpeculativeHookCallbacks,
+  ) {
     if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
       throw new SpeculationError("invalid-candidate", `maxInFlight must be a positive integer (got ${maxInFlight})`);
     }
     this.host = host;
     this.maxInFlight = maxInFlight;
+    this.hooks = hooks;
+  }
+
+  setHooks(hooks: SpeculativeHookCallbacks): void {
+    this.hooks = hooks;
   }
 
   /** The candidates admitted so far, in admission order. */
@@ -358,6 +376,7 @@ export class SpeculativeOperationCoordinator {
       candidate.state = "running";
       this.candidates.set(candidate.id, candidate);
       this.admittedFingerprints.set(candidate.id, candidate.fingerprint);
+      this.hooks?.onCandidateAdmitted?.(candidate);
       // Link this candidate as a dependent of each of its dependencies, and
       // note whether any dependency is unknown or already discarded.
       let badDependency = false;
@@ -426,6 +445,7 @@ export class SpeculativeOperationCoordinator {
 
     const stack = [id];
     const seen = new Set<string>();
+    const discardedNodes: SpeculativeToolCandidate[] = [];
     while (stack.length > 0) {
       const current = stack.pop() as string;
       if (seen.has(current)) continue;
@@ -434,6 +454,7 @@ export class SpeculativeOperationCoordinator {
       if (node !== undefined) {
         node.state = "discarded";
         node.committed = false;
+        discardedNodes.push(node);
         for (const dependent of node.dependents) stack.push(dependent);
       }
       const discardReason = current === id ? reason : "dependency-discarded";
@@ -443,6 +464,12 @@ export class SpeculativeOperationCoordinator {
         fingerprint: this.candidates.get(current)?.fingerprint ?? this.admittedFingerprints.get(current) ?? "",
         discardReason,
       });
+      if (node !== undefined) {
+        this.hooks?.onCandidateDiscarded?.(node, discardReason ?? "discarded");
+      }
+    }
+    if (discardedNodes.length > 0) {
+      this.hooks?.onRollback?.(discardedNodes);
     }
     return this.outcomes.get(id) ?? seedOutcome;
   }
@@ -467,8 +494,80 @@ export class SpeculativeOperationCoordinator {
         this.discard(id, "fingerprint-mismatch");
         continue;
       }
-      if (node.state === "completed" && node.committed) kept.push(id);
+      if (node.state === "completed" && node.committed) {
+        kept.push(id);
+        this.hooks?.onCandidateCommitted?.(node);
+      }
     }
     return kept;
+  }
+
+  /**
+   * Reconciles candidates against committed calls divided into strict FIFO segments.
+   * If any call in segment S fails or mismatches, all subsequent segments S+1..
+   * are cascaded to discarded, preserving deterministic segment ordering.
+   */
+  reconcileSegments(
+    committedSegments: ReadonlyArray<ReadonlyArray<{ id: string; fingerprint: string }>>,
+  ): { kept: string[]; discarded: string[] } {
+    const kept: string[] = [];
+    const discarded: string[] = [];
+    let cascadeRemaining = false;
+
+    const committedById = new Map<string, string>();
+    for (const segment of committedSegments) {
+      for (const call of segment) {
+        committedById.set(call.id, call.fingerprint);
+      }
+    }
+
+    for (let sIdx = 0; sIdx < committedSegments.length; sIdx++) {
+      const segment = committedSegments[sIdx];
+      let segmentFailed = false;
+
+      for (const call of segment) {
+        const node = this.candidates.get(call.id);
+        if (node === undefined) continue;
+
+        if (cascadeRemaining) {
+          this.discard(call.id, "dependency-discarded");
+          discarded.push(call.id);
+          continue;
+        }
+
+        const admittedFingerprint = this.admittedFingerprints.get(call.id);
+        if (admittedFingerprint === undefined || admittedFingerprint !== call.fingerprint) {
+          this.discard(call.id, "fingerprint-mismatch");
+          discarded.push(call.id);
+          segmentFailed = true;
+          continue;
+        }
+
+        if (node.state === "completed" && node.committed) {
+          kept.push(call.id);
+          this.hooks?.onCandidateCommitted?.(node);
+        } else {
+          this.discard(call.id, "dependency-discarded");
+          discarded.push(call.id);
+          segmentFailed = true;
+        }
+      }
+
+      if (segmentFailed) {
+        cascadeRemaining = true;
+      }
+    }
+
+    for (const [id, _] of this.admittedFingerprints) {
+      if (!committedById.has(id)) {
+        const node = this.candidates.get(id);
+        if (node !== undefined && node.state !== "discarded") {
+          this.discard(id, "fingerprint-mismatch");
+          if (!discarded.includes(id)) discarded.push(id);
+        }
+      }
+    }
+
+    return { kept, discarded };
   }
 }

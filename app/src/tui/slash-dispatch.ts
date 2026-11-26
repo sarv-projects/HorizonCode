@@ -23,6 +23,7 @@ export const FULLSCREEN_LOCAL_SLASH_NAMES = [
   "context",
   "status",
   "unknown",
+  "reconcile",
   "models",
   "think",
   "plan",
@@ -35,6 +36,10 @@ export const FULLSCREEN_LOCAL_SLASH_NAMES = [
   "instructions",
   "worktree",
   "snapshot",
+  "tasks",
+  "skill",
+  "focus",
+  "btw",
 ] as const;
 
 export type FullscreenLocalSlashName = (typeof FULLSCREEN_LOCAL_SLASH_NAMES)[number];
@@ -55,6 +60,9 @@ export const FULLSCREEN_DEFERRED_SLASH_NAMES = [
   "init",
   "rewind",
   "model",
+  "auth",
+  "login",
+  "goal",
 ] as const;
 
 const DEFERRED_SET = new Set<string>(FULLSCREEN_DEFERRED_SLASH_NAMES);
@@ -82,11 +90,21 @@ export function isFullscreenDeferredSlash(name: string): boolean {
   return DEFERRED_SET.has(name.toLowerCase());
 }
 
+/**
+ * D-9: what the fullscreen loop must do with a DEFERRED verb. `exit` closes the
+ * loop; every other deferred verb has no inline handler, so the loop reports it
+ * instead of sending the text to the model as a prompt.
+ */
+export function deferredSlashAction(name: string): "exit" | "unsupported" | undefined {
+  if (!isFullscreenDeferredSlash(name)) return undefined;
+  return name.toLowerCase() === "exit" || name.toLowerCase() === "quit" ? "exit" : "unsupported";
+}
+
 /** Palette Enter runs the handler immediately for these builtins (bare, no args). */
 export function fullscreenPaletteRunsImmediately(commandName: string): boolean {
   const name = commandName.toLowerCase();
   if (!isFullscreenLocalSlash(name)) return false;
-  if (name === "rename" || name === "apply" || name === "export") return false;
+  if (name === "rename" || name === "apply" || name === "export" || name === "btw") return false;
   return true;
 }
 

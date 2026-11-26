@@ -42,6 +42,7 @@ import {
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
@@ -282,8 +283,11 @@ export const writeTool: Tool = {
         const outcome = await writeAtomic(real, toWrite, ctx, real, wsBinding);
         if (isRefused(outcome)) return fail(outcome.refusal);
 
+        // D-4: journal the path whose bytes changed (the real target), not the
+        // lexical spelling that may be a symlink. Undo then reverses the effect.
         await recordChangeGuarded(ctx.sessionId, {
-          path: resolved,
+          path: real,
+          workspace: ctx.workspace,
           rel,
           before: preimageText,
           ...(preimageUnreadable ? { beforeUnreadable: true } : {}),
@@ -293,7 +297,10 @@ export const writeTool: Tool = {
         });
 
         return undefined;
-      }).catch((e: unknown) => fail(msg(e)));
+      }).catch((e: unknown) => {
+        tunnelPermissionError(e);
+        return fail(msg(e));
+      });
       if (locked !== undefined) return locked;
 
       // The session authored (and verified, by re-reading) this content, so the
@@ -307,6 +314,7 @@ export const writeTool: Tool = {
         output: `${checkpointNote}Wrote ${outLines} lines (${outBytes} bytes) to ${rel}${lintFixNote}`,
       };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

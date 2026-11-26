@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
-use crate::receipt_schema;
 use crate::eventlog::{
     anchor_digest, ensure_anchor_matches, read_head, tail_of, verify_chain, AnchorConfig,
     ChainKind, LockFile, VerifyReport,
 };
 use crate::permm;
+use crate::receipt_schema;
 use crate::time::now_iso;
 
 pub struct Receipts {
@@ -26,7 +26,11 @@ pub struct Receipts {
 }
 
 impl Receipts {
-    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig, issuer_key: Option<Vec<u8>>) -> Self {
+    pub fn new_with_anchor(
+        state_dir: &Path,
+        anchor: AnchorConfig,
+        issuer_key: Option<Vec<u8>>,
+    ) -> Self {
         Receipts {
             path: state_dir.join("receipts.jsonl"),
             anchor,
@@ -88,7 +92,8 @@ impl Receipts {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
-            permm::private_dir(parent);
+            permm::private_dir(parent)
+                .map_err(|e| format!("cannot secure {}: {}", parent.display(), e))?;
         }
         let _lock = LockFile::acquire(&self.path)?;
         let (last_seq, prev_hash, tail_record) = tail_of(&self.path)?;
@@ -121,9 +126,15 @@ impl Receipts {
         // receipt hash. Legacy v1 rows retain byte-identical hashes.
         if v2 {
             receipt.insert("schemaVersion".to_string(), json!(2));
-            if let Some(d) = &postimage_digest { receipt.insert("postimageDigest".to_string(), json!(d)); }
-            if let Some(p) = &postimage_path { receipt.insert("postimagePath".to_string(), json!(p)); }
-            if let Some(e) = &effect_id { receipt.insert("effectId".to_string(), json!(e)); }
+            if let Some(d) = &postimage_digest {
+                receipt.insert("postimageDigest".to_string(), json!(d));
+            }
+            if let Some(p) = &postimage_path {
+                receipt.insert("postimagePath".to_string(), json!(p));
+            }
+            if let Some(e) = &effect_id {
+                receipt.insert("effectId".to_string(), json!(e));
+            }
             if let Some(children) = input.get("childEffectIds") {
                 receipt.insert("childEffectIds".to_string(), children.clone());
             }
@@ -182,6 +193,37 @@ impl Receipts {
                 });
             }
         }
+        // R172 strict mode (TS `HZ_R172_REQUIRE_KEYED` mirror): a v2 receipt
+        // chain must be independently keyed by the kernel issuer key. A chain
+        // with no key available, or any unkeyed v2 row, fails closed.
+        if std::env::var("HZ_R172_REQUIRE_KEYED").ok().as_deref() == Some("1") {
+            let v2_seq = lines.iter().enumerate().find_map(|(index, line)| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .filter(|v| v.get("schemaVersion").and_then(Value::as_u64) == Some(2))
+                    .map(|_| (index + 1) as u64)
+            });
+            if let Some(v2_seq) = v2_seq {
+                match &self.issuer_key {
+                    None => {
+                        return Ok(VerifyReport {
+                            ok: false,
+                            count: report.count,
+                            broken_at: Some(v2_seq),
+                        });
+                    }
+                    Some(key) => {
+                        if let Err(seq) = verify_strict_v2_issuer_stamps(&lines, key) {
+                            return Ok(VerifyReport {
+                                ok: false,
+                                count: report.count,
+                                broken_at: Some(seq),
+                            });
+                        }
+                    }
+                }
+            }
+        }
         Ok(report)
     }
 
@@ -219,6 +261,24 @@ impl Receipts {
     }
 }
 
+/// Strict R172: every v2 receipt must carry a valid kernel issuer stamp.
+fn verify_strict_v2_issuer_stamps(lines: &[String], key: &[u8]) -> Result<(), u64> {
+    for (index, line) in lines.iter().enumerate() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+            continue;
+        }
+        let stamp = value["issuerStamp"].as_str().unwrap_or("");
+        let hash = value["hash"].as_str().unwrap_or("");
+        if !crate::receipt_issuer::verify_hex(key, hash, stamp) {
+            return Err((index + 1) as u64);
+        }
+    }
+    Ok(())
+}
+
 /// When an issuer key is configured, nested-link receipts MUST carry a valid stamp.
 fn verify_issuer_stamps(lines: &[String], key: &[u8]) -> Result<(), u64> {
     let mut seq: u64 = 0;
@@ -228,10 +288,7 @@ fn verify_issuer_stamps(lines: &[String], key: &[u8]) -> Result<(), u64> {
         }
         seq += 1;
         let record: Value = serde_json::from_str(line).map_err(|_| seq)?;
-        let hash = record
-            .get("hash")
-            .and_then(Value::as_str)
-            .ok_or(seq)?;
+        let hash = record.get("hash").and_then(Value::as_str).ok_or(seq)?;
         let parent = record.get("parentReceiptId").and_then(Value::as_str);
         let child_link = parent.is_some_and(|p| !p.is_empty());
         if !child_link {
@@ -253,6 +310,31 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::env::temp_dir;
+
+    #[test]
+    fn strict_keyed_verify_refuses_unkeyed_v2_chain() {
+        let dir = temp_dir().join(format!("hz-rcp-strict-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let receipts = Receipts::new_with_anchor(&dir, AnchorConfig::default(), None);
+        receipts
+            .issue(&json!({
+                "action": "tool.execute",
+                "tool": "write",
+                "argsDigest": "a",
+                "resultDigest": "b",
+                "schemaVersion": 2,
+                "effectId": "fx-1"
+            }))
+            .unwrap();
+        assert_eq!(receipts.verify().unwrap().ok, true);
+        std::env::set_var("HZ_R172_REQUIRE_KEYED", "1");
+        let strict = receipts.verify().unwrap();
+        std::env::remove_var("HZ_R172_REQUIRE_KEYED");
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(strict.ok, false, "{strict:?}");
+        assert_eq!(strict.broken_at, Some(1));
+    }
 
     #[test]
     fn nested_parent_receipt_gets_kernel_issuer_stamp() {

@@ -123,7 +123,7 @@ function isBlank(line: string): boolean {
   return line.trim() === "";
 }
 
-function commonIndentPrefix(lines: string[]): string {
+export function commonIndentPrefix(lines: string[]): string {
   let prefix: string | null = null;
   for (const line of lines) {
     if (isBlank(line)) continue;
@@ -144,11 +144,11 @@ function stripIndent(lines: string[], prefix: string): string[] {
   return lines.map((line) => (isBlank(line) ? "" : line.startsWith(prefix) ? line.slice(prefix.length) : line));
 }
 
-function relativeIndentNorm(lines: string[]): string[] {
+export function relativeIndentNorm(lines: string[]): string[] {
   return stripIndent(lines, commonIndentPrefix(lines));
 }
 
-function reindent(lines: string[], prefix: string): string[] {
+export function reindent(lines: string[], prefix: string): string[] {
   if (prefix === "") return lines;
   const own = commonIndentPrefix(lines);
   return lines.map((line) =>

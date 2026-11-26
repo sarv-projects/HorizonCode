@@ -52,10 +52,10 @@ if [ -n "$SBX_BIN" ] && [ -x "$SBX_BIN" ]; then
       ;;
   esac
   CONNECT_PY='
-import socket
-bridge="'"${BRIDGE_HOST}"'"
-port='"${PROXY_PORT}"'
-authority="'"${CONNECT_AUTHORITY}"'"
+import os, socket
+bridge = os.environ["BRIDGE_HOST"]
+port = int(os.environ["PROXY_PORT"])
+authority = os.environ["CONNECT_AUTHORITY"]
 s=socket.socket(); s.settimeout(5)
 s.connect((bridge, port))
 req=("CONNECT "+authority+" HTTP/1.1\r\nHost: "+authority+"\r\n\r\n").encode("latin1")
@@ -70,7 +70,8 @@ print("CONNECT_VIA_SPAWN_PROXY_OK" if " 200 " in status else "CONNECT_VIA_SPAWN_
 '
   echo "hz-sandbox-exec hermetic child_net=on CONNECT probe (advisory parity)"
   OUT="$(
-    HZ_SANDBOX_CHILD_NET=on HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
+    BRIDGE_HOST="$BRIDGE_HOST" PROXY_PORT="$PROXY_PORT" CONNECT_AUTHORITY="$CONNECT_AUTHORITY" \
+      HZ_SANDBOX_CHILD_NET=on HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
       "$SBX_BIN" -- python3 -c "$CONNECT_PY" 2>&1
   )" || true
   echo "$OUT"
@@ -86,7 +87,8 @@ print("CONNECT_VIA_SPAWN_PROXY_OK" if " 200 " in status else "CONNECT_VIA_SPAWN_
 
   echo "hz-sandbox-exec production child_net=off CONNECT after veth join (**326**)"
   OUT_PROD="$(
-    HZ_SANDBOX_CHILD_NET=off HZ_SANDBOX_VETH_JOIN=1 HZ_SANDBOX_VETH_NETNS="$VETH_NS" \
+    BRIDGE_HOST="$BRIDGE_HOST" PROXY_PORT="$PROXY_PORT" CONNECT_AUTHORITY="$CONNECT_AUTHORITY" \
+      HZ_SANDBOX_CHILD_NET=off HZ_SANDBOX_VETH_JOIN=1 HZ_SANDBOX_VETH_NETNS="$VETH_NS" \
       HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
       "$SBX_BIN" -- python3 -c "$CONNECT_PY" 2>&1
   )" || true

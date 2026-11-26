@@ -13,11 +13,12 @@ import {
 import { findReceiptForUnknownTarget } from "../core/unknown-receipt-lookup";
 import type { EffectRecord } from "../core/effect-host";
 import { KernelClient } from "../core/kernel";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { scopeFor } from "../core/loop";
 import { printUnknownInspector, formatReceiptChainInspectLines } from "./unknown-inspector";
 import type { Renderer } from "./render";
 import { parseUnknownSlashArgs } from "./unknown-slash-parse";
-import { dim } from "./style";
+import { dim, sanitizeDisplay } from "./style";
 import {
   formatEffectReconcileProbeSummary,
   formatProbeIoHintLine,
@@ -34,6 +35,25 @@ import {
   tryReleaseEffectReconcileBlock,
 } from "../core/effect-reconcile-block";
 
+export type EffectOwnerRecoverMode =
+  | "prepare_only"
+  | "executed_unknown_abandon"
+  | "executed_unknown_observe_settle";
+
+export const EFFECT_OWNER_RECOVER_MODES: readonly EffectOwnerRecoverMode[] = [
+  "prepare_only",
+  "executed_unknown_abandon",
+  "executed_unknown_observe_settle",
+] as const;
+
+export const RECONCILE_RECOVERY_MODE_HINTS: readonly string[] = [
+  "kernel effect.owner.recover modes:",
+  "  prepare_only                    — recover a prepared-only crash before dispatch",
+  "  executed_unknown_abandon        — attest & abandon an unverified executed UNKNOWN effect",
+  "  executed_unknown_observe_settle — observe post-image / receipts and settle an UNKNOWN effect",
+  "usage: /reconcile [--probe | status | release | inspect <id> | export | recover <effect-id> <mode>]",
+];
+
 export type RuntimeWithUnknownEffects = Runtime & {
   readonly workspace?: string;
   unknownEffects?: () => readonly UnknownEffectRow[];
@@ -42,6 +62,10 @@ export type RuntimeWithUnknownEffects = Runtime & {
   reconcileUnknownEffectsNow?: () => Promise<number>;
   tryReleaseReconcileBlockIfClean?: () => boolean;
   reconcileBlockLatch?: () => import("../core/effect-reconcile-block").EffectReconcileBlockLatchView;
+  ownerRecover?: (
+    effectId: string,
+    opts?: { mode?: EffectOwnerRecoverMode; reason?: string },
+  ) => Promise<unknown>;
 };
 
 function resolveUnknownTarget(rows: readonly UnknownEffectRow[], target: string): string | undefined {
@@ -192,22 +216,22 @@ export async function runUnknownCommand(runtime: Runtime, renderer: Renderer, ar
         for (const m of report.mismatches.slice(0, 12)) {
           renderer.line(
             dim(
-              `  · ${m.kind} · ${m.tool} · ${m.effectId.slice(0, 13)}… ledger=${m.ledgerVerdict ?? "—"} session=${m.sessionVerdict} kernel=${m.kernelVerdict ?? "—"}`,
+              `  · ${sanitizeDisplay(m.kind)} · ${sanitizeDisplay(m.tool)} · ${sanitizeDisplay(m.effectId).slice(0, 13)}… ledger=${sanitizeDisplay(m.ledgerVerdict ?? "—")} session=${sanitizeDisplay(m.sessionVerdict)} kernel=${sanitizeDisplay(m.kernelVerdict ?? "—")}`,
             ),
           );
         }
         if (report.vcsSnapshot) {
           const vcsLine = formatVcsProbeLine(report.vcsSnapshot);
-          if (vcsLine) renderer.line(dim(`  · ${vcsLine}`));
+          if (vcsLine) renderer.line(dim(`  · ${sanitizeDisplay(vcsLine)}`));
         }
         if (report.ioHints) {
           for (const hint of report.ioHints.slice(0, 8)) {
-            renderer.line(dim(`  · probe ${formatProbeIoHintLine(hint)}`));
+            renderer.line(dim(`  · probe ${sanitizeDisplay(formatProbeIoHintLine(hint))}`));
           }
         }
         if (report.terminalSnapshot) {
           for (const row of report.terminalSnapshot.probes) {
-            renderer.line(dim(`  · ${formatTerminalProbeLine(row)}`));
+            renderer.line(dim(`  · ${sanitizeDisplay(formatTerminalProbeLine(row))}`));
           }
         }
       }
@@ -218,14 +242,13 @@ export async function runUnknownCommand(runtime: Runtime, renderer: Renderer, ar
       renderer.notice("not supported: reconcileUnknownEffectsNow");
       return;
     }
-    void reconcile().then((settled) => {
-      if (settled > 0) {
-        renderer.notice(`observe-only reconcile settled ${settled} effect(s) from logs/receipts`);
-      } else {
-        renderer.notice("observe-only reconcile: no UNKNOWN effects became settled (still open or none)");
-      }
-      printUnknownInspector(renderer, list.call(runtime));
-    });
+    const settled = await reconcile();
+    if (settled > 0) {
+      renderer.notice(`observe-only reconcile settled ${settled} effect(s) from logs/receipts`);
+    } else {
+      renderer.notice("observe-only reconcile: no UNKNOWN effects became settled (still open or none)");
+    }
+    printUnknownInspector(renderer, list.call(runtime));
     return;
   }
 
@@ -253,17 +276,23 @@ export async function runUnknownCommand(runtime: Runtime, renderer: Renderer, ar
     const target = defaultUnknownEvidencePath(workspace, runtime.sessionId);
     const action: GuardAction = { kind: "fs.write", target };
     const kernel = new KernelClient({ workspace });
-    await kernel.start();
     let decision;
     try {
+      await kernel.start();
       decision = await kernel.checkGuard(action, scopeFor(action, workspace));
     } catch (err) {
       renderer.notice(
         `export refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
       );
       return;
+    } finally {
+      try {
+        await kernel.close();
+      } catch {
+        /* ignore */
+      }
     }
-    if (decision.decision !== "allow") {
+    if (!guardEffectivelyAllows(decision)) {
       const why =
         decision.decision === "ask"
           ? "unattended export never self-approves; allow the path in policy"
@@ -291,4 +320,115 @@ export async function runUnknownCommand(runtime: Runtime, renderer: Renderer, ar
   for (const line of lines) {
     renderer.line(line.startsWith("  ") || line.startsWith("──") ? dim(line) : line);
   }
+}
+
+function isRecoverMode(value: string): value is EffectOwnerRecoverMode {
+  return (EFFECT_OWNER_RECOVER_MODES as readonly string[]).includes(value);
+}
+
+function printReconcileRecoveryHints(renderer: Renderer): void {
+  for (const line of RECONCILE_RECOVERY_MODE_HINTS) {
+    renderer.line(line.startsWith("  ") ? dim(line) : line);
+  }
+}
+
+/**
+ * Top-level `/reconcile` UX command (Wave A / Track A4).
+ *
+ * Delegates status/probe/release/inspect/export to `/unknown` and exposes the
+ * 3 kernel `effect.owner.recover` modes (`prepare_only`,
+ * `executed_unknown_abandon`, `executed_unknown_observe_settle`).
+ */
+export async function runReconcileCommand(
+  runtime: Runtime,
+  renderer: Renderer,
+  arg?: string,
+): Promise<void> {
+  const raw = typeof arg === "string" ? arg.trim() : "";
+  if (raw === "") {
+    await runUnknownCommand(runtime, renderer, "status");
+    printReconcileRecoveryHints(renderer);
+    return;
+  }
+
+  const parts = raw.split(/\s+/).filter(Boolean);
+  const verb = (parts[0] ?? "").toLowerCase();
+  const tail = parts.slice(1).join(" ").trim();
+
+  if (verb === "--probe" || verb === "probe") {
+    await runUnknownCommand(runtime, renderer, "reconcile --probe");
+    return;
+  }
+  if (verb === "status" || verb === "release" || verb === "clear" || verb === "export") {
+    await runUnknownCommand(runtime, renderer, verb);
+    return;
+  }
+  if (verb === "inspect") {
+    await runUnknownCommand(runtime, renderer, tail ? `inspect ${tail}` : "");
+    return;
+  }
+  if (verb === "list") {
+    await runUnknownCommand(runtime, renderer, "");
+    printReconcileRecoveryHints(renderer);
+    return;
+  }
+  if (verb === "recover") {
+    const target = parts[1]?.trim() ?? "";
+    const modeArg = parts[2]?.trim() ?? "";
+    const reason = parts.slice(3).join(" ").trim();
+    if (target === "" || !isRecoverMode(modeArg)) {
+      renderer.notice(
+        "usage: /reconcile recover <effect-id> <prepare_only|executed_unknown_abandon|executed_unknown_observe_settle> [reason]",
+      );
+      printReconcileRecoveryHints(renderer);
+      return;
+    }
+    const rt = runtime as RuntimeWithUnknownEffects;
+    const rows = typeof rt.unknownEffects === "function" ? rt.unknownEffects.call(runtime) : [];
+    const resolvedId = resolveUnknownTarget(rows, target) ?? target;
+    if (typeof rt.ownerRecover === "function") {
+      try {
+        await rt.ownerRecover(resolvedId, {
+          mode: modeArg,
+          ...(reason !== "" ? { reason } : {}),
+        });
+        renderer.notice(`effect.owner.recover (${modeArg}) completed for ${resolvedId}`);
+      } catch (err) {
+        renderer.notice(
+          `effect.owner.recover failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+    const workspace = typeof rt.workspace === "string" ? rt.workspace : undefined;
+    if (workspace === undefined) {
+      renderer.notice("not supported: workspace path for effect.owner.recover");
+      return;
+    }
+    const kernel = new KernelClient({ workspace });
+    try {
+      await kernel.start();
+      await kernel.ownerRecover(resolvedId, {
+        effectId: resolvedId,
+        mode: modeArg,
+        ...(reason !== "" ? { reason } : {}),
+      });
+      renderer.notice(`effect.owner.recover (${modeArg}) completed for ${resolvedId}`);
+    } catch (err) {
+      renderer.notice(
+        `effect.owner.recover failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      try {
+        await kernel.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    return;
+  }
+
+  // Fallback: run observe-only reconcile and display recovery modes.
+  await runUnknownCommand(runtime, renderer, `reconcile ${raw}`);
+  printReconcileRecoveryHints(renderer);
 }

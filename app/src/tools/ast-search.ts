@@ -16,12 +16,15 @@
  *   meta: k=v[, k=v...]            (only when the match captured metavariables)
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
+import { realpathish } from "../core/paths";
 import { langFromPath, scanPattern } from "./ast-match";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget, scrubEnv } from "./helpers";
 
 const MAX_RESULTS = 200;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -105,6 +108,7 @@ function selfContainedSearch(
   globFilter: string | undefined,
   cwd: string,
   lang: string | undefined,
+  signal?: AbortSignal,
 ): { results: string[]; capped: boolean; skippedLarge: number; skippedBudget: number; lexUncertain: number } {
   const globMatch = makeGlob(globFilter);
 
@@ -117,6 +121,7 @@ function selfContainedSearch(
   const budget = { steps: 0 };
 
   const scanFile = (abs: string, rel: string): void => {
+    if (signal?.aborted) return;
     if (globMatch && !globMatch(rel)) return;
     let buf: Buffer;
     try {
@@ -148,7 +153,7 @@ function selfContainedSearch(
 
   const candidates: string[] = [];
   const walk = (dir: string): void => {
-    if (capped) return;
+    if (capped || signal?.aborted) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -156,10 +161,13 @@ function selfContainedSearch(
       return;
     }
     for (const entry of entries) {
+      if (signal?.aborted) return;
       if (candidates.length >= MAX_CANDIDATES) {
         capped = true;
         return;
       }
+      // Never follow symlinks during the walk (matches grep.ts).
+      if (entry.isSymbolicLink()) continue;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
@@ -172,7 +180,9 @@ function selfContainedSearch(
 
   let rootIsFile = false;
   try {
-    rootIsFile = statSync(root).isFile();
+    const st = lstatSync(root);
+    if (st.isSymbolicLink()) return { results, capped, skippedLarge, skippedBudget, lexUncertain };
+    rootIsFile = st.isFile();
   } catch {
     return { results, capped, skippedLarge, skippedBudget, lexUncertain };
   }
@@ -180,7 +190,16 @@ function selfContainedSearch(
   else walk(root);
 
   for (const abs of candidates) {
-    if (results.length >= MAX_RESULTS) break;
+    if (signal?.aborted || results.length >= MAX_RESULTS) break;
+    // Per-file lstat + realpathish check to prevent mid-walk symlink swaps.
+    let st: Stats;
+    try {
+      st = lstatSync(abs);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    if (realpathish(abs) !== abs) continue;
     scanFile(abs, relPath(cwd, abs));
   }
   return { results, capped, skippedLarge, skippedBudget, lexUncertain };
@@ -210,7 +229,7 @@ async function externalSearch(
 ): Promise<{ results: string[] } | { degrade: string }> {
   const cmd = [exe, "run", "--pattern", pat, "--json"];
   if (lang) cmd.push("--lang", lang);
-  cmd.push(root);
+  cmd.push("--", root);
   const commandString = cmd.join(" ");
 
   const action: GuardAction = { kind: "shell.exec", target: commandString };
@@ -231,8 +250,12 @@ async function externalSearch(
     ({ proc } = await spawnOwned(cmd, {
       stateDir: kernelStateDir(ctx.workspace),
       label: "ast_search:ast-grep",
+      env: scrubEnv(),
       stdio: { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
       longLived: false,
+      sandboxWrap: "auto",
+      sandboxMode: "read-only",
+      kernel: ctx.kernel,
     }));
   } catch {
     return { degrade: "ast-grep could not be started" };
@@ -358,7 +381,8 @@ export const astSearchTool: Tool = {
       if (typeof args.pat !== "string" || args.pat === "") return fail("pat is required");
       const pat = args.pat;
       const rootInput = typeof args.path === "string" && args.path !== "" ? args.path : ".";
-      const root = resolvePath(ctx.cwd, rootInput);
+      // D-1: guard and search the REAL root (see glob.ts).
+      const root = resolveRealTarget(ctx.cwd, rootInput, ctx.workspace).real;
       const globFilter = typeof args.glob === "string" && args.glob !== "" ? args.glob : undefined;
       const lang = typeof args.lang === "string" && args.lang !== "" ? args.lang : undefined;
 
@@ -376,7 +400,9 @@ export const astSearchTool: Tool = {
       }
 
       if (results === null) {
-        const self = selfContainedSearch(pat, root, globFilter, ctx.cwd, lang);
+        if (ctx.signal.aborted) return fail("aborted");
+        const self = selfContainedSearch(pat, root, globFilter, ctx.cwd, lang, ctx.signal);
+        if (ctx.signal.aborted) return fail("aborted");
         results = self.results;
         if (self.capped) {
           notices.push(`[incomplete: stopped after ${MAX_CANDIDATES} candidate files; narrow the path]`);
@@ -405,6 +431,7 @@ export const astSearchTool: Tool = {
       const body = results.join("\n");
       return { ok: true, output: notices.length === 0 ? body : `${body}\n${notices.join("\n")}` };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

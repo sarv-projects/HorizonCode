@@ -39,6 +39,7 @@
  * after the kernel said "ask", so it never turns a kernel deny into an allow.
  */
 
+import * as path from "node:path";
 import type { GuardAction, GuardKind } from "../contracts";
 import { REVIEW_FORK_ORIGIN, REVIEW_FORK_TOOLS, type ReviewForkTool } from "./review";
 
@@ -117,7 +118,22 @@ export function guardianModeFromEnv(env: Record<string, string | undefined> = pr
 
 const DENY_SHELL = [/\brm\s+-[a-z]*r[a-z]*f?\s+\/(\s|$)/i, /\bmkfs\b/i, /\bdd\s+if=.*\bof=\/dev\//i, /:\(\)\s*\{/];
 const FLAG_SHELL = [/\bsudo\b/i, /\bchmod\b/i, /\bcurl\b[^|]*\|\s*(sh|bash)\b/i, /\bgit\s+push\b.*--force/i];
-const SENSITIVE_PATH = [/(^|\/)\.env(\.|$)/, /(^|\/)\.ssh(\/|$)/, /id_rsa/, /(^|\/)\.git\/config$/];
+const SENSITIVE_PATH = [
+  /(^|\/)\.env(\.|$)/i,
+  /(^|\/)\.ssh(\/|$)/i,
+  /id_rsa/i,
+  /id_ed25519/i,
+  /(^|\/)\.git\/config$/i,
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)\.netrc$/i,
+  /(^|\/)credentials\.db$/i,
+];
+
+function matchesSensitivePath(target: string): boolean {
+  const normalized = target.trim().replace(/\\/g, "/");
+  const resolved = path.resolve(target.trim()).replace(/\\/g, "/");
+  return SENSITIVE_PATH.some((re) => re.test(normalized) || re.test(resolved));
+}
 
 /** Rule-based, provider-free classifier (tests + fallback). */
 export const deterministicClassifier: GuardianClassifier = {
@@ -128,7 +144,7 @@ export const deterministicClassifier: GuardianClassifier = {
       if (DENY_SHELL.some((re) => re.test(target))) return { verdict: "deny", reason: "destructive shell command", score: 1 };
       if (FLAG_SHELL.some((re) => re.test(target))) return { verdict: "flag", reason: "privileged or risky shell command", score: 0.7 };
     }
-    if ((proposed.kind === "fs.write" || proposed.kind === "fs.read") && SENSITIVE_PATH.some((re) => re.test(target))) {
+    if ((proposed.kind === "fs.write" || proposed.kind === "fs.read") && matchesSensitivePath(target)) {
       return proposed.kind === "fs.write"
         ? { verdict: "deny", reason: "write to a sensitive path", score: 0.9 }
         : { verdict: "flag", reason: "read of a sensitive path", score: 0.6 };

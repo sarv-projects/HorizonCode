@@ -3,6 +3,7 @@
  */
 
 import { homedir } from "node:os";
+import { extractOAuthAccountId } from "./account-identity";
 import type { ProviderOAuthEndpoints, ProviderRegistryEntry } from "../config";
 import { appendOAuthClientAuth } from "./oauth-params";
 import { writeOAuthToken, type StoredOAuthToken } from "./store";
@@ -117,10 +118,13 @@ export async function runDeviceCodeLogin(
         obtainedAt: new Date().toISOString(),
       };
       if (typeof json.refresh_token === "string") stored.refreshToken = json.refresh_token;
+      const accountId = extractOAuthAccountId(json.access_token);
+      if (accountId) stored.accountId = accountId;
       if (typeof json.expires_in === "number" && Number.isFinite(json.expires_in)) {
         stored.expiresAt = new Date(Date.now() + json.expires_in * 1000).toISOString();
       }
-      await writeOAuthToken(stored, home);
+      const refused = await writeOAuthToken(stored, home);
+      if (refused !== undefined) throw new Error(refused);
       process.stderr.write(`Stored oauth token for ${entry.id}\n`);
       return;
     }

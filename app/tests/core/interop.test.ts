@@ -16,7 +16,16 @@ import { createHmac } from "node:crypto";
 import * as path from "node:path";
 import type { EventEnvelope, GuardAction, Lease, PolicyScope, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
+import { guardEffectivelyAllows } from "../../src/core/guard-g1-wire";
 import { KernelClient, LocalKernel, loadPolicy, resolveKernelBinary } from "../../src/core/kernel";
+
+function effectiveOutcome(d: { decision: string; leaseId?: string }): "allow" | "ask" | "deny" {
+  if (d.decision === "deny") return "deny";
+  if ((d.decision === "ask" || d.decision === "allow") && typeof d.leaseId === "string" && d.leaseId.trim() !== "") {
+    return "allow";
+  }
+  return "ask";
+}
 import {
   assertEventChain,
   assertReceiptChain,
@@ -333,8 +342,8 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
       const [fromRust, fromLocal] = await Promise.all([rust.checkGuard(action, scope), local.checkGuard(action, scope)]);
       expect(fromLocal.decision, `${action.kind} @ ${scope}`).toBe(fromRust.decision);
     }
-    expect((await rust.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
-    expect((await local.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await rust.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace"))).toBe(true);
+    expect(guardEffectivelyAllows(await local.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace"))).toBe(true);
     // An unknown kind is refused before evaluation in both implementations — a
     // typed HZ_PRECONDITION_FAILED naming the kind, never a policy answer.
     const unknownKind = { kind: "ssh.exec" as GuardAction["kind"], target: "x" };
@@ -349,9 +358,9 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     const localLease = await local.makeLease("shell.exec", "echo *", 60_000);
     const fromRust = await rust.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
     const fromLocal = await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
-    expect(fromRust.decision).toBe("allow");
+    expect(guardEffectivelyAllows(fromRust)).toBe(true);
     expect(fromRust.leaseId).toBe(rustLease.leaseId);
-    expect(fromLocal.decision).toBe("allow");
+    expect(guardEffectivelyAllows(fromLocal)).toBe(true);
     expect(fromLocal.leaseId).toBe(localLease.leaseId);
     await rust.close();
     await local.close();
@@ -383,8 +392,8 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     ];
     for (const [action, scope, expected] of cases) {
       const [fromRust, fromLocal] = await Promise.all([rust.checkGuard(action, scope), local.checkGuard(action, scope)]);
-      expect(fromRust.decision, `rust ${action.kind} @ ${scope}`).toBe(expected);
-      expect(fromLocal.decision, `local ${action.kind} @ ${scope}`).toBe(expected);
+      expect(effectiveOutcome(fromRust), `rust ${action.kind} @ ${scope}`).toBe(expected);
+      expect(effectiveOutcome(fromLocal), `local ${action.kind} @ ${scope}`).toBe(expected);
     }
     await rust.close();
     await local.close();
@@ -418,9 +427,9 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
         [{ id: 1, method: "guard.check", params: { action: row.action, scope: row.scope } }],
         write(path.join(tempDir("hz-state-mcp-pol-rs-"), "kernel")),
       );
-      expect((await local.checkGuard(row.action, row.scope)).decision, `local ${JSON.stringify(row.action)}`).toBe(row.expected);
+      expect(effectiveOutcome(await local.checkGuard(row.action, row.scope)), `local ${JSON.stringify(row.action)}`).toBe(row.expected);
       expect(
-        replyResult<{ decision: string }>(rust.replies, 1).decision,
+        effectiveOutcome(replyResult<{ decision: string; leaseId?: string }>(rust.replies, 1)),
         `rust ${JSON.stringify(row.action)}`,
       ).toBe(row.expected);
       await local.close();
@@ -454,14 +463,14 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     );
     const lease = replyResult<Lease>(rust.replies, 1);
     const first = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 2);
-    expect(first.decision).toBe("allow");
+    expect(effectiveOutcome(first)).toBe("allow");
     expect(first.leaseId).toBe(lease.leaseId);
     expect(replyResult<{ decision: string }>(rust.replies, 3).decision).toBe("ask");
 
     const local = await localClient(stateDir, workspace);
     const localLease = await local.makeLease("mcp.invoke", "github:create_pr", 60_000);
     const localFirst = await local.checkGuard(action, "*");
-    expect(localFirst.decision).toBe("allow");
+    expect(guardEffectivelyAllows(localFirst)).toBe(true);
     expect(localFirst.leaseId).toBe(localLease.leaseId);
     expect((await local.checkGuard(action, "*", [], undefined)).decision).toBe("ask");
     await local.close();
@@ -550,8 +559,8 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
         rust.checkGuard({ kind: "shell.exec", target }, "*", [rustLease]),
         local.checkGuard({ kind: "shell.exec", target }, "*", [localLease]),
       ]);
-      expect(fromRust.decision, `rust ${pattern} -> ${target}`).toBe(expected);
-      expect(fromLocal.decision, `local ${pattern} -> ${target}`).toBe(expected);
+      expect(effectiveOutcome(fromRust), `rust ${pattern} -> ${target}`).toBe(expected);
+      expect(effectiveOutcome(fromLocal), `local ${pattern} -> ${target}`).toBe(expected);
     }
 
     // an empty pattern is refused by both, never widened to a wildcard
@@ -857,12 +866,12 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     const rustLease = replyResult<Lease & { owner?: string }>(minted.replies, 1);
     expect(rustLease.owner).toBe("parent");
     const rustParent = replyResult<{ decision: string; leaseId?: string }>(minted.replies, 2);
-    expect(rustParent.decision).toBe("allow");
+    expect(effectiveOutcome(rustParent)).toBe("allow");
     expect(rustParent.leaseId).toBe(rustLease.leaseId);
     expect(replyResult<{ decision: string }>(minted.replies, 3).decision).toBe("ask");
     const rustLegacy = replyResult<Lease & { owner?: string }>(minted.replies, 4);
     expect(rustLegacy.owner).toBeUndefined();
-    expect(replyResult<{ decision: string }>(minted.replies, 5).decision).toBe("allow");
+    expect(effectiveOutcome(replyResult<{ decision: string; leaseId?: string }>(minted.replies, 5))).toBe("allow");
 
     // The fallback, minted and checked with the same session ids.
     const local = await localClient(stateDir, workspace);
@@ -870,16 +879,16 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
       owner?: string;
     };
     expect(localLease.owner).toBe("parent");
-    expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "parent")).decision).toBe(
-      "allow",
+    expect(guardEffectivelyAllows(await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "parent"))).toBe(
+      true,
     );
     expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "child")).decision).toBe(
       "ask",
     );
     const localLegacy = (await local.makeLease("shell.exec", "echo hi", 60_000)) as Lease & { owner?: string };
     expect(localLegacy.owner).toBeUndefined();
-    expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "child")).decision).toBe(
-      "allow",
+    expect(guardEffectivelyAllows(await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "child"))).toBe(
+      true,
     );
     await local.close();
   });
@@ -963,8 +972,8 @@ describe("additional-hardening parity", () => {
 
     // A single-link policy serves both transports normally.
     const local = await localClient(stateDir, workspace);
-    expect((await local.checkGuard(action, "workspace")).decision).toBe("allow");
-    expect(replyResult<{ decision: string }>(rustCheck().replies, 1).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await local.checkGuard(action, "workspace"))).toBe(true);
+    expect(effectiveOutcome(replyResult<{ decision: string; leaseId?: string }>(rustCheck().replies, 1))).toBe("allow");
 
     // The attack: `ln <state>/policy.json <ws>/pol-link.json`. A plain write
     // through that name would rewrite the policy in place — no path check can
@@ -983,8 +992,8 @@ describe("additional-hardening parity", () => {
 
     // Removing the extra link restores service on both sides.
     rmSync(link);
-    expect((await local.checkGuard(action, "workspace")).decision).toBe("allow");
-    expect(replyResult<{ decision: string }>(rustCheck().replies, 1).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await local.checkGuard(action, "workspace"))).toBe(true);
+    expect(effectiveOutcome(replyResult<{ decision: string; leaseId?: string }>(rustCheck().replies, 1))).toBe("allow");
     await local.close();
   });
 
@@ -1053,7 +1062,7 @@ describe("additional-hardening parity", () => {
     expect(replyResult<{ decision: string }>(rust.replies, 1).decision).toBe("ask");
     const allowed = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 3);
     const minted = replyResult<Lease>(rust.replies, 2);
-    expect(allowed.decision).toBe("allow");
+    expect(effectiveOutcome(allowed)).toBe("allow");
     expect(allowed.leaseId).toBe(minted.leaseId);
   });
 
@@ -1077,15 +1086,15 @@ describe("additional-hardening parity", () => {
     );
     const lease = replyResult<Lease>(rust.replies, 1);
     const first = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 2);
-    expect(first.decision).toBe("allow");
+    expect(effectiveOutcome(first)).toBe("allow");
     expect(first.leaseId).toBe(lease.leaseId);
     // ...and the spent lease answers nothing a second time.
     expect(replyResult<{ decision: string }>(rust.replies, 3).decision).toBe("ask");
     const grant = replyResult<Lease>(rust.replies, 4);
     const mint1 = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 5);
     const mint2 = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 6);
-    expect(mint1.decision).toBe("allow");
-    expect(mint2.decision).toBe("allow");
+    expect(effectiveOutcome(mint1)).toBe("allow");
+    expect(effectiveOutcome(mint2)).toBe("allow");
     expect(mint1.leaseId).not.toBe(grant.leaseId);
     expect(mint2.leaseId).not.toBe(mint1.leaseId);
 
@@ -1093,14 +1102,14 @@ describe("additional-hardening parity", () => {
     const local = await localClient(stateDir, workspace);
     const localLease = await local.makeLease("shell.exec", command, 60_000);
     const l1 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
-    expect(l1.decision).toBe("allow");
+    expect(guardEffectivelyAllows(l1)).toBe(true);
     expect(l1.leaseId).toBe(localLease.leaseId);
     expect((await local.checkGuard({ kind: "shell.exec", target: command }, "*")).decision).toBe("ask");
     await local.makeGrant("shell.exec", command, 60_000);
     const g1 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
     const g2 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
-    expect(g1.decision).toBe("allow");
-    expect(g2.decision).toBe("allow");
+    expect(guardEffectivelyAllows(g1)).toBe(true);
+    expect(guardEffectivelyAllows(g2)).toBe(true);
     expect(g1.leaseId).not.toBe(g2.leaseId);
     await local.close();
   });

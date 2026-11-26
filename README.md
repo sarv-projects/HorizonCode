@@ -4,7 +4,7 @@
 
 A terminal coding agent that separates what the model proposes from what is allowed to happen, and records every admitted action in a hash-chained log with receipts.
 
-The model can request an action; a Rust trust kernel decides whether it runs (`deny > lease > ask > allow`) and settles each admitted action into a receipt in a tamper-evident event log. The runtime is TypeScript on Bun with no runtime dependencies. The terminal UI is scrollback-native: finished output goes into your terminal's own history, and only the prompt and the running turn are redrawn.
+The model can request an action; a Rust trust kernel evaluates policy precedence (`deny > lease > ask`) and returns a G1 decision (`ask` with an optional `leaseId`, or `deny`), settling each admitted action into a receipt in a tamper-evident event log. The runtime is TypeScript on Bun with no runtime dependencies. The terminal UI is scrollback-native: finished output goes into your terminal's own history, and only the prompt and the running turn are redrawn.
 
 > **Status: pre-release / security remediation in progress.** Nothing is published or packaged; you build from source. The version is `0.1.0`. The kernel is primarily a decision/audit layer; Linux children can optionally be wrapped by `hz-sandbox-exec` (seccomp/rlimits/netns/Landlock when the host allows). If the kernel is absent or its digest is not verified, the runtime now runs **read-only** unless `--allow-untrusted` is passed explicitly. There is no full EffectHost and no MITM egress proxy. See [Status and limitations](#status-and-limitations).
 
@@ -50,17 +50,18 @@ Every item below is in this tree (pull requests #1 to #29, all merged into `main
 - **Crash recovery**: sessions live in SQLite and survive restarts; resume with `--continue` or `--resume <id>`.
 - **Cross-process locking**: lockfiles with stale-owner reclaim guard sessions, checkpoints, the change journal and per-file writes.
 
-**Tools** (28 registered; `/files` lists them)
+**Tools** (40 statically registered; `/files` lists them)
 
-- **Edit ladder**: exact, relative-indent, unicode-fold, three-way and line-patch matching, each applied only when the match is unique and CRLF-safe.
+- **Edit ladder & Verified Selection**: exact, relative-indent, unicode-fold, three-way, line-patch, and verified-selection (`verified-selection.ts`: boundary-quote check, `±3` line shift absorption, `@@refA-B@@` copy markers, bottom-up multi-edit) matching, each applied only when unique and CRLF-safe, with an optional bounded post-edit LSP diagnostics hook (`HZ_POST_EDIT_LSP`).
 - **`apply_patch`**: the patch format GPT-style models emit, routed by model so each model sees one coherent edit tool set.
 - **Hashline anchors (opt-in)**: `read` can print `LINE:hash` anchors and `edit` can target them, recovering a unique shift of up to 15 lines.
 - **AST tools**: `ast_search` and `ast_edit` use an in-tree structural matcher.
 - **Interactive PTY**: `shell_session` runs a long-lived terminal program for the model.
 - **Language server loop (default off)**: the `lsp` tool and a diagnostics ledger run only for servers you configure.
-- **`tool_search` and `turn.diff`**: rarely used tools are deferred until the model asks for them, and each turn reports a diff of what it changed.
-- **Code mode**: a JavaScript subprocess calls tools over a bridge; each call is still admitted individually.
-- **MCP client**: stdio servers declared in user config only; a workspace file cannot add one.
+- **`tool_search` and `turn.diff`**: rarely used tools are deferred until the model asks for them (with optional static `tools[]` prefix freeze via `HZ_FREEZE_TOOL_PREFIX=1` for prompt-cache stability), and each turn reports a diff of what it changed.
+- **Code mode & MCP Code Mode**: a JavaScript subprocess calls tools over a bridge with per-call Guard/Approve/Receipt admission and stderr fencing; MCP Code Mode (`codemode-mcp-fs.ts`, `codemode.ts`) exposes deferred MCP specs discovered via `tool_search` with sanitized `input_examples` JSDoc stubs and supports host-gated `saveVerifiedSkill()`.
+- **MCP client, Stateless MCP `2026-07-28` & `PiiVault`**: stdio servers declared in user config only (a workspace file cannot add one), optional stateless HTTP transport (`stateless-http.ts`: `Mcp-Method`/`Mcp-Name`, `ttlMs`/`cacheScope`, deterministic catalog sorting), and reversible `PiiVault` PII redaction (`app/src/core/pii-vault.ts`) wired into `mcp/registry.ts` and `mcp/index.ts`.
+- **4-Phase Auto-Dream memory consolidation**: dual-gated (`>=24h` and `>=5` sessions, opt-out `HZ_AUTO_DREAM=0`), lockfile-guarded sleep-time consolidation (`app/src/core/memory/auto-dream.ts`) that normalizes relative dates, prunes dead `git ls-files` paths, applies atomic itemized SQLite `UPSERT`/`SUPERSEDE`/`DELETE` deltas, and caps the startup memory map at `<= 200` lines.
 - **Repo map**: a ranked structural map of the repository.
 - **Tolerant tool arguments**: malformed tool-call JSON is repaired when the repair is syntax-only and refused for side-effecting tools when the arguments were truncated.
 - **Skills and custom commands**: `SKILL.md` folders with resources (plus read-only `~/.claude/skills` and `~/.agents/skills` sources), a built-in `execute-plan` skill for `.hz/plans/` files, and markdown prompt templates as slash commands.
@@ -71,7 +72,7 @@ Every item below is in this tree (pull requests #1 to #29, all merged into `main
 
 **Interfaces**
 
-- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, and `/theme`; a reduced alt-screen fullscreen mode is available via `--fullscreen` / `--tui-mode fullscreen` (residuals remain).
+- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, `/theme`, DEC Mode 2026 synchronized output (`DECRQM` probe, `HORIZON_FULL_REPAINT=1` ConPTY fallback), OSC 7501 program status, explicit Steer (`Enter`) vs. FIFO Queue (`Tab`), `/focus`, `/btw`, `/reconcile`, `Esc+Esc` recovery, and `REDUCED_MOTION`/`NO_COLOR` non-motion state parity; an alt-screen fullscreen mode is available via `--fullscreen` / `--tui-mode fullscreen` (with `[` native scrollback dump).
 - **Install and config checks**: `hzcode doctor` (diagnose-only), `hzcode config check` (keys the loader ignores) and `hzcode commit` (a commit message drafted from the staged diff, committed through the guarded shell path).
 - **Headless mode**: `hzcode -p` prints one turn as `text`, `json` or `stream-json` with canonical exit codes; approvals fail closed.
 - **Server mode (single client)**: `hzcode serve` speaks NDJSON JSON-RPC on stdio with `session.create`, `list`, `subscribe`, `prompt`, `rewind` and `fork`.
@@ -97,7 +98,7 @@ Every item below is in this tree (pull requests #1 to #29, all merged into `main
                |  NDJSON over stdio:  guard.check / record / verify ...
                v
   +--------------------------+
-  |  hz-kernel (Rust)        |  deny > lease > ask > allow
+  |  hz-kernel (Rust)        |  G1: ask (with leaseId) / deny
   |  guard, leases, policy,  |  admit or refuse every effect
   |  hash-chained event log, |
   |  receipts, anchors       |
@@ -273,7 +274,7 @@ Source line counts and the kernel binary size were re-measured on 2026-11-10; th
 | Kernel self-test | 4 ms for 25 checks | `hz-kernel --selftest --state-dir <tmp>`, wall time |
 | Kernel binary | 1,156,816 bytes (1.1 MiB) | `ls -l kernel/target/release/hz-kernel`, release profile |
 | Idle memory of the chat bar | 85 MB RSS for the Bun process, plus 1 MB for the kernel child | `hzcode --mock` in a PTY, VmRSS from `/proc/<pid>/status` three seconds after the banner; 87 MB after running `/help`, `/files`, `/mode`, `/memory`, `/rewind` and `/sessions` |
-| TypeScript source | 40,813 lines | all `*.ts` under `app/src` (tests live in `app/tests`), comments and blank lines included |
+| TypeScript source | 40,813 lines *(2026-11-10 snapshot)* | all `*.ts` under `app/src` (552 files as of 2026-11-26; tests live in `app/tests`), comments and blank lines included |
 | Rust source | 4,256 lines before inline unit tests (7,070 with them) | `kernel/src/*.rs`, counting up to the first `#[cfg(test)]` in each file for the first figure; re-counted 2026-11-10 |
 | Runtime dependencies | 0 | `app/package.json` has only `devDependencies` (type definitions and the TypeScript compiler) |
 
@@ -281,7 +282,7 @@ No comparison with other agents is made here, because none was measured on the s
 
 ## Testing and CI
 
-The eight gates run through one entry point, `bash ops/gates.sh`, which CI also calls:
+The nine gates run through one entry point, `bash ops/gates.sh`, which CI also calls:
 
 | Gate | What it checks |
 |---|---|
@@ -293,13 +294,14 @@ The eight gates run through one entry point, `bash ops/gates.sh`, which CI also 
 | `e2e-budget-rail` | the step budget stops a run with its exit code |
 | `e2e-usage-error` | a bad flag exits with the usage error |
 | `startup-latency` | median of 5 runs of `hzcode --version` (500 ms ceiling) and of a mock turn (1000 ms ceiling); measured medians are 96 ms and 198 ms |
+| `ruling-ceiling` | verifies `docs/28-implementation-status.md` §3 ruling count stays at or below the ceiling (970) |
 
 Results from a run on 2026-11-10 on this tree (as root in a sandbox container):
 
 - `cd kernel && cargo build --release --locked && cargo test --locked`: all cargo tests pass in the final gate; re-measure for counts (the old 49+50 figures are obsolete).
 - `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
 - `cd app && bun run typecheck && bun test`: typecheck 0 errors; the final tree's suite passes (`ops/gates.sh` `ts-suite`, 2026-11-16). Re-measure for an exact count.
-- `bash ops/gates.sh`: all 8 gates pass (to be re-run at release).
+- `bash ops/gates.sh`: all 9 gates pass (to be re-run at release).
 
 The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
 
@@ -325,7 +327,7 @@ Pre-release and single-platform. Read this before relying on it.
 | Memory FTS recall | deferred `memory_search` | 2026-11-11 | pass (`memory-store.test.ts`, `memory-search.test.ts`) |
 
 - **No benchmarks.** Same-model head-to-head comparisons have not been run. No ranking or token-efficiency claim is made.
-- **Platforms.** Linux x86_64 is the only tested platform. macOS and Windows are untested.
+- **Platforms.** Linux x86_64 is the primary tested platform; CI matrix jobs also run on `macos-latest` and `windows-latest` (`.github/workflows/ci.yml`, `ops/ci/github-actions.yml`). OS sandboxing via `hz-sandbox-exec` is Linux-only (macOS compiles cleanly with fallback; Windows remains an honest exit-2 stub).
 - **Not wired by default.** Speculative execution exists as code and tests but is off, and a test pins it inert. The guardian is advisory unless `HORIZON_GUARDIAN=enforce`. The language server loop is off until you configure a server. Hashline anchors are opt-in.
 - **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Workspace trust loads hooks, skills, agent presets, **MCP** and **providers** when listed in `trustedWorkspaceHooks` and digests match `trust.json` (see `docs/33` §6.2).
 - **Partial / not started.** Reduced alt-screen fullscreen ships (cell buffer, layout, differential frames); MITM or routed egress proxy is prototype-only; EffectHost and independent receipt postimage are partial; no same-model benchmarks.
@@ -367,7 +369,7 @@ bash ops/gates.sh
 git checkout -- app/bun.lock   # bun install may rewrite the lockfile
 ```
 
-Claims in documentation should cite a command that produces them; `docs/28-implementation-status.md` shows the convention. The interface shared by both runtimes is `app/src/contracts.ts`; change it in both implementations together. There is no separate contributing guide or security policy yet.
+Claims in documentation should cite a command that produces them; `docs/28-implementation-status.md` shows the convention. The interface shared by both runtimes is `app/src/contracts.ts`; change it in both implementations together. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution workflow and [`SECURITY.md`](./SECURITY.md) for security reporting.
 
 ## Licence
 

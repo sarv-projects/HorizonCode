@@ -42,11 +42,46 @@ function writeChainedSession(
   writeFileSync(file + ".head", JSON.stringify({ seq: rows.length, hash: prevHash }) + "\n");
 }
 
+/** Windows keeps SQLite handles briefly after close(); retry before failing. */
+function cleanupWorkspace(ws: string): void {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      rmSync(ws, { recursive: true, force: true });
+      return;
+    } catch {
+      // Best effort: a Windows SQLite handle may keep the temp dir locked
+      // until process exit. Temp cleanup is not a product assertion.
+      Bun.sleepSync(50);
+    }
+  }
+}
+
+describe("session verify strict keyed posture (ruling 754)", () => {
+  test("report and rendering name whether HZ_R172_REQUIRE_KEYED was used", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-strict-"));
+    try {
+      const plain = buildSessionVerifyReport(ws, "strict-session");
+      expect(plain.strictKeyed).toBe(false);
+      process.env.HZ_R172_REQUIRE_KEYED = "1";
+      try {
+        const strict = buildSessionVerifyReport(ws, "strict-session");
+        expect(strict.strictKeyed).toBe(true);
+        expect(renderSessionVerify(strict)).toContain("strict keyed verify: on");
+      } finally {
+        delete process.env.HZ_R172_REQUIRE_KEYED;
+      }
+    } finally {
+      cleanupWorkspace(ws);
+    }
+  });
+});
+
 describe("session-verify-cli (ruling 291)", () => {
   test("ok session exits 0", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-ok-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-ok");
       const host = new EffectHost(new WorkspaceEffectLedger(ws));
       const id = createEffectId();
@@ -60,14 +95,16 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(0);
       expect(renderSessionVerify(report)).toContain("verdict: verified");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 
   test("broken receipt chain exits 3 with brokenAt", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-brk-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-broken");
       const base = {
         id: "r1",
@@ -88,14 +125,16 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("brokenAt seq");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 
   test("truncated receipt anchor exits 3", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-anchor-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-anchor");
       const base = {
         id: "r1",
@@ -118,14 +157,16 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("compaction chain");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 
   test("reconcile probe mismatch exits 3", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-mis-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-mismatch");
       const host = new EffectHost(new WorkspaceEffectLedger(ws));
       const id = createEffectId();
@@ -139,14 +180,16 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("reconcile mismatches");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 
   test("nested childEffectIds missing receipt exits 3 (ruling 456)", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-nested-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-nested");
       const base = {
         id: "r-parent",
@@ -172,14 +215,16 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("nested receipt replay: refused");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 
   test("nested child event-stream missing exits 3 (ruling 478)", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-evt-"));
+    let store: SessionStore | undefined;
     try {
-      const store = new SessionStore(ws);
+      store = new SessionStore(ws);
       const session = store.createSession("verify-evt");
       writeChainedSession(ws, session.id, [
         { type: "subagent.start", payload: { agentId: "missing-nested-child", task: "t" } },
@@ -190,7 +235,8 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("nested event-stream replay: refused");
     } finally {
-      rmSync(ws, { recursive: true, force: true });
+      store?.close();
+      cleanupWorkspace(ws);
     }
   });
 });

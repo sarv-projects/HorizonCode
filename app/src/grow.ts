@@ -117,6 +117,7 @@ import {
   type CuratorApplyError,
 } from "./core/curator-apply";
 import { curatorArchivePath } from "./core/curator-archive";
+import { guardEffectivelyAllows } from "./core/guard-g1-wire";
 import { KernelClient } from "./core/kernel";
 import { scopeFor } from "./core/loop";
 import { previewDreamPlan } from "./core/memory/dream";
@@ -712,13 +713,17 @@ async function runFromPostmortems(io: GrowCliIo, workspace: string, stateDir: st
   // Under-admission (ruling 561): Guard fs.write on the curator store + archive
   // before curate mutates disk — deny/ask refuse with exit 4 and no append.
   const kernel = new KernelClient({ workspace });
-  await kernel.start();
-  for (const target of [proposalsFilePath(stateDir), curatorArchivePath(stateDir)]) {
-    const denied = await admitGrowFsWrite(kernel, workspace, target);
-    if (denied) {
-      io.err(`refused: ${denied}`);
-      return 4;
+  try {
+    await kernel.start();
+    for (const target of [proposalsFilePath(stateDir), curatorArchivePath(stateDir)]) {
+      const denied = await admitGrowFsWrite(kernel, workspace, target);
+      if (denied) {
+        io.err(`refused: ${denied}`);
+        return 4;
+      }
     }
+  } finally {
+    await kernel.close().catch(() => undefined);
   }
 
   let result: ReturnType<typeof curate>;
@@ -793,7 +798,7 @@ async function admitGrowFsWrite(
   } catch (err) {
     return `the guard could not decide (${errorMessage(err)})`;
   }
-  if (decision.decision === "ask") {
+  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
     return "unattended grow never self-approves; allow the path in policy or apply via the TUI";
   }
   if (decision.decision === "deny") {
@@ -859,7 +864,6 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     try {
       target = memoryBankNotePath(workspace, row);
       assertSafeMemoryBankNotePath(workspace, target);
-      ensureMemoryBankNotesDir(workspace);
       const prior = readMemoryBankNoteText(target);
       const merged = mergeMemoryBankNoteAppend(prior, row);
       if (merged === null) {
@@ -971,7 +975,7 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
       io.err(`refused: the guard could not decide (${errorMessage(err)})`);
       return 3;
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       io.err("refused: unattended apply never self-approves; run under a policy that allows it or apply via the TUI");
       return 3;
     }
@@ -980,6 +984,7 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
       return 4;
     }
 
+    if (bankApply) ensureMemoryBankNotesDir(workspace);
     await mkdir(path.dirname(target), { recursive: true });
     const ctx = growToolContext(kernel, workspace);
     const outcome = await writeAtomic(target, content, ctx);

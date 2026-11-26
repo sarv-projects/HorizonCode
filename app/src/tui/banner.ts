@@ -5,7 +5,7 @@
  * booting a machine. Printed once, above the chat bar.
  */
 
-import { bold, cyan, dim, green, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
+import { bold, cyan, dim, green, sanitizeDisplay, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
 
 export interface BannerInfo {
   /** full version, e.g. "0.1.0" */
@@ -20,13 +20,14 @@ export interface BannerInfo {
 export const GREETING = "Type a message to start \u2014 /help for commands.";
 
 function shortVersion(version: string): string {
-  const parts = String(version ?? "").split(".").filter(Boolean);
-  return parts.slice(0, 2).join(".") || String(version ?? "");
+  const clean = sanitizeDisplay(version);
+  const parts = clean.split(".").filter(Boolean);
+  return parts.slice(0, 2).join(".") || clean;
 }
 
 /** `~` for the home directory: keeps the workspace line short and readable. */
 export function shortenPath(p: string): string {
-  const value = String(p ?? "");
+  const value = sanitizeDisplay(p);
   const home = process.env.HOME;
   if (home && value === home) return "~";
   if (home && value.startsWith(home + "/")) return "~" + value.slice(home.length);
@@ -47,10 +48,12 @@ export function printBanner(info: BannerInfo, opts: PrintOptions = {}): void {
   const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
   const width = Math.max(20, opts.width ?? terminalWidth());
 
-  const kernel = String(info.kernel ?? "unknown");
+  const kernel = sanitizeDisplay(info.kernel ?? "unknown") || "unknown";
+  const model = sanitizeDisplay(info.model ?? "unknown") || "unknown";
+  const provider = sanitizeDisplay(info.provider ?? "unknown") || "unknown";
   const lines: string[] = [
     bold(cyan("HzCode")) + dim(" v" + shortVersion(info.version)),
-    dim("model ") + String(info.model ?? "unknown") + dim(" \u00b7 provider ") + String(info.provider ?? "unknown"),
+    dim("model ") + model + dim(" \u00b7 provider ") + provider,
     dim("workspace ") + shortenPath(info.workspace),
     dim("kernel ") + (kernel === "trusted" ? green(kernel) : yellow(kernel)),
   ];
@@ -73,14 +76,16 @@ export function printBanner(info: BannerInfo, opts: PrintOptions = {}): void {
 export function printRichBanner(info: BannerInfo, opts: PrintOptions & { tip?: string } = {}): void {
   const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
   const width = Math.max(20, opts.width ?? terminalWidth());
-  const kernel = String(info.kernel ?? "unknown");
+  const kernel = sanitizeDisplay(info.kernel ?? "unknown") || "unknown";
+  const model = sanitizeDisplay(info.model ?? "unknown") || "unknown";
+  const provider = sanitizeDisplay(info.provider ?? "unknown") || "unknown";
   const lines: string[] = [
     cyan("\u25c6") + " " + bold("Horizon") + bold(cyan("Code")) + dim(" v" + shortVersion(info.version) + " \u00b7 terminal coding agent"),
-    "  " + dim("model ") + String(info.model ?? "unknown") + dim(" \u00b7 provider ") + String(info.provider ?? "unknown"),
+    "  " + dim("model ") + model + dim(" \u00b7 provider ") + provider,
     "  " + dim("workspace ") + shortenPath(info.workspace),
     "  " + dim("kernel ") + (kernel === "trusted" ? green(kernel) : yellow(kernel)),
   ];
-  if (opts.tip) lines.push("  " + yellow("tip") + dim(" " + opts.tip));
+  if (opts.tip) lines.push("  " + yellow("tip") + dim(" " + sanitizeDisplay(opts.tip)));
   for (const line of lines) {
     if (visibleWidth(line) <= width) {
       out(line + "\n");

@@ -13,7 +13,7 @@ import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSyn
 import * as path from "node:path";
 import type { ChatMsg, ContextUsage, GuardAction, RunExit, Runtime } from "../contracts";
 import { modelsForProvider } from "../core/catalog/list-models";
-import { formatModelsNotice } from "./models-slash";
+import { formatModelsNotice, isModelsRefreshCommand, runModelsSlashRefresh } from "./models-slash";
 import { formatDidYouMean, suggestModelIds } from "../core/catalog/model-suggest";
 import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
 import { BUILTIN_SLASH_REGISTRY } from "../core/slash-registry";
@@ -24,6 +24,7 @@ import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
 import { contextChunkRows, renderContextTokenTable } from "../core/context-token-table";
 import { KernelClient } from "../core/kernel";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { renderLearnChapter, renderLearnIndex } from "../core/learn-kb";
 import { renderWorkspaceTrustReport } from "../core/trust";
 import { renderSettingsReport } from "../core/settings-report";
@@ -40,6 +41,7 @@ import {
   parseHunkApplySelection,
   unifiedDiff,
 } from "../core/plan";
+import { applyHunkDecisions, parseDiffHunks, renderHunkReview } from "./hunk-review";
 import { copyAssistantFromHistory } from "./clipboard";
 import { formatCommandPalette } from "./command-palette";
 import { bellOnTurnEnd, notifyPrefsMerged, runNotifyCommand } from "./notify";
@@ -72,7 +74,13 @@ import {
 import { kernelStateDir } from "../core/paths";
 import { clearAbortedComposerDraft, saveAbortedComposerDraft, takeAbortedComposerDraft } from "./composer-draft";
 import { unknownCountAfterEvent } from "./unknown-chip";
-import { runUnknownCommand } from "./unknown-slash";
+import { runReconcileCommand, runUnknownCommand } from "./unknown-slash";
+import {
+  inspectPrincipalPosture,
+  readEffectHostMode,
+  readEgressPosture,
+  readPiiVaultStatus,
+} from "./trust-spine-status";
 import {
   formatReconcileBlockScrollbackNoticeLines,
   reconcileBlockScrollbackNoticeKey,
@@ -85,24 +93,30 @@ import {
 } from "./scrollback-receipt-shortcut";
 import { complete, formatCompletionDropdown, ghostFor, type CompletionContext } from "./completion";
 import { loadUserKeymap, resolveAction } from "./keymap";
-import { keyChoice, type KeyAnswer } from "./approval-card";
+import { keyChoice, type ApprovalStageResolution, type ApprovalStageState, type KeyAnswer } from "./approval-card";
 import {
   APPROVAL_GRANT_TICK_MS,
+  approvalCardScreenRows,
   normalizeApprovalKeyPrompt,
   refreshApprovalCardAboveCursor,
 } from "./approval-key-prompt";
+import { APPROVAL_TYPE_AHEAD_MS, consumeFullscreenStagedApprovalKey } from "./fullscreen-approval";
 import {
   PASTE_OFF,
   PASTE_ON,
   PASTE_SINGLE_LINE_FLUSH_MS,
   createPasteCollector,
   echoedRows,
+  normalizePastedLineEndings,
   pasteLabel,
 } from "./paste";
+import { createDeferredSubmitGuard } from "./fullscreen-line-editor";
 import { createRenderer, diffBlock, type Renderer } from "./render";
+import { emitOsc7501 } from "./osc7501";
+import { createDoubleEscDetector, createTurnQueueController } from "./turn-queue";
 import { printSlashHelp } from "./slash-help";
 import { parseSlashInput } from "./slash-dispatch";
-import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
+import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeDisplay, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
 import { persistNotifyConfig, persistThemeMode } from "../core/config";
 
 const PROMPT = "\u276f ";
@@ -548,7 +562,7 @@ export async function runPlanCommand(
       togglePlanMode(arg, runtime, renderer, state);
       return true;
     case "changes":
-      listStagedChanges(runtime, renderer);
+      await listStagedChanges(runtime, renderer, arg);
       return true;
     case "apply":
       await applyStagedPlan(runtime, renderer, arg);
@@ -597,7 +611,61 @@ function stagedDiff(change: StagedChangeView): string {
   return unifiedDiff(before, change.after, typeof change.rel === "string" ? change.rel : "change", CHANGES_DIFF_LINES);
 }
 
-function listStagedChanges(runtime: Runtime, renderer: Renderer): void {
+/** Per-hunk review of staged diffs (docs/28 §14); never applies without /apply. */
+async function reviewStagedHunks(
+  renderer: Renderer,
+  list: ReadonlyArray<StagedChangeView>,
+): Promise<void> {
+  const items = list.flatMap((change) =>
+    parseDiffHunks(stagedDiff(change), sanitizeText(change?.rel ?? "") || "(unnamed)"),
+  );
+  if (items.length === 0) {
+    renderer.notice("no hunks to review");
+    return;
+  }
+  renderer.write(renderHunkReview(items, 0) + "\n");
+  if (!process.stdin.isTTY) {
+    renderer.notice("review is interactive in a TTY; apply specific hunks with /apply <path>:<hunk>");
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string): Promise<string> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const done = (val: string): void => {
+        if (settled) return;
+        settled = true;
+        rl.off("close", onCancel);
+        rl.off("SIGINT", onCancel);
+        resolve(val);
+      };
+      const onCancel = (): void => done("skip");
+      rl.once("close", onCancel);
+      rl.once("SIGINT", onCancel);
+      rl.question(q, (ans) => done(ans.trim().toLowerCase()));
+    });
+  try {
+    for (let i = 0; i < items.length; i += 1) {
+      const answer = await ask(`hunk ${i + 1}/${items.length} [a]ccept [r]eject [e]dit [skip]: `);
+      if (answer === "skip" || answer === "q") break;
+      if (answer === "a" || answer === "accept") items[i]!.decision = "accept";
+      else if (answer === "r" || answer === "reject") items[i]!.decision = "reject";
+      else if (answer === "e" || answer === "edit") items[i]!.decision = "edit";
+      renderer.write(renderHunkReview(items, i) + "\n");
+    }
+    const outcome = applyHunkDecisions(items);
+    if (outcome.selection !== "") {
+      renderer.notice(`accepted hunks: ${outcome.selection} \u2014 run /apply ${outcome.selection} to write them`);
+    } else {
+      renderer.notice("no hunks accepted; nothing staged for apply");
+    }
+    if (outcome.pending > 0) renderer.notice(`${outcome.pending} hunk(s) left pending (edit/undecided)`);
+  } finally {
+    rl.close();
+  }
+}
+
+async function listStagedChanges(runtime: Runtime, renderer: Renderer, arg = ""): Promise<void> {
   const staged = (runtime as RuntimeWithExtras).stagedChanges;
   if (typeof staged !== "function") {
     notSupported(renderer, "stagedChanges");
@@ -613,6 +681,10 @@ function listStagedChanges(runtime: Runtime, renderer: Renderer): void {
   }
   if (list.length === 0) {
     renderer.notice("no staged changes \u2014 /plan on stages writes and edits for review");
+    return;
+  }
+  if (arg.trim() === "--review") {
+    await reviewStagedHunks(renderer, list);
     return;
   }
   renderer.notice(`staged changes (${list.length}):`);
@@ -747,10 +819,10 @@ export function describeSession(
   const mark = s.id === currentId ? "* " : "  ";
   const lineage =
     s.forkedFrom !== undefined
-      ? ` (fork of ${s.forkedFrom.sessionId} at message ${s.forkedFrom.messageIndex})`
+      ? ` (fork of ${sanitizeDisplay(s.forkedFrom.sessionId)} at message ${s.forkedFrom.messageIndex})`
       : "";
-  const snippet = s.snippet !== undefined && s.snippet !== "" ? `\n      ${s.snippet}` : "";
-  return `${mark}${s.id}  ${s.title}${lineage}${snippet}`;
+  const snippet = s.snippet !== undefined && s.snippet !== "" ? `\n      ${sanitizeDisplay(s.snippet)}` : "";
+  return `${mark}${sanitizeDisplay(s.id)}  ${sanitizeDisplay(s.title)}${lineage}${snippet}`;
 }
 
 /**
@@ -906,7 +978,53 @@ export async function runConvoCommand(
         const statement = await rt.setGoal(trimmed, "active");
         renderer.notice(`goal set: ${statement}`);
         const { runAutonomousGoalLoop } = await import("../core/goal-runner");
-        await runAutonomousGoalLoop(trimmed, runtime, renderer, { workspace });
+        // Generator / Evaluator Separation: with HZ_GOAL_EVALUATOR_MODEL set,
+        // an independent model with its own prompt reviews each round before
+        // the goal can be declared achieved. Unset keeps the legacy gate.
+        const evaluatorModel = (await import("../core/goal-evaluator")).evaluatorModelFromEnv();
+        let evaluator: import("../core/goal-evaluator").GoalEvaluator | undefined = undefined;
+        if (evaluatorModel !== undefined) {
+          const { makeProvider } = await import("../core/providers");
+          const { createProviderEvaluator } = await import("../core/goal-evaluator");
+          const home = process.env.HOME?.trim() || homedir();
+          const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
+          evaluator = createProviderEvaluator({
+            provider: makeProvider({ ...cfg, model: evaluatorModel }),
+            model: evaluatorModel,
+          });
+          renderer.notice(dim(`  Independent evaluator model: ${evaluatorModel}`));
+        }
+        await runAutonomousGoalLoop(trimmed, runtime, renderer, { workspace, evaluator });
+        return true;
+      }
+      case "tasks": {
+        const { loadTaskBoard } = await import("../core/task-board");
+        const board = loadTaskBoard(workspace);
+        if (board.items.length === 0) {
+          renderer.notice(
+            board.violations.length > 0
+              ? `Task board has violations:\n${board.violations.map((v) => `  - ${v}`).join("\n")}`
+              : "No task board configured (create .hz/wip.json). Active: 0, WIP=1",
+          );
+        } else {
+          const lines = [
+            `Task Board (WIP=1, Active: ${board.activeCount}):`,
+            ...board.items.map((item) => {
+              const mark =
+                item.status === "passed"
+                  ? "[x]"
+                  : item.status === "in_progress" || item.status === "active"
+                    ? "[*]"
+                    : "[ ]";
+              return `  ${mark} ${item.id}: ${item.name ?? "unnamed"} (${item.status ?? "pending"})`;
+            }),
+          ];
+          if (board.violations.length > 0) {
+            lines.push("\nViolations:");
+            for (const v of board.violations) lines.push(`  ! ${v}`);
+          }
+          renderer.notice(lines.join("\n"));
+        }
         return true;
       }
       case "trust": {
@@ -985,17 +1103,23 @@ export async function runConvoCommand(
         // Under-admission (ruling 572): Guard fs.write before json/html export write.
         const action: GuardAction = { kind: "fs.write", target: file };
         const kernel = new KernelClient({ workspace });
-        await kernel.start();
         let decision;
         try {
+          await kernel.start();
           decision = await kernel.checkGuard(action, scopeFor(action, workspace));
         } catch (err) {
           renderer.notice(
             `export refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
           );
           return true;
+        } finally {
+          try {
+            await kernel.close();
+          } catch {
+            /* ignore */
+          }
         }
-        if (decision.decision !== "allow") {
+        if (!guardEffectivelyAllows(decision)) {
           const why =
             decision.decision === "ask"
               ? "unattended export never self-approves; allow the path in policy"
@@ -1215,9 +1339,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let busy = false;
   let exiting = false;
   let abortRequested = false;
+  let focusModeOn = false;
   let answerWaiter: ((line: string) => void) | null = null;
   let typedGuardArmed = false;
   const queued: string[] = [];
+  const turnQueue = createTurnQueueController();
+  const doubleEsc = createDoubleEscDetector();
   let resolveDone: (code: number) => void = () => {};
   const done = new Promise<number>((resolve) => {
     resolveDone = resolve;
@@ -1233,6 +1360,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const renderer: Renderer = createRenderer({
     wrap: true,
     rich: liveEnabled(),
+    focusMode: () => focusModeOn,
     beforeWrite: () => {
       // The animated bottom region never ends up in the transcript.
       live?.erase();
@@ -1259,6 +1387,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let branchCache: { at: number; value: string | undefined } = { at: 0, value: undefined };
   const statusInfo = (): StatusInfo => {
     if (Date.now() - branchCache.at > 2000) branchCache = { at: Date.now(), value: readGitBranch(workspace) };
+    const principal = inspectPrincipalPosture();
     return {
       badge: planState.on ? "PLAN" : modeBadge(readPermissionMode(runtime)),
       model: runtime.model,
@@ -1270,13 +1399,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       branch: branchCache.value,
       unknownCount: unknownCount > 0 ? unknownCount : undefined,
       unknownReceiptId: unknownCount === 1 ? unknownReceiptId : undefined,
-      reconcileBlock: hz.reconcileBlockLatch(),
+      reconcileBlock: hz.reconcileBlockLatch?.(),
+      effectHostMode: readEffectHostMode(),
+      egressPosture: readEgressPosture(runtime),
+      piiVault: readPiiVaultStatus(runtime),
+      principalMode: principal.principalMode,
+      principalKeyFingerprint: principal.principalKeyFingerprint,
     };
   };
   const hz = runtime as import("../core").HzRuntime;
   let reconcileBlockNoticeKeySeen = "";
   const emitReconcileBlockScrollbackNoticeIfNeeded = (): void => {
-    const view = hz.reconcileBlockLatch();
+    const view = hz.reconcileBlockLatch?.();
+    if (!view) return;
     const key = reconcileBlockScrollbackNoticeKey(view);
     if (key === reconcileBlockNoticeKeySeen) return;
     reconcileBlockNoticeKeySeen = key;
@@ -1307,15 +1442,49 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // Wire the guard to this session: one line of the same chat bar is the answer.
   ui.renderer = renderer;
   ui.runtime = runtime;
-  ui.ask = (question: string) =>
+  ui.ask = (question: string, askOpts?: { signal?: AbortSignal }) =>
     new Promise<string>((resolve) => {
-      answerWaiter = resolve;
+      const signal = askOpts?.signal;
+      if (signal?.aborted) {
+        resolve("");
+        return;
+      }
+      let settled = false;
+      const cleanup = (): void => {
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        if (answerWaiter === waiter) answerWaiter = null;
+        cleanup();
+        try {
+          rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
+          if (!exiting && !busy) rl.prompt();
+        } catch {
+          /* ignore */
+        }
+        resolve("");
+      };
+      const waiter = (line: string): void => {
+        if (settled) return;
+        settled = true;
+        if (answerWaiter === waiter) answerWaiter = null;
+        cleanup();
+        resolve(line);
+      };
+      answerWaiter = waiter;
+      signal?.addEventListener("abort", onAbort, { once: true });
       try {
         rl.setPrompt(question);
         rl.prompt();
       } catch {
-        answerWaiter = null;
-        resolve("");
+        if (!settled) {
+          settled = true;
+          if (answerWaiter === waiter) answerWaiter = null;
+          cleanup();
+          resolve("");
+        }
       }
     });
 
@@ -1378,10 +1547,88 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
               /* terminal went away */
             }
           }, APPROVAL_GRANT_TICK_MS);
+          (tickTimer as { unref?: () => void }).unref?.();
         }
         wipeLine();
         // The line path (Enter, abort) is a denial; only a recognised key can say yes.
         answerWaiter = () => settle("n");
+        process.stdin.on("keypress", onKey);
+      });
+
+    ui.askStagedKey = (prompt, initial) =>
+      new Promise<ApprovalStageResolution>((resolve) => {
+        const { screenRows, onTick, renderStage } = normalizeApprovalKeyPrompt(prompt);
+        let state: ApprovalStageState = initial;
+        let armedAt = Date.now() + APPROVAL_TYPE_AHEAD_MS;
+        let currentRows = screenRows;
+        let settled = false;
+        let tickTimer: ReturnType<typeof setInterval> | undefined;
+        const writeCard = (chunk: string): void => {
+          process.stdout.write(chunk);
+        };
+        try {
+          rl.pause();
+        } catch {
+          /* readline may already be paused */
+        }
+        const settle = (resolution: ApprovalStageResolution): void => {
+          if (settled) return;
+          settled = true;
+          if (tickTimer !== undefined) clearInterval(tickTimer);
+          process.stdin.off("keypress", onKey);
+          answerWaiter = null;
+          wipeLine();
+          try {
+            rl.resume();
+          } catch {
+            /* closed */
+          }
+          resolve(resolution);
+        };
+        const redraw = (nextLines: string[]): void => {
+          try {
+            refreshApprovalCardAboveCursor(writeCard, currentRows, nextLines);
+            currentRows = approvalCardScreenRows(nextLines.length);
+          } catch {
+            /* terminal went away */
+          }
+        };
+        const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined): void => {
+          const now = Date.now();
+          const outcome = consumeFullscreenStagedApprovalKey(
+            state,
+            armedAt,
+            now,
+            paste.pasting(),
+            key,
+            str,
+          );
+          if (outcome.kind === "paste-block" || outcome.kind === "ignore") {
+            wipeLine();
+            return;
+          }
+          if (outcome.kind === "transition") {
+            const prevStage = state.stage;
+            state = outcome.state;
+            if (prevStage !== "always_confirm" && state.stage === "always_confirm") {
+              armedAt = now + APPROVAL_TYPE_AHEAD_MS;
+            }
+            const nextLines = renderStage?.(state);
+            if (nextLines) redraw(nextLines);
+            wipeLine();
+            return;
+          }
+          settle(outcome.resolution);
+        };
+        if (onTick) {
+          tickTimer = setInterval(() => {
+            if (settled || state.stage !== "permission") return;
+            redraw(onTick());
+          }, APPROVAL_GRANT_TICK_MS);
+          (tickTimer as { unref?: () => void }).unref?.();
+        }
+        wipeLine();
+        answerWaiter = () => settle({ kind: "declined" });
         process.stdin.on("keypress", onKey);
       });
   }
@@ -1405,10 +1652,30 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     for (const line of opts.onboardingNotice) renderer.notice(line);
   }
 
+  let pasteFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  const stdinKeypressListeners: Array<(...args: any[]) => void> = [];
+
   const finish = (code: number): void => {
     if (exiting) return;
     exiting = true;
+    if (answerWaiter !== null) {
+      const waiter = answerWaiter;
+      answerWaiter = null;
+      waiter("");
+    }
+    if (pasteFlushTimer !== undefined) {
+      clearTimeout(pasteFlushTimer);
+      pasteFlushTimer = undefined;
+    }
+    for (const listener of stdinKeypressListeners.splice(0)) {
+      try {
+        process.stdin.off("keypress", listener);
+      } catch {
+        /* ignore */
+      }
+    }
     live?.dispose();
+    emitOsc7501((c) => process.stdout.write(c), "idle");
     try {
       if (process.stdout.isTTY && process.stdin.isTTY) process.stdout.write(PASTE_OFF);
     } catch {
@@ -1466,6 +1733,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     renderer.ensureLineStart();
     live?.beginTurn();
+    emitOsc7501((c) => process.stdout.write(c), "working");
+    let turnHadError = false;
     try {
       const result = await runtime.send(text, {
         onEvent: (ev) => {
@@ -1508,9 +1777,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         renderer.notice(line);
       }
     } catch (err) {
+      turnHadError = true;
+      emitOsc7501((c) => process.stdout.write(c), "error");
       renderer.error(`request failed: ${errorMessage(err)}`);
     } finally {
       busy = false;
+      if (!turnHadError) emitOsc7501((c) => process.stdout.write(c), "done");
       emitReconcileBlockScrollbackNoticeIfNeeded();
       const stats = live?.endTurn();
       renderer.ensureLineStart();
@@ -1576,18 +1848,65 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     renderer.notice(formatModelsNotice(provider, list));
   };
 
+  /**
+   * Pause the outer readline interface and temporarily detach conflicting
+   * keypress listeners while a modal owns `process.stdin`, then cleanly
+   * restore listeners, raw mode, and outer `rl` in `finally`.
+   */
+  const withExclusiveStdin = async <T>(fn: () => Promise<T>): Promise<T> => {
+    live?.erase();
+    const stdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean; setRawMode?: (on: boolean) => void };
+    const wasRaw = stdin.isRaw === true;
+    const savedKeypress = stdin.rawListeners("keypress").slice();
+    try {
+      rl.pause();
+    } catch {
+      /* already paused */
+    }
+    stdin.removeAllListeners("keypress");
+    try {
+      return await fn();
+    } finally {
+      for (const listener of savedKeypress) {
+        stdin.on("keypress", listener as (...args: unknown[]) => void);
+      }
+      if (!exiting) {
+        try {
+          if (stdin.isTTY && typeof stdin.setRawMode === "function") stdin.setRawMode(wasRaw);
+        } catch {
+          /* terminal went away */
+        }
+        try {
+          stdin.resume();
+        } catch {
+          /* ignore */
+        }
+        try {
+          rl.resume();
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+  };
+
   const showOrSetModel = async (arg: string): Promise<void> => {
     const rt = runtime as RuntimeWithExtras;
     const provider = rt.providerName ?? "unknown";
     const list = modelsForProvider(provider, rt.config ?? {});
-    if (arg === "") {
+    if (arg.trim() === "--select") {
+      // The arrow-key/filter picker is explicit so bare `/model` keeps its
+      // scrollback notice and never blocks a scripted or PTY session (742).
       if (process.stdin.isTTY) {
         const { runInteractiveModelPicker } = await import("./interactive-model-picker");
-        const res = await runInteractiveModelPicker(runtime, renderer);
-        if (res.switched && res.model) {
-          return;
-        }
+        const res = await withExclusiveStdin(() => runInteractiveModelPicker(runtime, renderer));
+        if (res.switched && res.model) return;
+      } else {
+        renderer.notice("interactive model picker needs a TTY; use /model <name>");
       }
+      return;
+    }
+    if (arg === "") {
       const available = detectAvailableProviders(process.env);
       const provInfo = available.length > 0 ? ` \u00b7 configured providers: ${available.join(", ")}` : "";
       renderer.notice(`model ${runtime.model} \u00b7 provider ${provider}${provInfo}`);
@@ -1648,9 +1967,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Send text as if typed: steer mid-turn when possible, else queue for next turn. */
   const sendUserText = async (text: string): Promise<void> => {
     if (busy) {
-      const interject = (runtime as { interject?: (t: string) => { accepted: boolean } }).interject;
+      const interject = (
+        runtime as { interject?: (t: string, opts?: { mode?: "steer" | "interrupt" }) => { accepted: boolean } }
+      ).interject;
       if (typeof interject === "function") {
-        const outcome = interject.call(runtime, text);
+        // Chat-bar Enter during a turn is an explicit <system-interrupt> steer:
+        // the model is redirected at the next step, the turn is not aborted.
+        const outcome = interject.call(runtime, text, { mode: "interrupt" });
         if (outcome?.accepted === true) {
           echoUser(text);
           renderer.notice("steered \u2014 your message joins the current turn at the next step");
@@ -1696,7 +2019,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "auth":
       case "login": {
         const { runAuthWizard } = await import("./onboarding-wizard");
-        const res = await runAuthWizard();
+        const res = await withExclusiveStdin(() => runAuthWizard());
         if (res.configured && res.provider) {
           renderer.notice(`configured provider ${res.provider} (credentials stored in ${res.savedPath})`);
           const available = detectAvailableProviders(process.env);
@@ -1705,7 +2028,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break;
       }
       case "models":
-        showModels();
+        if (isModelsRefreshCommand(arg)) {
+          const { notice } = await runModelsSlashRefresh({ env: process.env });
+          renderer.notice(notice);
+        } else {
+          showModels();
+        }
         break;
       case "files":
         showTools(renderer, runtime);
@@ -1715,11 +2043,34 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break;
       case "status":
         renderer.notice(strip(formatIdleStatusLine(statusInfo(), terminalWidth() - 1, { plain: true })));
-        if (unknownCount > 0) void runUnknownCommand(runtime, renderer);
+        if (unknownCount > 0) await runUnknownCommand(runtime, renderer);
         break;
       case "unknown":
-        void runUnknownCommand(runtime, renderer, arg);
+        await runUnknownCommand(runtime, renderer, arg);
         break;
+      case "reconcile":
+        await runReconcileCommand(runtime, renderer, arg);
+        break;
+      case "skill":
+        await runSkillSlashCommand(arg, runtime, renderer, workspace);
+        break;
+      case "focus":
+        focusModeOn = !focusModeOn;
+        renderer.notice(
+          focusModeOn
+            ? "focus mode ON \u2014 collapsing intermediate tool chatter to prompt + diffstat + final response"
+            : "focus mode OFF \u2014 showing full tool cards and notices",
+        );
+        break;
+      case "btw": {
+        const q = arg.trim();
+        if (q === "") {
+          renderer.notice("usage: /btw <side-question>");
+          break;
+        }
+        await sendUserText(`[btw side-question — answer concisely without changing the main task] ${q}`);
+        break;
+      }
       case "theme":
         runThemeCommand(arg, renderer);
         break;
@@ -1744,7 +2095,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "discard": {
         // The plan commands own their notices; the prompt (and its badge) is
         // reprinted by the common showPrompt() at the end of runSlash.
-        await runPlanCommand(name, arg, runtime, renderer, planState);
+        if (name === "changes" && arg.trim() === "--review" && process.stdin.isTTY) {
+          await withExclusiveStdin(() => runPlanCommand(name, arg, runtime, renderer, planState));
+        } else {
+          await runPlanCommand(name, arg, runtime, renderer, planState);
+        }
         break;
       }
       case "fork":
@@ -1781,7 +2136,49 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         if (arg === "" && process.stdin.isTTY) {
           const { runInteractiveCommandPalette } = await import("./interactive-command-palette");
-          const chosen = await runInteractiveCommandPalette(custom);
+          const { DEFAULT_PALETTE_SHORTCUTS, parseRecentFilesFromGitStatus, paletteToggles } = await import("./palette-extras");
+          // Expanded palette context (docs/28 §14): shortcuts, changed files,
+          // active skills and quick toggles. Every probe is best-effort and
+          // read-only; a failed probe simply omits that section.
+          let recentFiles: string[] = [];
+          try {
+            const status = spawnSync("git", ["status", "--short"], {
+              cwd: workspace,
+              encoding: "utf8",
+              timeout: 2000,
+            });
+            if (status.status === 0 && typeof status.stdout === "string") {
+              recentFiles = parseRecentFilesFromGitStatus(status.stdout);
+            }
+          } catch {
+            /* no git or no repo: omit the section */
+          }
+          let activeSkills: string[] = [];
+          try {
+            const { listSkills } = await import("../core/skills");
+            activeSkills = listSkills(workspace).map((s) => s.name);
+          } catch {
+            /* omit the section */
+          }
+          let theme: string | undefined;
+          let autonomy: string | undefined;
+          try {
+            const cfg = loadConfig(process.env, defaultConfigPath(process.env.HOME?.trim() || homedir()), workspace);
+            theme = cfg.theme;
+            autonomy = cfg.autonomy;
+          } catch {
+            /* omit current values */
+          }
+          const chosen = await withExclusiveStdin(() =>
+            runInteractiveCommandPalette(custom, {
+              extras: {
+                shortcuts: [...DEFAULT_PALETTE_SHORTCUTS],
+                recentFiles,
+                activeSkills,
+                toggles: paletteToggles({ theme, autonomy }),
+              },
+            }),
+          );
           if (chosen) {
             await runSlash(chosen);
             return;
@@ -1805,8 +2202,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const body = formatTranscriptPlain(h);
         const pager = process.env.PAGER?.trim() || "less";
         if (process.stdout.isTTY) {
-          const r = spawnSync(pager, pager === "less" ? ["-R"] : [], { input: body, stdio: ["pipe", "inherit", "inherit"] });
-          if (r.error) renderer.write(body);
+          await withExclusiveStdin(async () => {
+            const r = spawnSync(pager, pager === "less" ? ["-R"] : [], { input: body, stdio: ["pipe", "inherit", "inherit"] });
+            if (r.error) renderer.write(body);
+          });
         } else {
           renderer.write(body);
         }
@@ -1817,6 +2216,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "tokens":
       case "learn":
       case "goal":
+      case "tasks":
       case "trust":
       case "settings":
       case "graph":
@@ -1888,10 +2288,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         );
         if (matches.length === 1) {
           const matched = matches[0]!;
-          renderer.notice(`auto-completing /${name} \u2192 /${matched.name}`);
-          const rewritten = `/${matched.name}${arg ? " " + arg : ""}`;
-          await runSlash(rewritten);
-          return;
+          if (matched.name !== lowerName) {
+            renderer.notice(`auto-completing /${name} \u2192 /${matched.name}`);
+            const rewritten = `/${matched.name}${arg ? " " + arg : ""}`;
+            await runSlash(rewritten);
+            return;
+          }
         } else if (matches.length > 1) {
           renderer.notice(`ambiguous command /${name} \u2014 matches: ${matches.map((m) => "/" + m.name).join(", ")}`);
           break;
@@ -1928,20 +2330,48 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const paste = createPasteCollector();
   const pasteOn = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
   if (pasteOn) process.stdout.write(PASTE_ON);
+  const submitGuard = createDeferredSubmitGuard({ immediate: !pasteOn });
+  const queuedSubmitLines: string[] = [];
+  const submitOrQueueLine = (line: string): void => {
+    const drainNext = () => {
+      if (queuedSubmitLines.length > 0 && !exiting) {
+        const next = queuedSubmitLines.shift()!;
+        setTimeout(() => submitOrQueueLine(next), 0);
+      }
+    };
+    if (!submitGuard.request(() => handleUserLine(line).finally(drainNext))) {
+      if (busy) {
+        void handleUserLine(line);
+      } else {
+        queuedSubmitLines.push(line);
+      }
+    }
+  };
 
   rl.on("line", (raw: string) => {
     if (pasteOn && paste.active()) {
       const pasted = paste.line(raw);
       if (pasted === undefined) return;
+      if (answerWaiter !== null) {
+        const waiter = answerWaiter;
+        answerWaiter = null;
+        try {
+          rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
+        } catch {
+          /* ignore */
+        }
+        waiter("");
+        return;
+      }
       if (pasted.lines > 1) {
         // Replace the echoed lines by one collapsed stand-in, submit the whole paste once.
         const promptW = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime)));
-        const rows = echoedRows(pasted.raw, answerWaiter ? 0 : promptW, terminalWidth());
+        const rows = echoedRows(pasted.raw, promptW, terminalWidth());
         process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
         handlePasted(pasted.text, pasteLabel(pasted.lines));
         return;
       }
-      raw = pasted.text;
+      raw = normalizePastedLineEndings(pasted.text);
     }
     if (answerWaiter) {
       const waiter = answerWaiter;
@@ -1968,12 +2398,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
       echoUser(text);
     }
-    void handleUserLine(text);
+    submitOrQueueLine(text);
   });
 
   const handlePasted = (text: string, label: string): void => {
+    const normalized = normalizePastedLineEndings(text);
     if (answerWaiter) {
-      // A multi-line paste is never an approval answer: it denies.
+      // Any bracketed paste is never an approval answer: it denies.
       const waiter = answerWaiter;
       answerWaiter = null;
       waiter("");
@@ -1981,7 +2412,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     const wasIdle = !busy;
     if (wasIdle) echoUser(label);
-    void handleUserLine(text);
+    submitOrQueueLine(normalized);
   };
 
   /** Cancel the in-flight turn cleanly (no exit). The approval-deny branch of
@@ -2008,6 +2439,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * Ctrl-C with an approval open denies it. The decision itself is the pure
    * `interruptAction` above — this function only applies it. */
   const handleInterrupt = (): void => {
+    submitGuard.cancel();
     const action = interruptAction({
       busy,
       abortRequested,
@@ -2024,7 +2456,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         abortTurn();
         return;
       case "exit":
-        finish(0);
+        finish(130);
         return;
     }
   };
@@ -2041,10 +2473,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ghostShown = false;
       process.stdout.write("\u001b[K");
     };
-    process.stdin.prependListener("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+    const onGhostEnter = (_s: unknown, key: { name?: string } | undefined): void => {
       if (key?.name === "return" || key?.name === "enter") eraseGhost();
-    });
-    process.stdin.on("keypress", () => {
+    };
+    const onGhostDraw = (): void => {
       setImmediate(() => {
         if (exiting) return;
         eraseGhost();
@@ -2060,22 +2492,35 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ghostShown = true;
         process.stdout.write(dim(ghost) + `\u001b[${ghostW}D`);
       });
-    });
+    };
+    stdinKeypressListeners.push(onGhostEnter, onGhostDraw);
+    process.stdin.prependListener("keypress", onGhostEnter);
+    process.stdin.on("keypress", onGhostDraw);
   }
 
   if (pasteOn) {
-    let pasteFlushTimer: ReturnType<typeof setTimeout> | undefined;
     const submitPaste = (pasted: { text: string; lines: number; raw: string[] }): void => {
+      if (answerWaiter !== null) {
+        const waiter = answerWaiter;
+        answerWaiter = null;
+        try {
+          rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
+        } catch {
+          /* ignore */
+        }
+        waiter("");
+        return;
+      }
       if (pasted.lines > 1) {
         const promptW = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime)));
-        const rows = echoedRows(pasted.raw, answerWaiter ? 0 : promptW, terminalWidth());
+        const rows = echoedRows(pasted.raw, promptW, terminalWidth());
         process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
         handlePasted(pasted.text, pasteLabel(pasted.lines));
         return;
       }
-      void handleUserLine(pasted.text);
+      void handleUserLine(normalizePastedLineEndings(pasted.text));
     };
-    process.stdin.on("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+    const onPasteKey = (_s: unknown, key: { name?: string } | undefined): void => {
       paste.key(key?.name);
       if (key?.name === "paste-end") {
         if (pasteFlushTimer) clearTimeout(pasteFlushTimer);
@@ -2085,24 +2530,50 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           if (flushed) submitPaste(flushed);
         }, PASTE_SINGLE_LINE_FLUSH_MS);
       }
-    });
+    };
+    stdinKeypressListeners.push(onPasteKey);
+    process.stdin.on("keypress", onPasteKey);
   }
 
   if (liveOn) {
     const loaded = loadUserKeymap();
     for (const err of loaded.errors) renderer.notice(`keybind: ${err}`);
     const keymap = loaded.keymap;
-    process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {
+    const onKeymapKey = (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined): void => {
       if (exiting) return;
       // Esc cancel goes through the keymap table (docs/33 §5.19); approval keeps Esc inert.
       if (resolveAction(keymap, key, busy ? "busy" : "idle")?.id === "turn.cancel" && !answerWaiter) {
         abortTurn();
+        return;
       }
-    });
+      if (key?.name === "escape" && !busy && answerWaiter === null) {
+        const line = String((rl as unknown as { line?: string }).line ?? "");
+        if (line.trim() === "" && doubleEsc.onEscape()) {
+          const latched = hz.reconcileBlockLatch?.()?.latched === true;
+          void runSlash(unknownCount > 0 || latched ? "/reconcile" : "/rewind");
+        }
+        return;
+      }
+      if (key?.name !== "escape") doubleEsc.reset();
+      if (key?.name === "tab" && busy && answerWaiter === null) {
+        const state = rl as unknown as { line?: string; cursor?: number };
+        const draft = String(state.line ?? "").trim();
+        if (draft !== "") {
+          void turnQueue.withCommitGuard(() => {
+            queued.push(draft);
+            state.line = "";
+            state.cursor = 0;
+            renderer.notice(`queued (FIFO) \u2014 it goes next (${queued.length} waiting)`);
+          });
+        }
+      }
+    };
+    stdinKeypressListeners.push(onKeymapKey);
+    process.stdin.on("keypress", onKeymapKey);
   }
 
   if (process.stdin.isTTY) {
-    process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean } | undefined) => {
+    const onReceiptShortcutKey = (_s: unknown, key: { name?: string; ctrl?: boolean } | undefined): void => {
       if (exiting || busy || answerWaiter !== null) return;
       if (!key?.ctrl || key.name !== "i") return;
       const target = resolveScrollbackReceiptInspectTarget(unknownReceiptId);
@@ -2111,7 +2582,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         return;
       }
       printScrollbackReceiptInspect(runtime, renderer, target);
-    });
+    };
+    stdinKeypressListeners.push(onReceiptShortcutKey);
+    process.stdin.on("keypress", onReceiptShortcutKey);
   }
 
   rl.on("close", () => finish(0));
@@ -2130,4 +2603,129 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   return await done;
+}
+
+const SAFE_SKILL_NAME = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Host-gated `/skill save <name> [description]` sub-handler (Wave A / Track A4).
+ *
+ * Uses dynamic feature-detection for `saveVerifiedSkill` (`../core/skills`) and
+ * `getLastVerifiedCodemodeScript` (`../tools/codemode`) so Track A4 compiles
+ * cleanly even before Track A3 lands.
+ */
+export async function runSkillSlashCommand(
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+  workspace: string,
+): Promise<void> {
+  const raw = arg.trim();
+  const parts = raw.split(/\s+/).filter(Boolean);
+  const sub = (parts[0] ?? "").toLowerCase();
+
+  if (sub === "" || sub === "list") {
+    try {
+      const skillsMod = (await import("../core/skills")) as {
+        listSkills?: (ws: string) => Array<{ name: string; description?: string }>;
+      };
+      const listed = typeof skillsMod.listSkills === "function" ? skillsMod.listSkills(workspace) : [];
+      if (listed.length === 0) {
+        renderer.notice("no skills installed — use /skill save <name> [description] after a verified code_mode run");
+      } else {
+        renderer.notice(`skills (${listed.length}): ${listed.map((s) => s.name).join(", ")}`);
+      }
+    } catch {
+      renderer.notice("usage: /skill save <name> [description]");
+    }
+    return;
+  }
+
+  if (sub !== "save") {
+    renderer.notice("usage: /skill save <name> [description]");
+    return;
+  }
+
+  const name = parts[1]?.trim() ?? "";
+  const description = parts.slice(2).join(" ").trim();
+  if (name === "" || name.startsWith(".") || !SAFE_SKILL_NAME.test(name)) {
+    renderer.notice("usage: /skill save <name> [description] (name must match [A-Za-z0-9._-]+)");
+    return;
+  }
+
+  let getLastVerifiedCodemodeScript:
+    | ((sessionId?: string) => unknown | Promise<unknown>)
+    | undefined;
+  try {
+    const codemodeSpec = "../tools/codemode";
+    const codemodeMod = (await import(codemodeSpec)) as Record<string, unknown>;
+    if (typeof codemodeMod.getLastVerifiedCodemodeScript === "function") {
+      getLastVerifiedCodemodeScript = codemodeMod.getLastVerifiedCodemodeScript as (
+        sessionId?: string,
+      ) => unknown | Promise<unknown>;
+    }
+  } catch {
+    /* Track A3 codemode module not yet present */
+  }
+
+  if (typeof getLastVerifiedCodemodeScript !== "function") {
+    renderer.notice("skill save unavailable: verified code_mode script provider is not enabled in this build");
+    return;
+  }
+
+  let saveVerifiedSkill:
+    | ((
+        ws: string,
+        opts: { name: string; description: string; script: string; language?: string },
+      ) => unknown | Promise<unknown>)
+    | undefined;
+  try {
+    const skillsSpec = "../core/skills";
+    const skillsMod = (await import(skillsSpec)) as Record<string, unknown>;
+    if (typeof skillsMod.saveVerifiedSkill === "function") {
+      saveVerifiedSkill = skillsMod.saveVerifiedSkill as (
+        ws: string,
+        opts: { name: string; description: string; script: string; language?: string },
+      ) => unknown | Promise<unknown>;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if (typeof saveVerifiedSkill !== "function") {
+    renderer.notice("skill save unavailable: saveVerifiedSkill is not supported in this build");
+    return;
+  }
+
+  try {
+    const lastScript = await getLastVerifiedCodemodeScript(runtime.sessionId);
+    if (!lastScript) {
+      renderer.notice("no verified code_mode script found for this session — run code_mode first");
+      return;
+    }
+    const scriptBody =
+      typeof lastScript === "string"
+        ? lastScript
+        : typeof (lastScript as { script?: unknown }).script === "string"
+          ? ((lastScript as { script: string }).script)
+          : typeof (lastScript as { code?: unknown }).code === "string"
+            ? ((lastScript as { code: string }).code)
+            : "";
+    if (scriptBody.trim() === "") {
+      renderer.notice("no verified code_mode script body available to save");
+      return;
+    }
+    const saved = await saveVerifiedSkill(workspace, {
+      name,
+      description: description || `Verified code_mode skill ${name}`,
+      script: scriptBody,
+    });
+    const savedPath =
+      saved && typeof saved === "object" && typeof (saved as { skillMdPath?: unknown }).skillMdPath === "string"
+        ? ` (${(saved as { skillMdPath: string }).skillMdPath})`
+        : "";
+    renderer.notice(`saved verified skill /${name}${savedPath}`);
+  } catch (err) {
+    renderer.notice(`could not save skill /${name}: ${errorMessage(err)}`);
+  }
 }

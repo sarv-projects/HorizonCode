@@ -43,6 +43,30 @@ import { pruneToolResultsForCompaction } from "./compaction-pruner";
 import type { CompactionHoldBuffer, ElidedSummariser } from "./compaction-hold";
 import { summariseElidedWithHold } from "./compaction-hold";
 import { estimateTokens, FRAMING_CHARGE_TOKENS } from "./output-budget";
+import { sha256Hex } from "./canon";
+import {
+  GenerationWaitAborted,
+  GenerationWaiters,
+  nextGeneration,
+  type CompactionGeneration,
+} from "./compaction-generation";
+import {
+  progressiveTranscriptView,
+  TRANSCRIPT_LADDER,
+  type ProgressiveTranscriptView,
+  type TranscriptRung,
+} from "./compaction-transcript-ladder";
+
+export {
+  GenerationWaitAborted,
+  GenerationWaiters,
+  nextGeneration,
+  progressiveTranscriptView,
+  TRANSCRIPT_LADDER,
+  type CompactionGeneration,
+  type ProgressiveTranscriptView,
+  type TranscriptRung,
+};
 
 /** The headings are contract, not prose: tests and the model both key off them. */
 export const PINNED_HEADING = "## Pinned constraints (verbatim, never compacted)";
@@ -168,6 +192,10 @@ export interface CompactionResult {
   notice: string;
   /** True when the summary came from a staged hold buffer (hold-then-swap). */
   holdSwap?: boolean;
+  /** Optional monotonic compaction generation identity (V-4) when sessionId is supplied. */
+  generation?: CompactionGeneration;
+  /** Optional progressive transcript rung (V-9) when ladder compaction is requested. */
+  rung?: TranscriptRung;
 }
 
 function countByRole(messages: readonly ChatMsg[]): Record<string, number> {
@@ -543,6 +571,12 @@ export interface CompactionOptions {
    * instead of `summariseElided`.
    */
   elidedSummariser?: ElidedSummariser;
+  /** Optional session id to mint a monotonic CompactionGeneration (V-4). */
+  sessionId?: string;
+  /** Previous generation for monotonic increment when `sessionId` is provided. */
+  previousGeneration?: CompactionGeneration;
+  /** Optional 5-rung progressive transcript ladder index (V-9; 0=full..4=omitted). */
+  rungIndex?: number;
 }
 
 /** The one line the UI shows. Kept under ~250 chars so a notice stays a notice. */
@@ -594,6 +628,32 @@ function unchanged(messages: ChatMsg[]): CompactionResult {
 export function compactHistory(messages: ChatMsg[], options: CompactionOptions): CompactionResult {
   const list = Array.isArray(messages) ? messages : [];
   const limit = Number.isFinite(options?.limit) && (options?.limit ?? 0) >= 1 ? Math.floor(options.limit) : 1;
+
+  // V-4 / V-9: opt-in progressive transcript ladder with generation identity.
+  if (options?.rungIndex !== undefined && options.rungIndex > 0 && list.length > 0) {
+    const pinned = pinnedConstraintsFrom(list);
+    const sid = options.sessionId?.trim() || "session";
+    const digest = sha256Hex(list.map((m) => `${m.role}:${textFromChatContent(m.content).length}`).join("|")).slice(0, 16);
+    const generation = nextGeneration(options.previousGeneration, sid, digest);
+    const view = progressiveTranscriptView(list, options.rungIndex, pinned.constraints, generation);
+    const result: CompactionResult = {
+      history: view.messages,
+      compacted: view.dropped > 0 || view.rung !== "full",
+      dropped: view.dropped,
+      kept: view.messages.length,
+      elidedTokens: Math.max(0, tokensIn(list) - tokensIn(view.messages)),
+      droppedByRole: {},
+      pinned,
+      summary: `ladder rung ${view.rung} (generation ${generation.generation})`,
+      notice: "",
+      holdSwap: false,
+      generation,
+      rung: view.rung,
+    };
+    result.notice = renderCompactionNotice(result);
+    return result;
+  }
+
   if (list.length <= limit) return unchanged(list);
 
   // Mirrors trimHistory's contract: the window starts at a user turn so the
@@ -618,6 +678,15 @@ export function compactHistory(messages: ChatMsg[], options: CompactionOptions):
   };
   const history = [merged, ...window.slice(1)];
 
+  const generation =
+    options?.sessionId !== undefined && options.sessionId.trim() !== ""
+      ? nextGeneration(
+          options.previousGeneration,
+          options.sessionId,
+          sha256Hex(history.map((m) => `${m.role}:${textFromChatContent(m.content).length}`).join("|")).slice(0, 16),
+        )
+      : undefined;
+
   const result: CompactionResult = {
     history,
     compacted: true,
@@ -629,6 +698,7 @@ export function compactHistory(messages: ChatMsg[], options: CompactionOptions):
     summary,
     notice: "",
     holdSwap,
+    ...(generation !== undefined ? { generation } : {}),
   };
   result.notice = renderCompactionNotice(result);
   return result;

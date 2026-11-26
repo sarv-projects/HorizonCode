@@ -9,7 +9,11 @@ import { existsSync, readFileSync } from "node:fs";
 import type { Receipt } from "../contracts";
 import { hashReceiptVersioned } from "./receipt-schema";
 import { type ChainAnchorVerdict, checkChainAnchorSync, readHeadSync, verifyReceiptAnchorSync } from "./chain-anchor-verify";
-import { verifyParentReceiptIssuerStamps } from "./receipt-issuer-verify";
+import {
+  loadReceiptIssuerKeySync,
+  verifyParentReceiptIssuerStamps,
+  verifyReceiptIssuerStamp,
+} from "./receipt-issuer-verify";
 import { kernelStateDir } from "./paths";
 import { receiptsPath } from "./session-kernel-reconcile";
 import { metricContract } from "./metrics";
@@ -22,7 +26,18 @@ export interface ReceiptChainVerifyVerdict {
   anchor?: ChainAnchorVerdict;
 }
 
-export function verifyReceiptChainSync(workspace: string): ReceiptChainVerifyVerdict {
+export interface ReceiptChainVerifyOptions {
+  /**
+   * R172 strict mode: a v2 receipt chain must be independently keyed by the
+   * kernel issuer key. Absent key or an unkeyed child-effect row fails closed.
+   */
+  requireKeyedIssuer?: boolean;
+}
+
+export function verifyReceiptChainSync(
+  workspace: string,
+  opts: ReceiptChainVerifyOptions = {},
+): ReceiptChainVerifyVerdict {
   const file = receiptsPath(workspace);
   if (!existsSync(file)) {
     return { ok: true, count: 0 };
@@ -84,6 +99,29 @@ export function verifyReceiptChainSync(workspace: string): ReceiptChainVerifyVer
       refusal: `issuer attestation: ${issuer.reason}`,
       anchor,
     };
+  }
+  if (opts.requireKeyedIssuer === true && chainRows.some((r) => r.schemaVersion === 2)) {
+    const key = loadReceiptIssuerKeySync(workspace);
+    if (key === undefined) {
+      return {
+        ok: false,
+        count,
+        refusal: "R172 strict: v2 receipts present but .receipt-issuer.key absent",
+        anchor,
+      };
+    }
+    for (const receipt of chainRows) {
+      if (receipt.schemaVersion !== 2) continue;
+      const children = receipt.childEffectIds;
+      if (Array.isArray(children) && children.length > 0 && !verifyReceiptIssuerStamp(receipt, key)) {
+        return {
+          ok: false,
+          count,
+          refusal: `R172 strict: childEffectIds on ${receipt.id} without a valid issuerStamp`,
+          anchor,
+        };
+      }
+    }
   }
   return { ok: true, count: anchor.count, anchor };
 }

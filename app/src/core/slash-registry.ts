@@ -58,6 +58,7 @@ export const BUILTIN_SLASH_REGISTRY: readonly SlashCommandRow[] = [
   { name: "retry", usage: "/retry", description: "drop the last reply and ask the same question again" },
   { name: "theme", usage: "/theme [name]", description: "dark, light, auto or mono (NO_COLOR is always respected)" },
   { name: "think", usage: "/think", description: "show the last reasoning block (rich mode)" },
+  { name: "tasks", usage: "/tasks", description: "inspect active task board and WIP status (WIP=1)" },
   { name: "stats", usage: "/stats", description: "message, tool call and token counts for this chat" },
   { name: "tokens", usage: "/tokens", description: "per-chunk context cost table with $ estimates and hints" },
   { name: "learn", usage: "/learn [chapter]", description: "list or read one knowledge-base chapter (under .hz/state/learn)" },

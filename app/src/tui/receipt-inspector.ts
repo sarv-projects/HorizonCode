@@ -32,6 +32,7 @@ import {
   deriveShellEffectTerminalView,
   formatShellEffectTerminalLines,
 } from "../core/receipt-shell-terminal";
+import { sanitizeDisplay } from "./style";
 
 export type ReceiptInspectorPaneId =
   | "effect"
@@ -308,12 +309,18 @@ export function buildReceiptInspectorModel(opts: {
   );
   panes.push(verifyPane(opts.chainVerify));
 
+  const sanitizedPanes: ReceiptInspectorPane[] = panes.map((pane) => ({
+    ...pane,
+    title: sanitizeDisplay(pane.title),
+    lines: pane.lines.map((line) => sanitizeDisplay(line)),
+  }));
+
   const bodyLines: string[] = ["Receipt inspector (R172 reduced)"];
-  for (const pane of panes) {
+  for (const pane of sanitizedPanes) {
     bodyLines.push(sectionHeader(pane.title));
     for (const line of pane.lines) bodyLines.push(`  ${line}`);
   }
-  return { panes, bodyLines };
+  return { panes: sanitizedPanes, bodyLines };
 }
 
 /** Scrollback-friendly lines (headers un-indented, body indented). */

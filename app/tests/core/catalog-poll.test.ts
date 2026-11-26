@@ -139,10 +139,17 @@ describe("createRuntime catalog poll wire", () => {
 
   test("poll is off by default; enabled when HZ_MODELS_POLL_MS is set", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-poll-rt-"));
+    delete process.env.HZ_MODELS_POLL_MS;
+    expect(parseModelsPollIntervalMs(process.env)).toBeUndefined();
     const off = await createRuntime({ workspace, mock: true });
+    expect(typeof off.sessionId).toBe("string");
+    expect(off.sessionId.length).toBeGreaterThan(0);
     await off.close();
     process.env.HZ_MODELS_POLL_MS = "120000";
+    expect(parseModelsPollIntervalMs(process.env)).toBe(120_000);
     const on = await createRuntime({ workspace, mock: true });
+    expect(typeof on.sessionId).toBe("string");
+    expect(on.sessionId.length).toBeGreaterThan(0);
     await on.close();
   });
 });

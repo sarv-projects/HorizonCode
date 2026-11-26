@@ -623,6 +623,7 @@ export async function runEvalCli(
         `ratchet decision: ${report.append.appended ? "appended" : `no-op (${report.append.note})`} → ${spec.decisionLog}`,
       );
       for (const block of report.published) io.out(block);
+      if (report.verdict !== "keep") return 1;
     } catch (err) {
       io.err(`ratchet-auto refused: ${err instanceof Error ? err.message : String(err)}`);
       return 2;

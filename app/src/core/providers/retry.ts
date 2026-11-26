@@ -61,6 +61,39 @@ export interface RetryPolicy {
    * `HZ_PROVIDER_*` env vars; see providers/timeout.ts.
    */
   timeouts?: ProviderTimeoutOptions;
+  /**
+   * ADDITIVE (grok circuit-breaker port, Tier 1 #8): when set, the breaker is
+   * consulted before each request and fed the outcome. Absent = byte-identical
+   * existing behavior. Shedding is advisory and never weakens the Guard.
+   */
+  breaker?: import("./circuit-breaker").CircuitBreaker;
+  /**
+   * ADDITIVE: route key for the shared production breaker registry. When
+   * `HZ_PROVIDER_CIRCUIT_BREAKER=1`, `fetchWithRetry` consults a per-route
+   * breaker automatically (grok port). Absent = no shared breaker.
+   */
+  breakerRoute?: string;
+  /** Optional custom fetch transport (for injectable adapters like google/ollama). */
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Optional predicate to decline retrying specific transport errors (e.g. local ECONNREFUSED). */
+  shouldRetryError?: (err: unknown) => boolean;
+}
+
+import { BreakerRegistry, SERVER_BREAKER_CONFIG } from "./circuit-breaker";
+import { retryDelayFor, retryPolicyForCode } from "./typed-retry-policy";
+
+const sharedBreakers = new BreakerRegistry(SERVER_BREAKER_CONFIG);
+/** Reset the shared breaker registry (tests / explicit operator action). */
+export function resetProviderBreakers(): void {
+  sharedBreakers.clear();
+}
+function sharedBreakersEnabled(): boolean {
+  const raw = process.env.HZ_PROVIDER_CIRCUIT_BREAKER?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+function typedRetryEnabled(): boolean {
+  const raw = process.env.HZ_TYPED_RETRY_POLICY?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }
 
 const DEFAULT_ATTEMPTS = 4;
@@ -219,14 +252,23 @@ export async function fetchWithRetry(
       const expired = overall.timedOut();
       if (expired) throw expired;
       if (userSignal?.aborted === true) throw lastError ?? new Error("aborted before request");
+      // Circuit breaker: shed before spending a request. A rejection is a
+      // typed BreakerOpenError carrying Retry-After for the caller to surface.
+      const activeBreaker =
+        policy.breaker ??
+        (sharedBreakersEnabled() && policy.breakerRoute
+          ? sharedBreakers.forRoute(policy.breakerRoute)
+          : undefined);
+      activeBreaker?.check();
       // Each attempt gets its own headers budget; merging with the overall
       // signal keeps both the total cap and the caller's abort wired in.
       const attemptDeadline = createProviderDeadline(overall.signal, {
         requestMs: timeouts.requestMs,
         totalMs: 0,
       });
+      const transport = policy.fetch ?? ((target: string, options?: RequestInit) => fetch(target, options));
       try {
-        const response = await fetch(url, { ...init, signal: attemptDeadline.signal });
+        const response = await transport(url, { ...init, signal: attemptDeadline.signal });
         attemptDeadline.headersReceived();
         attemptDeadline.dispose();
         const lateTimeout = attemptDeadline.timedOut();
@@ -238,20 +280,52 @@ export async function fetchWithRetry(
           }
           throw lateTimeout;
         }
-        if (!isRetryableStatus(response.status)) return response;
+        const headerOverride = retryOverrideFromHeaders(response.headers);
+        if (headerOverride !== true && !isRetryableStatus(response.status)) {
+          if (response.status >= 200 && response.status < 300) {
+            activeBreaker?.record("success");
+          } else if (activeBreaker?.isFailureStatus(response.status)) {
+            activeBreaker.record("failure");
+          }
+          return response;
+        }
+        if (response.status >= 200 && response.status < 300) {
+          activeBreaker?.record("success");
+        } else {
+          activeBreaker?.record("failure");
+        }
         const detail = await response.text().catch(() => "");
         const expiredDuringBody = attemptDeadline.timedOut() ?? overall.timedOut();
         if (expiredDuringBody) throw expiredDuringBody;
         const code = classifyProviderFailure(response.status, detail);
-        attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
+        if (headerOverride !== true) {
+          attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
+        }
         if (!shouldRetryResponse(response.status, detail, response.headers) || attempt >= attempts) {
           return new Response(detail, { status: response.status, headers: response.headers });
         }
-        const waitMs = backoffDelay(attempt, {
-          baseDelayMs,
-          maxDelayMs,
-          retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-        });
+        // Typed policy (codex port, opt-in): terminal never retries; server-
+        // directed refuses without Retry-After; backoff/fallback use advice or
+        // exponential backoff. Absent env = byte-identical existing behavior.
+        let waitMs: number;
+        if (typedRetryEnabled() && headerOverride !== true) {
+          const typed = retryPolicyForCode(code);
+          const decided = retryDelayFor(
+            typed,
+            attempt,
+            parseRetryAfter(response.headers.get("retry-after")) ?? undefined,
+          );
+          if (decided === null) {
+            return new Response(detail, { status: response.status, headers: response.headers });
+          }
+          waitMs = Math.min(decided, maxDelayMs);
+        } else {
+          waitMs = backoffDelay(attempt, {
+            baseDelayMs,
+            maxDelayMs,
+            retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+          });
+        }
         policy.onRetry?.({ attempt, status: response.status, delayMs: waitMs });
         await delay(waitMs, overall.signal);
       } catch (err) {
@@ -260,9 +334,11 @@ export async function fetchWithRetry(
         lastError = timedOut ?? err;
         // A headers timeout is a transport failure like a reset, so it rides
         // the same bounded backoff. An abort is never retried, and a fired
-        // total budget is final.
+        // total budget is final. User aborts must not trip the circuit breaker.
         if (userSignal?.aborted) throw timedOut ?? err;
+        activeBreaker?.record("failure");
         if (timedOut?.kind === "total") throw timedOut;
+        if (policy.shouldRetryError !== undefined && !policy.shouldRetryError(lastError)) throw lastError;
         if (attempt >= attempts) throw lastError;
         const waitMs = backoffDelay(attempt, { baseDelayMs, maxDelayMs, retryAfterMs: null });
         policy.onRetry?.({ attempt, error: lastError, delayMs: waitMs });

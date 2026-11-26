@@ -28,6 +28,40 @@ const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// allows processes to serialize without age-based unsafe takeovers.
 struct OwnerLock {
     file: File,
+    #[cfg(windows)]
+    overlapped: Box<windows_sys::Win32::System::IO::OVERLAPPED>,
+}
+
+#[cfg(test)]
+mod owner_lock_tests {
+    use super::*;
+
+    /// D-6: the owner fence is a cross-process exclusive lock on every supported
+    /// host. Two holders must never overlap, and dropping releases it.
+    #[test]
+    fn owner_lock_is_exclusive_and_releases() {
+        let dir = std::env::temp_dir().join(format!(
+            "hz-owner-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).expect("scratch dir");
+        let first =
+            OwnerLock::acquire(&dir).expect("first acquire must succeed on a supported host");
+        let second = OwnerLock::acquire(&dir);
+        assert!(
+            second.is_err(),
+            "a second owner lock must be refused: {:?}",
+            second.err()
+        );
+        drop(first);
+        let third = OwnerLock::acquire(&dir).expect("the lock must be released on drop");
+        drop(third);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 impl OwnerLock {
     fn acquire(state_dir: &Path) -> Result<Self, String> {
@@ -44,10 +78,87 @@ impl OwnerLock {
         let file = opts
             .open(&path)
             .map_err(|e| format!("HZ_PRECONDITION_FAILED: owner lock unavailable: {e}"))?;
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            // D-6: Windows has no POSIX flock. Take the same exclusive fence over
+            // the whole file with LockFileEx; the OS releases it on process death,
+            // so a crashed owner can never wedge the admission fence.
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::HANDLE;
+            use windows_sys::Win32::Storage::FileSystem::{
+                LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+            };
+            use windows_sys::Win32::System::IO::OVERLAPPED;
+
+            let meta = file
+                .metadata()
+                .map_err(|e| format!("owner lock metadata: {e}"))?;
+            if !meta.is_file() {
+                return Err("HZ_PRECONDITION_FAILED: owner lock must be a regular file".into());
+            }
+            // Identity via GetFileInformationByHandle (volume serial + file index
+            // + link count): the std MetadataExt accessors for these are still
+            // unstable, and a link-count/identity check must not be skipped.
+            let Some((links, before)) = windows_file_identity(&file) else {
+                return Err("HZ_PRECONDITION_FAILED: owner lock identity unavailable".into());
+            };
+            if links != 1 {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: owner lock must be a single-link regular file".into(),
+                );
+            }
+            let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
+            let handle = file.as_raw_handle() as HANDLE;
+            let start = Instant::now();
+            loop {
+                let ok = unsafe {
+                    LockFileEx(
+                        handle,
+                        LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                        0,
+                        u32::MAX,
+                        u32::MAX,
+                        overlapped.as_mut(),
+                    )
+                };
+                if ok != 0 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                // 33 = ERROR_LOCK_VIOLATION: another holder. Anything else is a
+                // real fault and must not be retried as if it were contention.
+                if error.raw_os_error() != Some(33) {
+                    return Err(format!(
+                        "HZ_PRECONDITION_FAILED: owner lock failed: {error}"
+                    ));
+                }
+                if start.elapsed() >= LOCK_WAIT {
+                    return Err("HZ_PRECONDITION_FAILED: owner admission busy; retry after current effect settles".into());
+                }
+                sleep(Duration::from_millis(10));
+            }
+            // A replaced lock path after acquisition is a fence break, exactly as
+            // on unix (identity compared by volume + file index).
+            let reopened = OpenOptions::new()
+                .read(true)
+                .open(&path)
+                .map_err(|e| format!("HZ_PRECONDITION_FAILED: owner lock was removed: {e}"))?;
+            let Some((links_after, after)) = windows_file_identity(&reopened) else {
+                return Err("HZ_PRECONDITION_FAILED: owner lock identity unavailable".into());
+            };
+            if before != after || links_after != 1 {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: owner lock path changed during acquisition".into(),
+                );
+            }
+            Ok(Self { file, overlapped })
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = file;
-            return Err("HZ_PRECONDITION_FAILED: kernel OwnerLog requires POSIX flock".into());
+            return Err(
+                "HZ_PRECONDITION_FAILED: kernel OwnerLog needs flock (unix) or LockFileEx (windows)".into(),
+            );
         }
         #[cfg(unix)]
         {
@@ -102,7 +213,36 @@ impl Drop for OwnerLock {
                 libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
             }
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::HANDLE;
+            use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
+            let handle = self.file.as_raw_handle() as HANDLE;
+            unsafe {
+                let _ = UnlockFileEx(handle, 0, u32::MAX, u32::MAX, self.overlapped.as_mut());
+            }
+        }
     }
+}
+
+/// D-6: (link count, (volume serial, file index)) for a Windows lock file.
+/// Uses GetFileInformationByHandle because the std MetadataExt accessors for
+/// these fields are unstable; None means the identity could not be proven.
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> Option<(u32, (u32, u64))> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+    Some((info.nNumberOfLinks, (info.dwVolumeSerialNumber, index)))
 }
 
 fn record(events: &EventLog, kind: &str, effect_id: &str, payload: Value) -> Result<(), String> {
@@ -216,7 +356,8 @@ fn rebuild(events: &EventLog) -> Result<OwnerState, String> {
                 if state.prepare_v2.contains(effect_id) {
                     if !v2_ok {
                         return Err(
-                            "HZ_PRECONDITION_FAILED: duplicate or out-of-order owner settlement".into(),
+                            "HZ_PRECONDITION_FAILED: duplicate or out-of-order owner settlement"
+                                .into(),
                         );
                     }
                 } else if prior != expected {
@@ -302,7 +443,10 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
             || receipt["resultDigest"] != details["resultDigest"]
             || receipt["argsDigest"] != *args_digest
             || receipt["tool"] != *dispatch_kind
-            || (event["payload"]["details"]["guardDecision"] == "allow"
+            || (matches!(
+                event["payload"]["details"]["guardDecision"].as_str(),
+                Some("allow" | "ask")
+            )
                 && (receipt["leaseId"] != *guard_lease_id
                     || details["guardLeaseId"] != *guard_lease_id
                     || details["guardLeaseIds"] != *guard_lease_ids))
@@ -332,20 +476,21 @@ fn path_entry_present_stable(path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-
 /// Archive independently observed shell stdout/stderr digests into the same
 /// OwnerLog CAS used for file postimages. This is stream capture evidence only
 /// — it does **not** prove shell filesystem or network side effects (P0-2 reduced).
-fn settled_stream_evidence(state_dir: &Path, out: &Value, kind: &str) -> Result<Option<Value>, String> {
+fn settled_stream_evidence(
+    state_dir: &Path,
+    out: &Value,
+    kind: &str,
+) -> Result<Option<Value>, String> {
     if kind != "shell.exec" {
         return Ok(None);
     }
     let exit_code = out
         .get("exitCode")
         .and_then(Value::as_i64)
-        .ok_or_else(|| {
-            "HZ_PRECONDITION_FAILED: settled shell.exec missing exitCode".to_string()
-        })?;
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: settled shell.exec missing exitCode".to_string())?;
     let mut evidence = json!({ "exitCode": exit_code });
     for (name, digest_key, hex_key) in [
         ("stdout", "stdoutDigest", "stdoutHex"),
@@ -419,7 +564,9 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                 "HZ_PRECONDITION_FAILED: settled fs.batch writePath must be a string".to_string()
             })?;
             if !Path::new(target).is_absolute() {
-                return Err("HZ_PRECONDITION_FAILED: postimage evidence path must be absolute".into());
+                return Err(
+                    "HZ_PRECONDITION_FAILED: postimage evidence path must be absolute".into(),
+                );
             }
             // Null digest = delete (or unstable observe): require independent absence (**631**).
             if digest_v.is_null() {
@@ -444,7 +591,8 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
             return Ok(json!([]));
         };
         let rows = rows.as_array().ok_or_else(|| {
-            "HZ_PRECONDITION_FAILED: settled shell.exec shellPostimages must be an array".to_string()
+            "HZ_PRECONDITION_FAILED: settled shell.exec shellPostimages must be an array"
+                .to_string()
         })?;
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
@@ -452,7 +600,9 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                 "HZ_PRECONDITION_FAILED: shell fs postimage missing path".to_string()
             })?;
             if !Path::new(target).is_absolute() {
-                return Err("HZ_PRECONDITION_FAILED: postimage evidence path must be absolute".into());
+                return Err(
+                    "HZ_PRECONDITION_FAILED: postimage evidence path must be absolute".into(),
+                );
             }
             let state = row["state"].as_str().ok_or_else(|| {
                 "HZ_PRECONDITION_FAILED: shell fs postimage state invalid".to_string()
@@ -461,7 +611,8 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                 "absent" => {
                     if !crate::effect_absent_reconstruct::independently_absent(Path::new(target))? {
                         return Err(
-                            "HZ_PRECONDITION_FAILED: shell fs postimage not independently absent".into(),
+                            "HZ_PRECONDITION_FAILED: shell fs postimage not independently absent"
+                                .into(),
                         );
                     }
                     records.push(json!({"path": target, "state": "absent", "via": row.get("via")}));
@@ -473,7 +624,8 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                     if row.get("entryKind").and_then(Value::as_str) == Some("directory") {
                         if digest != crate::effect_evidence::DIRECTORY_POSTIMAGE_DIGEST {
                             return Err(
-                                "HZ_PRECONDITION_FAILED: shell mkdir postimage digest invalid".into(),
+                                "HZ_PRECONDITION_FAILED: shell mkdir postimage digest invalid"
+                                    .into(),
                             );
                         }
                         if !path_entry_present_stable(Path::new(target))? {
@@ -490,7 +642,8 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                             "via": row.get("via"),
                         }));
                     } else {
-                        let obs = crate::receipt_postimage::observe_file_postimage(Path::new(target));
+                        let obs =
+                            crate::receipt_postimage::observe_file_postimage(Path::new(target));
                         if !obs.observation_stable {
                             return Err(
                                 "HZ_PRECONDITION_FAILED: shell fs postimage settle observe unstable"
@@ -516,9 +669,7 @@ fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Valu
                     }
                 }
                 _ => {
-                    return Err(
-                        "HZ_PRECONDITION_FAILED: shell fs postimage state unknown".into(),
-                    );
+                    return Err("HZ_PRECONDITION_FAILED: shell fs postimage state unknown".into());
                 }
             }
         }
@@ -603,7 +754,8 @@ pub fn verify_latest_postimages(
     let state = rebuild(events)?;
     verify_settlement_receipt_links(events, receipts)?;
     let owner_events = events.read(STREAM, None, None)?;
-    let history = crate::effect_history::verify_history(state_dir, &owner_events, state.unresolved.len());
+    let history =
+        crate::effect_history::verify_history(state_dir, &owner_events, state.unresolved.len());
     let mut latest: BTreeMap<String, (String, String, Option<String>, Option<String>)> =
         BTreeMap::new();
     let mut legacy_unverifiable = 0usize;
@@ -632,14 +784,15 @@ pub fn verify_latest_postimages(
             // Settled shell with only streamEvidence when argv had no reduced FS
             // shape; arbitrary shell filesystem/network remain OPEN (P0-2 reduced).
             match details.get("streamEvidence") {
-                Some(stream) => match crate::effect_history::verify_stream_evidence(state_dir, stream)
-                {
-                    Ok(n) => stream_checked += n,
-                    Err(reason) => stream_failures.push(json!({
-                        "effectId": id,
-                        "reason": reason,
-                    })),
-                },
+                Some(stream) => {
+                    match crate::effect_history::verify_stream_evidence(state_dir, stream) {
+                        Ok(n) => stream_checked += n,
+                        Err(reason) => stream_failures.push(json!({
+                            "effectId": id,
+                            "reason": reason,
+                        })),
+                    }
+                }
                 None => {
                     unsupported_effects += 1;
                 }
@@ -677,7 +830,10 @@ pub fn verify_latest_postimages(
                     )
                 }
             };
-            let entry_kind = row.get("entryKind").and_then(Value::as_str).map(str::to_string);
+            let entry_kind = row
+                .get("entryKind")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             latest.insert(
                 p.to_string(),
                 (id.to_string(), state.to_string(), digest, entry_kind),
@@ -763,7 +919,9 @@ pub fn verify_latest_postimages(
             if expected_state == "absent" {
                 let classification =
                     crate::effect_absent_reconstruct::classify_independent_absence(Path::new(path));
-                row["absenceClassification"] = json!(crate::effect_absent_reconstruct::absence_classification_label(classification));
+                row["absenceClassification"] = json!(
+                    crate::effect_absent_reconstruct::absence_classification_label(classification)
+                );
             }
             mismatches.push(row);
         }
@@ -780,10 +938,19 @@ pub fn verify_latest_postimages(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let receipt_rows = receipts.read_verified()?;
-    let nested_observe =
-        crate::effect_nested_observe::verify_nested_child_observe(&receipt_rows, &settlements, state_dir);
+    let mut nested_observe = crate::effect_nested_observe::verify_nested_child_observe(
+        &receipt_rows,
+        &settlements,
+        state_dir,
+    );
+    crate::effect_nested_observe::enrich_nested_observe_with_deleted_reconstruction(
+        &mut nested_observe,
+        &owner_events,
+        state_dir,
+    );
     let nested_ok = nested_observe.get("ok").and_then(Value::as_bool) == Some(true);
-    let legacy_classify = crate::effect_legacy_unverifiable::build_legacy_classify_report(&owner_events);
+    let legacy_classify =
+        crate::effect_legacy_unverifiable::build_legacy_classify_report(&owner_events);
     let legacy_classify_ok = legacy_classify.get("ok").and_then(Value::as_bool) == Some(true);
     Ok(json!({
         "ok": mismatches.is_empty()
@@ -882,6 +1049,34 @@ fn status_json(state: OwnerState) -> Value {
 pub fn status(events: &EventLog, state_dir: &Path) -> Result<Value, String> {
     let _lock = OwnerLock::acquire(state_dir)?;
     Ok(status_json(rebuild(events)?))
+}
+
+/// P0-3 cross-process R170 reconciliation barrier: acquires the OS-level
+/// `OwnerLock`, rebuilds `owner:effects` from the verified hash chain using the
+/// caller's `AnchorConfig`-backed `EventLog` and `Receipts`, verifies the receipt
+/// chain and settlement-receipt links, and returns whether any unresolved effect
+/// blocks downstream reconciliation.
+pub fn check_reconcile_barrier(
+    events: &EventLog,
+    receipts: &Receipts,
+    state_dir: &Path,
+) -> Result<Value, String> {
+    let _lock = OwnerLock::acquire(state_dir)?;
+    let state = rebuild(events)?;
+    let receipt_state = receipts.verify()?;
+    if !receipt_state.ok {
+        return Err(
+            "HZ_PRECONDITION_FAILED: reconcile.gate cannot verify broken receipt chain".into(),
+        );
+    }
+    verify_settlement_receipt_links(events, receipts)?;
+    let unresolved_ids: Vec<String> = state.unresolved.keys().cloned().collect();
+    Ok(json!({
+        "blocked": !state.unresolved.is_empty(),
+        "unresolvedCount": state.unresolved.len(),
+        "unresolvedIds": unresolved_ids,
+        "receiptsVerified": receipt_state.count,
+    }))
 }
 
 fn prepare_row_for(
@@ -995,12 +1190,12 @@ fn record_settled_owner_effect(
         "argsDigest": args_digest, "resultDigest": digest, "effectId": id,
         "leaseId": guard_lease_rpc,
     }))?;
-    let receipt_id = receipt["id"].as_str().ok_or_else(|| {
-        "HZ_PRECONDITION_FAILED: receipt missing id after issue".to_string()
-    })?;
-    let receipt_seq = receipt["seq"].as_u64().ok_or_else(|| {
-        "HZ_PRECONDITION_FAILED: receipt missing seq after issue".to_string()
-    })?;
+    let receipt_id = receipt["id"]
+        .as_str()
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt missing id after issue".to_string())?;
+    let receipt_seq = receipt["seq"]
+        .as_u64()
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt missing seq after issue".to_string())?;
     let mut settled_details = json!({
         "resultDigest": digest,
         "receiptId": receipt_id,
@@ -1008,7 +1203,7 @@ fn record_settled_owner_effect(
         "receiptHash": receipt["hash"],
         "postimages": postimages,
         "terminal": terminal,
-        "guardDecision": "allow",
+        "guardDecision": "ask",
         "guardLeaseId": guard_lease_id,
         "guardLeaseIds": guard_lease_ids,
     });
@@ -1032,9 +1227,8 @@ fn record_settled_owner_effect(
                 })
                 .unwrap_or_default();
             let side = crate::effect_evidence::classify_shell_argv_side_effect(&argv);
-            settled_details["shellSideEffectClass"] = json!(
-                crate::effect_evidence::shell_side_effect_class_label(side)
-            );
+            settled_details["shellSideEffectClass"] =
+                json!(crate::effect_evidence::shell_side_effect_class_label(side));
         }
     }
     if let Some((recovery_mode, recovery_attestation)) = recovery {
@@ -1169,9 +1363,12 @@ pub fn recover(
             "fs.write" => effect_host::observe_intended_fs_write_settlement(&replay)?,
             "fs.edit" => effect_host::observe_intended_fs_edit_settlement(&replay)?,
             "fs.delete" => effect_host::observe_intended_fs_delete_settlement(&replay)?,
+            "fs.rename" => effect_host::observe_intended_fs_rename_settlement(&replay)?,
+            "fs.batch" => effect_host::observe_intended_fs_batch_settlement(&replay)?,
+            "shell.exec" => effect_host::observe_intended_shell_exec_settlement(&replay)?,
             _ => {
                 return Err(format!(
-                    "HZ_PRECONDITION_FAILED: owner observe-settle for {effect_id} supports fs.write, fs.edit, and fs.delete only (got {kind})"
+                    "HZ_PRECONDITION_FAILED: owner observe-settle for {effect_id} supports fs.write, fs.edit, fs.delete, fs.rename, fs.batch, and caller-asserted read-only shell.exec only (got {kind})"
                 ));
             }
         };
@@ -1242,10 +1439,17 @@ pub fn verify(events: &EventLog, receipts: &Receipts, state_dir: &Path) -> Resul
     }
     verify_settlement_receipt_links(events, receipts)?;
     let history = crate::effect_history::verify_history(
-        state_dir, &events.read(STREAM, None, None)?, state.unresolved.len()
+        state_dir,
+        &events.read(STREAM, None, None)?,
+        state.unresolved.len(),
     );
-    if history["failures"].as_array().is_some_and(|rows| !rows.is_empty()) {
-        return Err("HZ_PRECONDITION_FAILED: historical postimage archive verification failed".into());
+    if history["failures"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        return Err(
+            "HZ_PRECONDITION_FAILED: historical postimage archive verification failed".into(),
+        );
     }
     Ok(json!({
         "ok": true,
@@ -1266,7 +1470,14 @@ pub fn is_mutating(params: &Value) -> bool {
         .unwrap_or("");
     matches!(
         kind.to_ascii_lowercase().as_str(),
-        "fs.write" | "fs.edit" | "fs.delete" | "fs.rename" | "fs.batch" | "shell.exec"
+        "fs.write"
+            | "fs.edit"
+            | "fs.delete"
+            | "fs.rename"
+            | "fs.batch"
+            | "shell.exec"
+            | "hook.exec"
+            | "mcp.invoke"
     )
 }
 
@@ -1281,9 +1492,8 @@ fn refuse_one_kernel_state_path(state_dir: &Path, root: &Path, raw: &str) -> Res
     } else {
         root.join(raw_path)
     };
-    let resolved = crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
-        "HZ_PRECONDITION_FAILED: mutation target cannot be resolved".to_string()
-    })?;
+    let resolved = crate::guard::lexical_resolve(&candidate)
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: mutation target cannot be resolved".to_string())?;
     let state_resolved = crate::guard::lexical_resolve(state_dir).ok_or_else(|| {
         "HZ_PRECONDITION_FAILED: kernel state directory cannot be resolved".to_string()
     })?;
@@ -1305,6 +1515,60 @@ fn refuse_kernel_state_target(state_dir: &Path, params: &Value, kind: &str) -> R
         .and_then(Value::as_str)
         .unwrap_or("");
     let root = Path::new(sandbox);
+    if kind == "hook.exec" {
+        if let Some(cwd) = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .and_then(|v| v.get("cwd"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            let candidate = if Path::new(cwd).is_absolute() {
+                Path::new(cwd).to_path_buf()
+            } else {
+                root.join(cwd)
+            };
+            let resolved = crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: hook.exec cwd cannot be resolved".to_string()
+            })?;
+            let state_resolved = crate::guard::lexical_resolve(state_dir).ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: kernel state directory cannot be resolved".to_string()
+            })?;
+            if resolved == state_resolved || resolved.starts_with(&state_resolved) {
+                return Err(format!(
+                    "HZ_PRECONDITION_FAILED: kernel-state-protected: hook.exec cwd {} overlaps protected kernel state",
+                    cwd
+                ));
+            }
+        }
+        return Ok(());
+    }
+    if kind == "mcp.invoke" {
+        // Refuse any path-like argument in mcp.invoke targeting the kernel state directory.
+        let state_resolved = crate::guard::lexical_resolve(state_dir).ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: kernel state directory cannot be resolved".to_string()
+        })?;
+        let state_str = state_resolved.to_string_lossy();
+        let state_raw = state_dir.to_string_lossy();
+        if let Some(args) = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .and_then(|v| v.get("args"))
+        {
+            let serialized = args.to_string();
+            if (!state_str.is_empty() && serialized.contains(state_str.as_ref()))
+                || (!state_raw.is_empty() && serialized.contains(state_raw.as_ref()))
+                || serialized.contains(".hz/state/kernel")
+                || serialized.contains(".hzcode/kernel")
+            {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: kernel-state-protected: mcp.invoke args reference protected kernel state"
+                        .to_string(),
+                );
+            }
+        }
+        return Ok(());
+    }
     if kind == "fs.batch" {
         let ops = crate::effect_host::parse_fs_batch_write_ops(params)?;
         for op in ops {
@@ -1316,9 +1580,7 @@ fn refuse_kernel_state_target(state_dir: &Path, params: &Value, kind: &str) -> R
                         .and_then(Value::as_str)
                         .filter(|s| !s.is_empty())
                         .ok_or_else(|| {
-                            format!(
-                                "HZ_PRECONDITION_FAILED: missing mutation target {field}"
-                            )
+                            format!("HZ_PRECONDITION_FAILED: missing mutation target {field}")
                         })?;
                     refuse_one_kernel_state_path(state_dir, root, raw)?;
                 }
@@ -1417,31 +1679,56 @@ fn authorize_direct_effect(
     params: &Value,
     kind: &str,
 ) -> Result<Vec<String>, String> {
-    let root = params
-        .get("sandboxRoot")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot required for authorization"
-                .to_string()
-        })?;
-    let root = Path::new(root);
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());
     let mut targets: Vec<(String, String)> = Vec::new();
-    if kind == "shell.exec" {
+    if kind == "mcp.invoke" {
+        let spec = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: mcp.invoke authorization requires spec".to_string()
+            })?;
+        let server_id = spec
+            .get("serverId")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: mcp.invoke authorization requires non-empty serverId"
+                    .to_string()
+            })?;
+        let tool_name = spec
+            .get("toolName")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: mcp.invoke authorization requires non-empty toolName"
+                    .to_string()
+            })?;
+        targets.push((
+            "mcp.invoke".to_string(),
+            format!("{server_id}:{tool_name}"),
+        ));
+    } else if kind == "shell.exec" || kind == "hook.exec" {
+        let _root = params
+            .get("sandboxRoot")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                format!("HZ_PRECONDITION_FAILED: {kind} authorization requires sandboxRoot")
+            })?;
         let argv = params
             .get("dispatch")
             .and_then(|v| v.get("spec"))
             .and_then(|v| v.get("argv"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                "HZ_PRECONDITION_FAILED: shell.exec authorization requires argv".to_string()
+                format!("HZ_PRECONDITION_FAILED: {kind} authorization requires argv")
             })?;
         if argv.is_empty() || argv.iter().any(|v| v.as_str().is_none_or(str::is_empty)) {
-            return Err("HZ_PRECONDITION_FAILED: shell.exec authorization argv invalid".into());
+            return Err(format!("HZ_PRECONDITION_FAILED: {kind} authorization argv invalid"));
         }
         let target = argv
             .iter()
@@ -1450,6 +1737,15 @@ fn authorize_direct_effect(
             .join(" ");
         targets.push(("shell.exec".to_string(), target));
     } else if kind == "fs.batch" {
+        let root = params
+            .get("sandboxRoot")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot required for authorization"
+                    .to_string()
+            })?;
+        let root = Path::new(root);
         let ops = crate::effect_host::parse_fs_batch_write_ops(params)?;
         for op in ops {
             let op_kind = op.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -1466,9 +1762,7 @@ fn authorize_direct_effect(
                     .and_then(Value::as_str)
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| {
-                        format!(
-                            "HZ_PRECONDITION_FAILED: mutation authorization missing {field}"
-                        )
+                        format!("HZ_PRECONDITION_FAILED: mutation authorization missing {field}")
                     })?;
                 let path = Path::new(raw);
                 let candidate = if path.is_absolute() {
@@ -1492,6 +1786,15 @@ fn authorize_direct_effect(
             }
         }
     } else {
+        let root = params
+            .get("sandboxRoot")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot required for authorization"
+                    .to_string()
+            })?;
+        let root = Path::new(root);
         let spec = params
             .get("dispatch")
             .and_then(|v| v.get("spec"))
@@ -1546,15 +1849,19 @@ fn authorize_direct_effect(
                 session_id,
             )
             .map_err(|e| format!("HZ_PRECONDITION_FAILED: Guard policy invalid: {e}"))?;
-        if decision.decision != "allow" {
+        if decision.decision != "ask" {
             return Err(format!(
                 "HZ_PRECONDITION_FAILED: Guard {}: {}",
                 decision.decision, decision.reason
             ));
         }
-        if let Some(lease_id) = decision.lease_id {
-            admitted_leases.push(lease_id);
-        }
+        let Some(lease_id) = decision.lease_id.filter(|s| !s.is_empty()) else {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: Guard {}: {}",
+                decision.decision, decision.reason
+            ));
+        };
+        admitted_leases.push(lease_id);
     }
     Ok(admitted_leases)
 }
@@ -1590,17 +1897,30 @@ pub fn execute(
     let kind = canonical_kind.as_str();
     // Do not create a pending row for a known ineligible shape: there is no
     // eligible kernel execute path, and the pure Rust dispatcher will refuse it.
-    if params
-        .get("sandboxRoot")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .is_none()
+    if (kind == "hook.exec" || kind == "mcp.invoke") && !effect_host::kernel_extended_enabled() {
+        return effect_host::execute_params(params, ledger);
+    }
+    if kind != "mcp.invoke"
+        && params
+            .get("sandboxRoot")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .is_none()
     {
+        if kind == "hook.exec" {
+            return Err(
+                "HZ_PRECONDITION_FAILED: effect.execute hook.exec requires non-empty sandboxRoot"
+                    .to_string(),
+            );
+        }
         return effect_host::execute_params(params, ledger);
     }
     // Structural kernel state protection and unconfined shell refusal are
     // authorization prerequisites, not post-execution observations.
     if kind == "shell.exec" {
+        refuse_unconfined_shell(params)?;
+    } else if kind == "hook.exec" {
+        refuse_kernel_state_target(state_dir, params, kind)?;
         refuse_unconfined_shell(params)?;
     } else {
         refuse_kernel_state_target(state_dir, params, kind)?;
@@ -1636,7 +1956,15 @@ pub fn execute(
     // field, but record ALL consumed approval leases in the hashed OwnerLog
     // prepare/settle rows (rename can require two distinct approvals).
     let guard_lease_id = guard_lease_ids.last().cloned();
-    let args_digest = crate::canon::sha256_hex(&crate::canon::canonical_json(params));
+    // Hash a canonical projection of `{effectId, sandboxRoot, dispatch}` so
+    // session-scoped `execute` (which carries `sessionId`) matches `recover`
+    // replay digest verification identically.
+    let canonical_args = json!({
+        "effectId": id,
+        "sandboxRoot": params.get("sandboxRoot").cloned().unwrap_or(Value::Null),
+        "dispatch": params.get("dispatch").cloned().unwrap_or(Value::Null),
+    });
+    let args_digest = crate::canon::sha256_hex(&crate::canon::canonical_json(&canonical_args));
     record(
         events,
         "owner.prepare",
@@ -1645,7 +1973,7 @@ pub fn execute(
             "dispatchKind": kind,
             "argsDigest": args_digest,
             "protocolVersion": 2,
-            "guardDecision": "allow",
+            "guardDecision": "ask",
             "guardLeaseId": guard_lease_id,
             "guardLeaseIds": guard_lease_ids,
         }),
@@ -1770,6 +2098,200 @@ mod tests {
         assert_eq!(status(&events, &root).unwrap()["blocked"], false);
         record(&events, "owner.settled", "pending", json!({})).unwrap();
         assert!(status(&events, &root).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn session_scoped_prepare_digest_matches_recover_observe_settle() {
+        let root = std::env::temp_dir().join(format!(
+            "hz-owner-session-recover-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let sandbox = root.join("ws");
+        fs::create_dir_all(&sandbox).unwrap();
+        let events = EventLog::new_with_anchor(&root, AnchorConfig::default());
+        let receipts = Receipts::new_with_anchor(&root, AnchorConfig::default(), None);
+
+        // Simulate a session-scoped execute that crashed in `executing` after
+        // writing the intended file to disk.
+        let dispatch = json!({
+            "kind": "fs.write",
+            "spec": { "path": "hello.txt", "text": "world" }
+        });
+        let exec_params = json!({
+            "effectId": "eff-sess-1",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": dispatch,
+            "sessionId": "session-abc"
+        });
+        let canonical_args = json!({
+            "effectId": "eff-sess-1",
+            "sandboxRoot": exec_params["sandboxRoot"],
+            "dispatch": exec_params["dispatch"],
+        });
+        let args_digest =
+            crate::canon::sha256_hex(&crate::canon::canonical_json(&canonical_args));
+        record(
+            &events,
+            "owner.prepare",
+            "eff-sess-1",
+            json!({
+                "dispatchKind": "fs.write",
+                "argsDigest": args_digest,
+                "protocolVersion": 2,
+                "guardDecision": "allow",
+                "guardLeaseId": Value::Null,
+                "guardLeaseIds": []
+            }),
+        )
+        .unwrap();
+        record(
+            &events,
+            "owner.executing",
+            "eff-sess-1",
+            json!({ "protocolVersion": 2 }),
+        )
+        .unwrap();
+        fs::write(sandbox.join("hello.txt"), b"world").unwrap();
+
+        let replay = json!({
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": exec_params["dispatch"],
+        });
+        let settled = recover(
+            &events,
+            &receipts,
+            &root,
+            "eff-sess-1",
+            Some("executed_unknown_observe_settle"),
+            Some("independent_postimage_proves_success"),
+            Some(&replay),
+        )
+        .expect("session-scoped recover must match canonical argsDigest");
+        assert_eq!(settled["settled"], json!(true));
+        assert_eq!(status(&events, &root).unwrap()["blocked"], false);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn check_reconcile_barrier_reports_clean_and_blocked_states() {
+        let root = std::env::temp_dir().join(format!(
+            "hz-reconcile-barrier-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        let events = EventLog::new_with_anchor(&root, crate::eventlog::AnchorConfig::default());
+        let receipts = Receipts::new_with_anchor(&root, crate::eventlog::AnchorConfig::default(), None);
+
+        let clean = check_reconcile_barrier(&events, &receipts, &root).expect("clean barrier check");
+        assert_eq!(clean["blocked"], json!(false));
+        assert_eq!(clean["unresolvedCount"], json!(0));
+        assert_eq!(clean["unresolvedIds"], json!([]));
+
+        record(
+            &events,
+            "owner.prepare",
+            "eff-barrier-1",
+            json!({
+                "dispatchKind": "fs.write",
+                "argsDigest": "abc",
+                "protocolVersion": 2,
+                "guardDecision": "allow",
+                "guardLeaseId": Value::Null,
+                "guardLeaseIds": []
+            }),
+        )
+        .unwrap();
+
+        let blocked = check_reconcile_barrier(&events, &receipts, &root).expect("blocked barrier check");
+        assert_eq!(blocked["blocked"], json!(true));
+        assert_eq!(blocked["unresolvedCount"], json!(1));
+        assert_eq!(blocked["unresolvedIds"], json!(["eff-barrier-1"]));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extended_hook_exec_and_mcp_invoke_are_classified_mutating_and_require_guard() {
+        let _env_guard = crate::effect_host::EXTENDED_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(is_mutating(&json!({
+            "dispatch": { "kind": "hook.exec", "spec": { "argv": ["echo", "hi"] } }
+        })));
+        assert!(is_mutating(&json!({
+            "dispatch": { "kind": "mcp.invoke", "spec": { "serverId": "s", "toolName": "t" } }
+        })));
+
+        let root = std::env::temp_dir().join(format!(
+            "hz-owner-ext-guard-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let sandbox = root.join("ws");
+        fs::create_dir_all(&sandbox).unwrap();
+        let events = EventLog::new_with_anchor(&root, AnchorConfig::default());
+        let receipts = Receipts::new_with_anchor(&root, AnchorConfig::default(), None);
+        let guard = Guard::new(&root);
+        let mut ledger = HermeticEffectLedger::default();
+
+        std::env::set_var("HZ_EFFECT_HOST_KERNEL_EXTENDED", "1");
+
+        // Unconfined hook.exec program (e.g. bash) must be refused before OwnerLog prepare.
+        let err_unconfined = execute(
+            &events,
+            &receipts,
+            &root,
+            &json!({
+                "effectId": "eff-hook-unconfined",
+                "sandboxRoot": sandbox.to_string_lossy(),
+                "dispatch": { "kind": "hook.exec", "spec": { "argv": ["bash", "-c", "id"] } }
+            }),
+            &guard,
+            &mut ledger,
+        )
+        .unwrap_err();
+        assert!(err_unconfined.contains("unconfined"), "{err_unconfined}");
+
+        // Allowed safe program without a Guard lease must fail closed at Guard::check (ask).
+        let err_guard_hook = execute(
+            &events,
+            &receipts,
+            &root,
+            &json!({
+                "effectId": "eff-hook-no-lease",
+                "sandboxRoot": sandbox.to_string_lossy(),
+                "dispatch": { "kind": "hook.exec", "spec": { "argv": ["echo", "ok"] } }
+            }),
+            &guard,
+            &mut ledger,
+        )
+        .unwrap_err();
+        assert!(err_guard_hook.contains("Guard ask"), "{err_guard_hook}");
+
+        // mcp.invoke without a Guard lease must fail closed at Guard::check (never bypass OwnerLock/Guard).
+        let err_guard_mcp = execute(
+            &events,
+            &receipts,
+            &root,
+            &json!({
+                "effectId": "eff-mcp-no-lease",
+                "dispatch": {
+                    "kind": "mcp.invoke",
+                    "spec": { "serverId": "srv-1", "toolName": "do_thing" }
+                }
+            }),
+            &guard,
+            &mut ledger,
+        )
+        .unwrap_err();
+        assert!(err_guard_mcp.contains("Guard ask"), "{err_guard_mcp}");
+
+        std::env::remove_var("HZ_EFFECT_HOST_KERNEL_EXTENDED");
         let _ = fs::remove_dir_all(&root);
     }
 }

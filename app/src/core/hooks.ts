@@ -174,6 +174,10 @@ import * as path from "node:path";
 import { scrubEnv } from "../tools/helpers";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "./owned-spawn";
 import { stateRoot, userConfigDir } from "./paths";
+import {
+  effectReconcileBlockObservationHookRefusal,
+  effectReconcileBlockPreToolHookRefusal,
+} from "./effect-reconcile-block";
 
 /** Per-hook budget when `timeoutMs` is absent; the ratified default is 10 s, v1's is 5 s. */
 export const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
@@ -348,6 +352,13 @@ export interface HookContext {
   onNotice?: (message: string) => void;
   /** Audit hook: 'hook.decision' / 'hook.failure' payloads for the event log. Must not throw. */
   onEvent?: (type: string, payload: unknown) => void;
+  /**
+   * P0-1 (ruling 909): admit the hook PROCESS before it starts. The runtime
+   * supplies a guard-backed handler so a hook is a first-class spawn admission
+   * rather than an unguarded child. Absent (unit tests, a stripped runtime)
+   * keeps the historical behaviour: the hook runs.
+   */
+  admit?: (hook: HookSpawnRequest) => Promise<{ allow: boolean; reason?: string }>;
 }
 
 /** `postTool` adds the settled result; the excerpt is capped by this module. */
@@ -373,6 +384,16 @@ export interface LifecycleHookContext {
   detail?: Record<string, unknown>;
   onNotice?: (message: string) => void;
   onEvent?: (type: string, payload: unknown) => void;
+  /** P0-1 (ruling 909): admit the hook process before it starts (see HookContext). */
+  admit?: (hook: HookSpawnRequest) => Promise<{ allow: boolean; reason?: string }>;
+}
+
+/** The process a hook would start: what an admission decision is about. */
+export interface HookSpawnRequest {
+  point: HookPoint;
+  index: number;
+  command: string;
+  args: readonly string[];
 }
 
 /* ------------------------------ paths and loading ------------------------------ */
@@ -875,7 +896,25 @@ async function runHook(
   hook: LoadedHook,
   input: Record<string, unknown>,
   workspace: string,
+  admit?: HookContext["admit"],
 ): Promise<{ kind: "ok"; output: Record<string, unknown> } | { kind: "failure"; error: string }> {
+  // P0-1 (ruling 909): the hook PROCESS is a guarded spawn. An absent handler
+  // keeps the historical behaviour; a handler that refuses stops the spawn
+  // before any child exists.
+  if (admit !== undefined) {
+    const decision = await admit({
+      point: hook.point,
+      index: hook.index,
+      command: hook.command,
+      args: hook.args,
+    });
+    if (!decision.allow) {
+      return {
+        kind: "failure",
+        error: `hook spawn not admitted: ${decision.reason ?? "denied by policy"}`,
+      };
+    }
+  }
   let proc: OwnedProc;
   try {
     ({ proc } = await spawnOwned([hook.command, ...hook.args], {
@@ -948,9 +987,23 @@ export async function runPreToolHooks(config: HooksConfig, ctx: HookContext): Pr
     });
     return { decision: "deny", reason };
   }
+  const reconcileRefusal = effectReconcileBlockPreToolHookRefusal(
+    ctx.workspace,
+    ctx.sessionId,
+    config,
+  );
+  if (reconcileRefusal !== undefined) {
+    emitEvent(ctx, "hook.decision", {
+      tool: ctx.tool,
+      hook: "reconcile-barrier",
+      decision: "deny",
+      reason: reconcileRefusal,
+    });
+    return { decision: "deny", reason: reconcileRefusal };
+  }
   for (const hook of config.points.preTool) {
     if (!matchesTool(hook, ctx.tool)) continue;
-    const result = await runHook(hook, preToolInput(ctx), ctx.workspace);
+    const result = await runHook(hook, preToolInput(ctx), ctx.workspace, ctx.admit);
     if (result.kind === "failure") {
       const reason = `hook_denied: ${hookLabel(hook)} failed (${hook.source}): ${result.error}`;
       emitEvent(ctx, "hook.failure", { tool: ctx.tool, hook: hookLabel(hook), error: result.error });
@@ -1039,9 +1092,20 @@ function collectObservation(
 export async function runPostToolHooks(config: HooksConfig, ctx: PostToolHookContext): Promise<HookContextFragment[]> {
   const fragments: HookContextFragment[] = [];
   if (config.state !== "ready") return fragments;
+  const reconcileRefusal = effectReconcileBlockObservationHookRefusal(
+    ctx.workspace,
+    ctx.sessionId,
+    config,
+    undefined,
+    { point: "postTool", tool: ctx.tool },
+  );
+  if (reconcileRefusal !== undefined) {
+    ctx.onNotice?.(reconcileRefusal);
+    return fragments;
+  }
   for (const hook of config.points.postTool) {
     if (!matchesTool(hook, ctx.tool)) continue;
-    const result = await runHook(hook, postToolInput(ctx), ctx.workspace);
+    const result = await runHook(hook, postToolInput(ctx), ctx.workspace, ctx.admit);
     collectObservation("postTool", hook, result, ctx, { tool: ctx.tool }, fragments, "the tool result");
   }
   return fragments;
@@ -1064,8 +1128,19 @@ export async function runLifecycleHooks(config: HooksConfig, ctx: LifecycleHookC
     // preTool would be a programming error. Fail closed by doing nothing.
     return fragments;
   }
+  const reconcileRefusal = effectReconcileBlockObservationHookRefusal(
+    ctx.workspace,
+    ctx.sessionId,
+    config,
+    undefined,
+    { point: ctx.point as Exclude<HookPoint, "preTool"> },
+  );
+  if (reconcileRefusal !== undefined) {
+    ctx.onNotice?.(reconcileRefusal);
+    return fragments;
+  }
   for (const hook of config.points[ctx.point]) {
-    const result = await runHook(hook, lifecycleInput(ctx), ctx.workspace);
+    const result = await runHook(hook, lifecycleInput(ctx), ctx.workspace, ctx.admit);
     collectObservation(ctx.point, hook, result, ctx, { point: ctx.point }, fragments, "the lifecycle step");
   }
   return fragments;

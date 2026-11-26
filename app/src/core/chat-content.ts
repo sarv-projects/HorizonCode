@@ -10,6 +10,12 @@ import type { ChatContentPart, ChatMsg, ChatMsgContent } from "../contracts";
 export function chatContentText(content: ChatMsgContent | undefined): string {
   if (content === undefined) return "";
   if (typeof content === "string") return content;
+  if (!Array.isArray(content)) {
+    if (content !== null && typeof content === "object" && "text" in content && typeof (content as { text: unknown }).text === "string") {
+      return (content as { text: string }).text;
+    }
+    return String(content);
+  }
   return content
     .filter((p): p is Extract<ChatContentPart, { type: "text" }> => p?.type === "text")
     .map((p) => p.text)
@@ -185,4 +191,73 @@ export function wireOpenAiToolResultContent(
   const wired = wireOpenAiContent(content);
   if (typeof wired === "string") return wired !== "" ? wired : "";
   return wired.length > 0 ? wired : "";
+}
+
+/** Google Gemini inlineData from a ChatContentPart */
+export function googlePartFromPart(
+  part: ChatContentPart,
+): { text: string } | { inlineData: { mimeType: string; data: string } } | undefined {
+  if (part.type === "text") {
+    if (part.text === "") return undefined;
+    return { text: part.text };
+  }
+  if (part.type === "image_url") {
+    const url = part.image_url.url;
+    if (url.startsWith("data:")) {
+      const m = /^data:([^;,]+);base64,(.+)$/i.exec(url);
+      if (m && m[2]) {
+        return {
+          inlineData: {
+            mimeType: m[1] ?? "image/png",
+            data: m[2],
+          },
+        };
+      }
+    }
+  }
+  if (part.type === "image") {
+    if (typeof part.base64 === "string" && part.base64 !== "") {
+      return {
+        inlineData: {
+          mimeType: part.media_type && part.media_type !== "" ? part.media_type : "image/png",
+          data: part.base64,
+        },
+      };
+    }
+  }
+  return undefined;
+}
+
+/** Google Gemini parts from ChatMsgContent */
+export function wireGoogleParts(
+  content: ChatMsgContent | undefined,
+): Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> {
+  if (content === undefined) return [];
+  if (typeof content === "string") {
+    return content !== "" ? [{ text: content }] : [];
+  }
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+  for (const part of content) {
+    const p = googlePartFromPart(part);
+    if (p) parts.push(p);
+  }
+  return parts;
+}
+
+/** Extract base64 image strings from ChatMsgContent (for Ollama / local multimodal endpoints) */
+export function extractBase64Images(content: ChatMsgContent | undefined): string[] {
+  if (content === undefined || typeof content === "string") return [];
+  const images: string[] = [];
+  for (const part of content) {
+    if (!part) continue;
+    if (part.type === "image" && typeof part.base64 === "string" && part.base64 !== "") {
+      images.push(part.base64);
+    } else if (part.type === "image_url" && typeof part.image_url?.url === "string" && part.image_url.url.startsWith("data:")) {
+      const m = /^data:[^;,]+;base64,(.+)$/i.exec(part.image_url.url);
+      if (m && m[1]) {
+        images.push(m[1]);
+      }
+    }
+  }
+  return images;
 }

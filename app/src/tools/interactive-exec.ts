@@ -62,17 +62,21 @@
 
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { newId } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { kernelEnforcesProcessSandbox } from "../core/sandbox-spawn";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
-import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
+import { shellCompoundRefusal } from "../core/shell-split";
+import {invisibleUnicodeError, resolvePath, scrubEnv, truncate, resolveRealTarget } from "./helpers";
 import { wallSeconds } from "./exec-output-format";
 import { minimiseShellOutput } from "./shell";
 
 const MAX_OUTPUT = 30_000;
+const MAX_RAW_FOR_SPILL = MAX_OUTPUT * 2;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 /** Default idle window: a session with no read/write for this long is killed. */
@@ -101,6 +105,7 @@ type SessionMode = "start" | "write" | "close";
 /** One live interactive session. */
 interface Session {
   id: string;
+  ownerSessionId: string;
   proc: OwnedProc;
   /** The command that was guard-admitted at start (for diagnostics). */
   command: string;
@@ -260,7 +265,9 @@ function startDraining(session: Session): void {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        session.rawForSpill += chunk;
+        if (session.rawForSpill.length < MAX_RAW_FOR_SPILL) {
+          session.rawForSpill += chunk.slice(0, MAX_RAW_FOR_SPILL - session.rawForSpill.length);
+        }
         if (session.buffer.length >= MAX_OUTPUT) {
           session.truncated = true; // keep draining, stop buffering (shell.ts)
           continue;
@@ -273,14 +280,18 @@ function startDraining(session: Session): void {
     }
   };
   void Promise.all([pump(session.proc.stdout), pump(session.proc.stderr)]).catch(() => {});
-  void session.proc.exited.then(
-    () => {
-      session.exited = true;
-    },
-    () => {
-      session.exited = true;
-    },
-  );
+  const onExit = (): void => {
+    session.exited = true;
+    if (session.watchdog !== undefined) {
+      clearTimeout(session.watchdog);
+      session.watchdog = undefined;
+    }
+    if (session.killTimer !== undefined) {
+      clearTimeout(session.killTimer);
+      session.killTimer = undefined;
+    }
+  };
+  void session.proc.exited.then(onExit, onExit);
 }
 
 /** Wait up to `ms` for `p` to settle; resolve true when it did. */
@@ -366,32 +377,113 @@ function render(
   return spillRawBeforeCap(ctx, text, body.raw);
 }
 
+/**
+ * Check `shellCompoundRefusal`, allowing literal parentheses that appear only
+ * inside properly-closed single/double quotes (e.g. `bun -e "fn()"`), while
+ * still refusing unquoted subshells, `$(...)`, backticks, `${...}`, and heredocs.
+ */
+function interactiveCompoundRefusal(command: string): string | undefined {
+  const refusal = shellCompoundRefusal(command);
+  if (refusal === undefined) return undefined;
+  if (!refusal.includes("subshell parentheses")) return refusal;
+  let stripped = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]!;
+    if (quote === null) {
+      if (ch === "\\" && i + 1 < command.length) {
+        stripped += ch + command[i + 1]!;
+        i += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        stripped += ch;
+        continue;
+      }
+      stripped += ch;
+    } else if (quote === "'") {
+      if (ch === "'") quote = null;
+      stripped += ch === "(" || ch === ")" ? "_" : ch;
+    } else {
+      if (ch === "\\" && i + 1 < command.length) {
+        const next = command[i + 1]!;
+        stripped += next === "(" || next === ")" ? "__" : ch + next;
+        i += 1;
+        continue;
+      }
+      if (ch === '"') {
+        quote = null;
+        stripped += ch;
+        continue;
+      }
+      if (ch === "$" && command[i + 1] === "(") {
+        stripped += "$(";
+        i += 1;
+        continue;
+      }
+      stripped += ch === "(" || ch === ")" ? "_" : ch;
+    }
+  }
+  if (quote !== null) return refusal;
+  return shellCompoundRefusal(stripped);
+}
+
 async function startSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (typeof args.command !== "string" || args.command.trim() === "") return fail("command is required");
   const command = args.command;
   const invisibleStart = invisibleUnicodeError(command, "a shell command");
   if (invisibleStart !== undefined) return fail(invisibleStart);
+  const compoundStart = interactiveCompoundRefusal(command);
+  if (compoundStart !== undefined) return fail(compoundStart);
   if (ctx.signal.aborted) return fail("aborted");
 
+  const cwdTarget =
+    typeof args.cwd === "string" && args.cwd !== ""
+      ? resolveRealTarget(ctx.cwd, args.cwd, ctx.workspace)
+      : undefined;
+  const dir = cwdTarget !== undefined ? cwdTarget.real : ctx.cwd;
+  const customCwd = cwdTarget !== undefined && dir !== ctx.cwd;
+
+  if (cwdTarget !== undefined && !cwdTarget.inside) {
+    const readAction: GuardAction = { kind: "fs.read", target: dir };
+    const readDecision = await ctx.guard(readAction);
+    if (readDecision.decision === "deny") {
+      return fail(`denied by policy${readDecision.reason ? `: ${readDecision.reason}` : ""}`);
+    }
+    if (readDecision.decision === "ask" && !guardEffectivelyAllows(readDecision)) {
+      const readApproved = await ctx.approve(
+        { title: "Access working directory outside workspace", detail: dir, kind: "fs.read" },
+        readAction,
+      );
+      if (!readApproved) return fail("declined by user");
+    }
+  }
+
   // Guard admission — fail-closed, BEFORE any spawn (reuses shell.exec).
-  const action: GuardAction = { kind: "shell.exec", target: command };
+  const action: GuardAction = customCwd
+    ? { kind: "shell.exec", target: command, detail: { cwd: dir } }
+    : { kind: "shell.exec", target: command };
   const decision = await ctx.guard(action);
   if (decision.decision === "deny") {
     return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
   }
-  if (decision.decision === "ask") {
-    const approved = await ctx.approve({ title: "Run interactive command", detail: command, kind: "shell.exec" }, action);
+  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
+    const detail = customCwd ? `${command} (cwd: ${dir})` : command;
+    const approved = await ctx.approve({ title: "Run interactive command", detail, kind: "shell.exec" }, action);
     if (!approved) return fail("declined by user");
   }
   if (ctx.signal.aborted) return fail("aborted");
 
+  // Prune any exited/timed-out sessions so 4 exits never permanently exhaust MAX_SESSIONS.
+  for (const existing of [...sessions.values()]) {
+    if (existing.exited) dropSession(existing);
+  }
   // Bound the registry: refuse (typed) the start that would exceed the cap,
   // AFTER admission so nothing is spawned.
   if (sessions.size >= MAX_SESSIONS) {
     return fail(`session limit reached (${MAX_SESSIONS} live sessions); close one before starting another`);
   }
-
-  const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
   const overallTimeoutMs = Math.min(numberOr(args.timeoutMs, DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS);
   const idleTimeoutMs = Math.min(numberOr(args.idleMs, DEFAULT_IDLE_MS), MAX_TIMEOUT_MS);
   const usePty = ptyAvailableNow();
@@ -411,18 +503,20 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
         longLived: false,
-        sandboxWrap: "auto",
-        sandboxMode: "workspace-write",
+        sandboxWrap: ctx.sandboxMode === "danger-full-access" ? false : "auto",
+        sandboxMode: ctx.sandboxMode ?? "workspace-write",
         kernel: ctx.kernel,
       })
     ).proc;
   } catch (e) {
+    tunnelPermissionError(e);
     return fail(`failed to start session: ${msg(e)}`);
   }
 
   const now = Date.now();
   const session: Session = {
     id: newId(),
+    ownerSessionId: ctx.sessionId,
     proc,
     command,
     buffer: "",
@@ -503,12 +597,14 @@ async function admitInput(session: Session, input: string, ctx: ToolContext): Pr
   const complete = inputLines(session.partial + input).slice(0, -1);
   const lines = [...new Set(complete.map((l) => l.trim()).filter((l) => l !== ""))];
   for (const line of lines) {
+    const compoundLine = interactiveCompoundRefusal(line);
+    if (compoundLine !== undefined) return fail(compoundLine);
     const action: GuardAction = { kind: "shell.exec", target: line };
     const decision = await ctx.guard(action);
     if (decision.decision === "deny") {
       return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       const approved = await ctx.approve(
         { title: "Send input to interactive session", detail: `${session.command} <- ${line}`, kind: "shell.exec" },
         action,
@@ -524,6 +620,7 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   if (typeof args.sessionId !== "string" || args.sessionId === "") return fail("sessionId is required");
   const session = sessions.get(args.sessionId);
   if (session === undefined) return fail(`no such session: ${args.sessionId}`);
+  if (session.ownerSessionId !== ctx.sessionId) return fail("session belongs to a different chat session");
   if (session.exited) {
     const body = takeBuffer(session);
     const out = render(ctx, session, "exited", body);
@@ -554,17 +651,24 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   const admission = await admitInput(session, input, ctx);
   if (admission !== undefined) return admission;
   if (ctx.signal.aborted) return fail("aborted");
-  try {
-    const writer = (session.proc.stdin as unknown as { write(chunk: string): void; flush?: () => void }) ?? undefined;
-    if (writer === undefined || typeof writer.write !== "function") {
-      return fail("session stdin is not writable");
+  const combined = session.partial + input;
+  const lastNl = combined.lastIndexOf("\n");
+  const toSend = lastNl === -1 ? "" : combined.slice(0, lastNl + 1);
+  const nextPartial = lastNl === -1 ? combined : combined.slice(lastNl + 1);
+  if (toSend !== "") {
+    try {
+      const writer = (session.proc.stdin as unknown as { write(chunk: string): void; flush?: () => void }) ?? undefined;
+      if (writer === undefined || typeof writer.write !== "function") {
+        return fail("session stdin is not writable");
+      }
+      writer.write(toSend);
+      if (typeof writer.flush === "function") writer.flush();
+    } catch (e) {
+      tunnelPermissionError(e);
+      return fail(`failed to write to session: ${msg(e)}`);
     }
-    writer.write(input);
-    if (typeof writer.flush === "function") writer.flush();
-  } catch (e) {
-    return fail(`failed to write to session: ${msg(e)}`);
   }
-  session.partial = unterminatedTail(session.partial + input);
+  session.partial = nextPartial;
   session.lastActivity = Date.now();
   armWatchdog(session);
 
@@ -581,10 +685,11 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   return { ok: true, output: render(ctx, session, "running", body) };
 }
 
-async function closeSession(args: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+async function closeSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (typeof args.sessionId !== "string" || args.sessionId === "") return fail("sessionId is required");
   const session = sessions.get(args.sessionId);
   if (session === undefined) return fail(`no such session: ${args.sessionId}`);
+  if (session.ownerSessionId !== ctx.sessionId) return fail("session belongs to a different chat session");
   if (!session.exited) killSession(session);
   const wasRunning = !session.exited;
   dropSession(session);
@@ -624,6 +729,7 @@ export const interactiveExecTool: Tool = {
       if (mode === "close") return await closeSession(args, ctx);
       return fail('mode is required (one of "start", "write", "close")');
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

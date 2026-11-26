@@ -7,10 +7,14 @@
  */
 
 import type { ToolCall } from "../contracts";
+import type { CancelGate } from "./cancel-gate";
 import { getTool } from "../tools";
 import { agentCallIsShared } from "../tools/agent";
 
 export type ToolBatchFifoOutcome = { aborted: boolean; fatal: boolean };
+
+/** Default concurrency cap for a shared segment (plan Task 17). */
+export const DEFAULT_MAX_BATCH_CONCURRENCY = 4;
 
 /**
  * NF-072 batch scheduling. Every tool carries a concurrency class: `shared`
@@ -71,26 +75,68 @@ export async function runClassedToolBatchFifo(
     signal?: AbortSignal;
     runCall: (call: ToolCall) => Promise<void>;
     onCallError?: (call: ToolCall, err: unknown) => void | "fatal";
+    /** Cap on concurrent calls inside one shared segment (default 4). */
+    maxConcurrency?: number;
+    /** Optional cooperative gate consulted before each dispatch. */
+    gate?: CancelGate;
   },
 ): Promise<ToolBatchFifoOutcome> {
   let aborted = false;
   let fatal = false;
+  const cap = Math.max(1, Math.floor(options.maxConcurrency ?? DEFAULT_MAX_BATCH_CONCURRENCY));
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  const wakeAll = (): void => {
+    for (const wake of waiters.splice(0)) wake();
+  };
+  const acquire = async (): Promise<boolean> => {
+    while (active >= cap) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+      if (options.signal?.aborted) {
+        wakeAll(); // every queued caller must fail closed on abort
+        return false;
+      }
+    }
+    if (options.signal?.aborted) {
+      wakeAll();
+      return false;
+    }
+    active += 1;
+    return true;
+  };
+  const release = (): void => {
+    active -= 1;
+    waiters.shift()?.();
+  };
+
   for (const segment of batchSegments(calls)) {
     if (options.signal?.aborted) {
       aborted = true;
       break;
     }
     await Promise.all(
-      segment.map((call) =>
-        options.runCall(call).catch((err) => {
+      segment.map(async (call) => {
+        let acquired = false;
+        try {
+          options.gate?.throwIfCancelled();
+          if (!(await acquire())) {
+            aborted = true;
+            return;
+          }
+          acquired = true;
+          options.gate?.throwIfCancelled();
+          await options.runCall(call);
+        } catch (err) {
           if (options.onCallError) {
             const verdict = options.onCallError(call, err);
             if (verdict === "fatal") fatal = true;
           }
-        }),
-      ),
+        } finally {
+          if (acquired) release();
+        }
+      }),
     );
-    if (fatal) break;
+    if (aborted || fatal) break;
   }
   return { aborted, fatal };
 }

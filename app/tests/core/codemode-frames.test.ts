@@ -644,7 +644,9 @@ describe("the bridge binds approvals to the exact inner arguments (wave-13 findi
     const direct: GuardAction = { kind: "fs.write", target, detail: { argsDigest: digestOf(A) } };
     expect((await gate.check(direct)).decision).toBe("ask");
     await gate.approve({ title: "Write f.txt", detail: "", kind: "fs.write" }, direct);
-    expect((await gate.check(direct)).decision).toBe("allow"); // the same call is covered
+    const directAfter = await gate.check(direct);
+    expect(directAfter.decision).toBe("ask");
+    expect(typeof directAfter.leaseId === "string" && directAfter.leaseId.length > 0).toBe(true); // the same call is covered
 
     // A code_mode program then writes the same file with content "BBBB": the
     // bridge attaches the digest of the arguments it is about to execute, so
@@ -656,7 +658,9 @@ describe("the bridge binds approvals to the exact inner arguments (wave-13 findi
     const innerA = withInnerIntent(base, A, ws);
     expect((await gate.check(innerA)).decision).toBe("ask");
     await gate.approve({ title: "code_mode: write", detail: target, kind: "fs.write" }, innerA);
-    expect((await gate.check(withInnerIntent(base, A, ws))).decision).toBe("allow");
+    const innerAfter = await gate.check(withInnerIntent(base, A, ws));
+    expect(innerAfter.decision).toBe("ask");
+    expect(typeof innerAfter.leaseId === "string" && innerAfter.leaseId.length > 0).toBe(true);
     expect(approvals).toEqual(["Write f.txt", "code_mode: write"]);
   });
 });

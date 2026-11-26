@@ -24,8 +24,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { estimateTokens } from "../core/output-budget";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolvePath, resolveRealTarget } from "./helpers";
 import {
   loadRepoMapIndex,
   lookupRepoMapEntry,
@@ -780,7 +781,8 @@ export const repoMapTool: Tool = {
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       const rootInput = typeof args.path === "string" && args.path !== "" ? args.path : ".";
-      const root = resolvePath(ctx.cwd, rootInput);
+      // D-1: guard and scan the REAL root (see glob.ts).
+      const root = resolveRealTarget(ctx.cwd, rootInput, ctx.workspace).real;
       const action: GuardAction = { kind: "fs.read", target: root };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
@@ -911,6 +913,7 @@ export const repoMapTool: Tool = {
 
       return { ok: true, output };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

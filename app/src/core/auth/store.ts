@@ -90,6 +90,8 @@ export function credentialFromStore(provider: string, home: string = homedir()):
     accessToken: tok.accessToken,
     refreshToken: tok.refreshToken,
     expiresAt: tok.expiresAt,
+    accountId: tok.accountId,
+    credentialPinHash: tok.credentialPinHash,
   };
 }
 

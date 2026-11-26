@@ -170,7 +170,11 @@ export async function streamEngCriticLlmFindings(args: {
   const trimmed = text.trim();
   if (trimmed === "") return undefined;
   const findings = parseEngCriticLlmFindings(trimmed);
-  return findings.length > 0 ? findings : undefined;
+  if (findings.length > 0) return findings;
+  if (/^VERDICT\s*:\s*PASS\b/im.test(trimmed)) {
+    return [];
+  }
+  return undefined;
 }
 
 async function tryEngCriticLlm(args: {
@@ -221,4 +225,72 @@ export async function resolveAdversarialCritic(args: ResolveAdversarialCriticInp
   });
   if (llmFindings === undefined) return local;
   return mergeCriticReports(local, llmFindings);
+}
+
+export interface MultiModelCriticInput {
+  provider: Provider;
+  criticModels: readonly string[];
+  input: CriticInput;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface MultiModelCriticReport extends CriticReport {
+  modelsQueried: number;
+  modelsSucceeded: number;
+  perModelFindings: Record<string, CriticFinding[]>;
+}
+
+/**
+ * Runs independent isolated critic reviews across multiple models in fresh contexts.
+ * Aggregates findings with P0 priority and deduplication.
+ */
+export async function runIsolatedMultiModelCritic(
+  args: MultiModelCriticInput,
+): Promise<MultiModelCriticReport> {
+  const prompt = buildEngCriticLlmPrompt(args.input);
+  const models = args.criticModels.filter((m) => m.trim() !== "");
+  const perModelFindings: Record<string, CriticFinding[]> = {};
+  const allFindings: CriticFinding[] = [];
+  let modelsSucceeded = 0;
+
+  for (const model of models) {
+    const findings = await streamEngCriticLlmFindings({
+      provider: args.provider,
+      model,
+      prompt,
+      signal: args.signal,
+      timeoutMs: args.timeoutMs,
+    });
+    if (findings !== undefined) {
+      modelsSucceeded += 1;
+      perModelFindings[model] = findings;
+      for (const f of findings) {
+        const exists = allFindings.some(
+          (existing) => existing.code === f.code && existing.evidence === f.evidence,
+        );
+        if (!exists) {
+          allFindings.push(f);
+        }
+      }
+    }
+  }
+
+  const hasP0 = allFindings.some((f) => f.severity === "P0");
+  const hasP1 = allFindings.some((f) => f.severity === "P1");
+  const verdict = hasP0 ? "FAIL" : hasP1 ? "PASS_WITH_NOTES" : "PASS";
+
+  const summary =
+    allFindings.length === 0
+      ? `Isolated multi-model critic passed across ${modelsSucceeded}/${models.length} model(s).`
+      : `Isolated multi-model critic found ${allFindings.length} issue(s) across ${modelsSucceeded}/${models.length} model(s).`;
+
+  return {
+    verdict,
+    findings: allFindings,
+    summary,
+    modelsQueried: models.length,
+    modelsSucceeded,
+    perModelFindings,
+  };
 }

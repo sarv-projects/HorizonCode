@@ -18,6 +18,7 @@ import { textFromOpenAiDeltaContent } from "./openai-delta-content";
 import { NO_TOOL_OUTPUT, toolResultContent, toolResultIsMultipart } from "./tool-result-content";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
+import { maskSecrets } from "../compaction";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 import {
   isProviderTimeoutError,
@@ -29,10 +30,9 @@ import {
 } from "./timeout";
 import {
   formatAssemblyCancelNotice,
-  toolInputErrorEvent,
   ToolCallAssembler,
-  validateFinalToolArguments,
 } from "./tool-call-assembly";
+import { ensureAlternatingRoles } from "./alternating-roles";
 
 export interface OpenAiSettings {
   apiKey: string;
@@ -47,6 +47,8 @@ export interface OpenAiSettings {
    * native `toOpenAiMessages` converter is used (byte-identical default).
    */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -73,6 +75,8 @@ export interface OpenAiWireSettings {
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
   /** H-4: optional config-selected formatter; absent → native converter. */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com";
@@ -98,7 +102,15 @@ export function toOpenAiMessages(messages: ChatMsg[]): Array<Record<string, unkn
         entry.tool_calls = calls.map((call) => ({
           id: call.id,
           type: "function",
-          function: { name: call.name, arguments: call.arguments && call.arguments !== "" ? call.arguments : "{}" },
+          function: {
+            name: call.name,
+            arguments:
+              call.toolInputError !== undefined
+                ? "{}"
+                : call.arguments && call.arguments !== ""
+                  ? call.arguments
+                  : "{}",
+          },
         }));
       }
       out.push(entry);
@@ -177,9 +189,17 @@ async function* streamOpenAiCompatibleInner(
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
   // H-4: render through the config-selected formatter when one was supplied;
   // the default path is the byte-identical native converter.
-  const messages: readonly unknown[] = settings.messageFormatter
+  let messages: readonly unknown[] = settings.messageFormatter
     ? settings.messageFormatter.formatMessages(wire.messages ?? [])
     : toOpenAiMessages(wire.messages ?? []);
+  // ADDITIVE Group G (aider port): reasoner models (DeepSeek R1) reject
+  // consecutive same-role messages. Opt-in via env; default byte-identical.
+  if (
+    process.env.HZ_ENSURE_ALTERNATING_ROLES === "1" &&
+    messages.every((m) => typeof m === "object" && m !== null && typeof (m as { role?: unknown }).role === "string")
+  ) {
+    messages = ensureAlternatingRoles(messages as Array<{ role: string; content: string }>);
+  }
   if (messages.length === 0) {
     yield { type: "error", message: `${name}: nothing to send (no messages)`, code: "UNKNOWN" };
     return;
@@ -194,7 +214,10 @@ async function* streamOpenAiCompatibleInner(
   if (typeof wire.system === "string" && wire.system !== "") {
     body.messages = [{ role: "system", content: wire.system }, ...messages];
   }
-  if (Array.isArray(wire.tools) && wire.tools.length > 0) body.tools = toOpenAiTools(wire.tools);
+  if (Array.isArray(wire.tools) && wire.tools.length > 0) {
+    body.tools = toOpenAiTools(wire.tools);
+    if (wire.toolChoice !== undefined) body.tool_choice = wire.toolChoice;
+  }
   if (wire.maxTokens && wire.maxTokens > 0) body.max_tokens = wire.maxTokens;
   else if (settings.maxTokens && settings.maxTokens > 0) body.max_tokens = settings.maxTokens;
   else body.max_tokens = DEFAULT_MAX_TOKENS;
@@ -206,10 +229,12 @@ async function* streamOpenAiCompatibleInner(
   if (quirksApplied.length > 0) yield { type: "quirks", applied: quirksApplied };
   await maybeDumpProviderRequest(name, body);
 
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "text/event-stream",
-  };
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(settings.headers ?? {})) {
+    headers[k.toLowerCase()] = v;
+  }
+  headers["content-type"] = "application/json";
+  headers.accept = "text/event-stream";
   // A keyless host (Credential kind "none") gets no Authorization header; the
   // header is data, never derived from the provider id.
   const authHeader = settings.getAuthorization?.() ?? settings.authorization;
@@ -232,6 +257,7 @@ async function* streamOpenAiCompatibleInner(
         // Headers per attempt and a total cap for the request phase; the idle
         // guard on the body is applied by readSse below.
         timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
+        breakerRoute: `${name}@${baseUrl}`,
         // Ride out a rate limit or an overloaded upstream instead of failing the
         // whole turn; the notices below keep it visible rather than silent.
         onRetry: (info) => retries.push(retryNotice(name, info, retryAttempts)),
@@ -258,6 +284,11 @@ async function* streamOpenAiCompatibleInner(
   if (response.status === 401 && settings.onUnauthorized) {
     const refreshed = await settings.onUnauthorized();
     if (refreshed) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* ignore */
+      }
       const nextAuth = settings.getAuthorization?.() ?? settings.authorization;
       if (nextAuth && nextAuth.trim() !== "") headers.authorization = nextAuth;
       else delete headers.authorization;
@@ -293,7 +324,7 @@ async function* streamOpenAiCompatibleInner(
   }
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = maskSecrets(await response.text().catch(() => ""));
     const expired = deadline.timedOut();
     if (expired) {
       yield providerTimeoutEvent(name, expired, "request");
@@ -385,20 +416,17 @@ async function* streamOpenAiCompatibleInner(
   const completed = assembler.flushCompleted();
   let emittedCallCount = 0;
   for (const call of completed) {
-    // H-5: validate FINAL assembled argument JSON outside the SSE loop. Syntax-
-    // only repair is admitted; an unrepairable / truncated blob is refused with
-    // a structured tool_input_error rather than fed downstream as broken JSON.
-    const validated = validateFinalToolArguments(call);
-    if (validated.ok === false) {
-      yield toolInputErrorEvent(validated.refusal);
-      continue;
-    }
+    // Track A: flushCompleted() strictly parses final assembled arguments and
+    // attaches `toolInputError` on malformed/truncated/non-object JSON so the
+    // loop can return a structured self-correction error tool result instead of
+    // crashing the turn or silently corrupting arguments.
     emittedCallCount += 1;
     yield {
       type: "tool_call",
       id: call.id,
       name: call.name,
-      arguments: validated.arguments,
+      arguments: call.arguments,
+      ...(call.toolInputError !== undefined ? { toolInputError: call.toolInputError } : {}),
     };
   }
 
@@ -420,6 +448,7 @@ export function createOpenAiProvider(settings: OpenAiSettings): Provider {
           timeouts: settings.timeouts,
           retry: settings.retry,
           messageFormatter: settings.messageFormatter,
+          headers: settings.headers,
         },
         req,
       ),

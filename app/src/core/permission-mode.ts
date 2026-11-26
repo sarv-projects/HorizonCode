@@ -106,7 +106,7 @@ export function modeRefusal(mode: PermissionMode | undefined, action: GuardActio
  * Directory names (at ANY depth) accept-edits never auto-answers: repository and
  * harness state, and CI/hook directories whose files run later without a shell ask.
  */
-const SENSITIVE_DIRS: readonly string[] = [".git", ".hz", ".github", ".gitlab", ".husky", ".circleci", ".devcontainer", ".vscode", ".cargo"];
+const SENSITIVE_DIRS: readonly string[] = [".git", ".hz", ".hzcode", ".github", ".gitlab", ".husky", ".circleci", ".devcontainer", ".vscode", ".cargo"];
 
 /**
  * File names (any depth, case-insensitive) that run or configure code later:
@@ -125,7 +125,7 @@ const SENSITIVE_FILES: readonly string[] = [
 
 export function isSensitiveRel(rel: string): boolean {
   // Lowercased throughout: on a case-insensitive filesystem `.GIT/hooks` IS `.git/hooks`.
-  const parts = rel.split(path.sep).filter((s) => s !== "").map((s) => s.toLowerCase());
+  const parts = rel.split(/[\\/]+/).filter((s) => s !== "").map((s) => s.toLowerCase());
   const base = parts[parts.length - 1] ?? "";
   if (parts.some((seg) => SENSITIVE_DIRS.includes(seg))) return true;
   return SENSITIVE_FILES.includes(base) || base.startsWith(".env.");

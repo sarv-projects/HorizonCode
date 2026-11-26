@@ -10,6 +10,44 @@ import type { RuntimeEvent } from "../contracts";
 import { liveEnabled } from "./live";
 import { createRenderer } from "./render";
 import { sanitizeText, strip, type ColorLevel } from "./style";
+import {
+  TRANSCRIPT_BACKFILL_CHUNK,
+  TRANSCRIPT_TAIL_ROWS,
+  createTranscriptMountBudget,
+  sliceTranscriptTailFirst,
+  type TranscriptMountBudget,
+  type TranscriptMountBudgetOptions,
+  type TranscriptMountWindow,
+} from "./transcript";
+
+export {
+  TRANSCRIPT_BACKFILL_CHUNK,
+  TRANSCRIPT_TAIL_ROWS,
+  createTranscriptMountBudget,
+  sliceTranscriptTailFirst,
+  type TranscriptMountBudget,
+  type TranscriptMountBudgetOptions,
+  type TranscriptMountWindow,
+};
+
+/**
+ * Mount the fullscreen transcript tail-first using a progressive 40/60 budget.
+ * When `scrollUp` approaches older rows, automatically expands the budget in
+ * 60-row chunks so scrolled viewports stay populated without mounting huge
+ * histories eagerly on first paint.
+ */
+export function mountFullscreenTranscriptWindow(
+  transcript: readonly string[],
+  budget: TranscriptMountBudget,
+  opts: { scrollUp?: number; viewportRows?: number } = {},
+): TranscriptMountWindow<string> {
+  const scrollUp = Math.max(0, Math.floor(opts.scrollUp ?? 0));
+  const viewportRows = Math.max(1, Math.floor(opts.viewportRows ?? budget.tailRows));
+  if (scrollUp > 0) {
+    budget.ensureVisible(transcript.length, scrollUp, viewportRows);
+  }
+  return budget.slice(transcript);
+}
 
 /** Same colour contract as scrollback `createRenderer({ rich: liveEnabled() })`. */
 export function fullscreenRichTranscriptEnabled(

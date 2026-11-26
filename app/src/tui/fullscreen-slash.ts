@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import type { Runtime } from "../contracts";
 import { defaultConfigPath, loadConfig, persistNotifyConfig } from "../core/config";
 import { resolveCommandForMessage } from "../core/commands";
-import { formatModelsNotice } from "./models-slash";
+import { formatModelsNotice, isModelsRefreshCommand, runModelsSlashRefresh } from "./models-slash";
 import { modelsForProvider } from "../core/catalog/list-models";
 import {
   readPermissionMode,
@@ -14,6 +14,7 @@ import {
   runMemoryCommand,
   runModeCommand,
   runPlanCommand,
+  runSkillSlashCommand,
   runThemeCommand,
   showTools,
   type PlanCommandState,
@@ -21,11 +22,17 @@ import {
 } from "./interactive";
 import { runAutonomyCommand } from "./autonomy-slash";
 import { runNotifyCommand } from "./notify";
-import { isFullscreenLocalSlash, parseSlashInput } from "./slash-dispatch";
+import { deferredSlashAction, isFullscreenLocalSlash, parseSlashInput } from "./slash-dispatch";
 import type { Renderer } from "./render";
 import { printSlashHelp } from "./slash-help";
 import { formatIdleStatusLine, readGitBranch, type StatusInfo } from "./live";
-import { buildUnknownInspectLines, runUnknownCommand } from "./unknown-slash";
+import { buildUnknownInspectLines, runReconcileCommand, runUnknownCommand } from "./unknown-slash";
+import {
+  inspectPrincipalPosture,
+  readEffectHostMode,
+  readEgressPosture,
+  readPiiVaultStatus,
+} from "./trust-spine-status";
 import { parseUnknownSlashArgs } from "./unknown-slash-parse";
 import { dim, errorMessage, sanitizeText, strip, terminalWidth } from "./style";
 import { modeBadge } from "../core/permission-mode";
@@ -43,6 +50,14 @@ export interface FullscreenSlashContext {
   unknownReceiptId?: string;
   /** When set, `/unknown inspect` paints a fullscreen inspector overlay instead of transcript lines. */
   showReceiptInspector?: (lines: readonly string[]) => Promise<void>;
+  /** Pause fullscreen raw stdin/keypress listeners while an interactive sub-flow owns stdin (e.g. `/changes --review`). */
+  withExclusiveStdin?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /** Toggle quiet `/focus` mode and return the new state. */
+  toggleFocusMode?: () => boolean;
+  /** Handle `/btw <question>` side-question in fullscreen. */
+  sendBtw?: (question: string) => Promise<void>;
+  /** D-9: close the alt-screen loop for `/exit` / `/quit`. */
+  requestExit?: () => void;
 }
 
 function showContext(renderer: Renderer, runtime: Runtime): void {
@@ -61,6 +76,7 @@ function slashStatusInfo(ctx: FullscreenSlashContext): StatusInfo {
   const rt = ctx.runtime as RuntimeWithExtras;
   const badge = ctx.planState.on ? "PLAN" : modeBadge(readPermissionMode(ctx.runtime));
   const unknownCount = ctx.unknownCount ?? 0;
+  const principal = inspectPrincipalPosture();
   return {
     badge,
     model: ctx.runtime.model,
@@ -69,6 +85,11 @@ function slashStatusInfo(ctx: FullscreenSlashContext): StatusInfo {
     branch: readGitBranch(ctx.workspace),
     unknownCount: unknownCount > 0 ? unknownCount : undefined,
     unknownReceiptId: unknownCount === 1 ? ctx.unknownReceiptId : undefined,
+    effectHostMode: readEffectHostMode(),
+    egressPosture: readEgressPosture(ctx.runtime),
+    piiVault: readPiiVaultStatus(ctx.runtime),
+    principalMode: principal.principalMode,
+    principalKeyFingerprint: principal.principalKeyFingerprint,
   };
 }
 
@@ -96,6 +117,14 @@ export async function tryRunFullscreenLocalSlash(
   if (parsed === null) return false;
   const { name, arg } = parsed;
   if (name === "") return false;
+  // D-9: a deferred verb is never a prompt. `/exit` closes the loop; the rest
+  // have no inline handler and are reported as unavailable here.
+  const deferred = deferredSlashAction(name);
+  if (deferred !== undefined) {
+    if (deferred === "exit") ctx.requestExit?.();
+    else ctx.renderer.notice(`/${name} is not available in fullscreen — use the scrollback TUI for it`);
+    return true;
+  }
   if (!isFullscreenLocalSlash(name)) return false;
   if (resolveCommandForMessage(ctx.workspace, parsed.raw)) return false;
 
@@ -128,8 +157,37 @@ export async function tryRunFullscreenLocalSlash(
       case "changes":
       case "apply":
       case "discard":
-        await runPlanCommand(name, arg, runtime, renderer, planState);
+        if (name === "changes" && arg.trim() === "--review" && ctx.withExclusiveStdin) {
+          await ctx.withExclusiveStdin(() => runPlanCommand(name, arg, runtime, renderer, planState));
+        } else {
+          await runPlanCommand(name, arg, runtime, renderer, planState);
+        }
         return true;
+      case "skill":
+        await runSkillSlashCommand(arg, runtime, renderer, workspace);
+        return true;
+      case "focus": {
+        const on = ctx.toggleFocusMode ? ctx.toggleFocusMode() : false;
+        renderer.notice(
+          on
+            ? "focus mode ON — collapsing intermediate tool chatter to prompt + diffstat + final response"
+            : "focus mode OFF — showing full tool cards and notices",
+        );
+        return true;
+      }
+      case "btw": {
+        const question = arg.trim();
+        if (question === "") {
+          renderer.notice("usage: /btw <side-question>");
+          return true;
+        }
+        if (ctx.sendBtw) {
+          await ctx.sendBtw(question);
+        } else {
+          renderer.notice(`[btw] ${sanitizeText(question)}`);
+        }
+        return true;
+      }
       case "think": {
         const textThinking = renderer.lastThinking?.() ?? "";
         if (textThinking.trim() === "") {
@@ -147,7 +205,7 @@ export async function tryRunFullscreenLocalSlash(
         return true;
       case "status":
         showStatus(renderer, ctx);
-        if ((ctx.unknownCount ?? 0) > 0) void runUnknownCommand(runtime, renderer);
+        if ((ctx.unknownCount ?? 0) > 0) await runUnknownCommand(runtime, renderer);
         return true;
       case "unknown": {
         const sub = parseUnknownSlashArgs(arg);
@@ -161,6 +219,9 @@ export async function tryRunFullscreenLocalSlash(
         await runUnknownCommand(runtime, renderer, arg);
         return true;
       }
+      case "reconcile":
+        await runReconcileCommand(runtime, renderer, arg);
+        return true;
       case "worktree":
         runWorktreeSlash(workspace, renderer);
         return true;
@@ -168,7 +229,12 @@ export async function tryRunFullscreenLocalSlash(
         runSnapshotSlash(renderer);
         return true;
       case "models":
-        showModels(renderer, runtime);
+        if (isModelsRefreshCommand(arg)) {
+          const { notice } = await runModelsSlashRefresh({ env: process.env });
+          renderer.notice(notice);
+        } else {
+          showModels(renderer, runtime);
+        }
         return true;
       case "memory":
       case "instructions":
@@ -178,6 +244,7 @@ export async function tryRunFullscreenLocalSlash(
       case "stats":
       case "tokens":
       case "learn":
+      case "tasks":
       case "trust":
       case "settings":
       case "graph":

@@ -73,10 +73,7 @@ mod tests {
 
     #[test]
     fn observe_file_postimage_stable_on_disk() {
-        let dir = std::env::temp_dir().join(format!(
-            "hz-receipt-postimage-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("hz-receipt-postimage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("probe.bin");

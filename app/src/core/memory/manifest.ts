@@ -317,9 +317,16 @@ export function relevantMemoryTopicExcerpts(
   return out;
 }
 
+function neutralizeMemoryFences(text: string): string {
+  return text
+    .replace(/<\/workspace-memory>/gi, "&lt;/workspace-memory&gt;")
+    .replace(/<\/memory-topic-excerpts>/gi, "&lt;/memory-topic-excerpts&gt;");
+}
+
 export function memoryPromptSection(workspace: string, userQuery?: string): string | undefined {
-  const body = loadMemoryManifest(workspace);
-  if (body === undefined) return undefined;
+  const rawBody = loadMemoryManifest(workspace);
+  if (rawBody === undefined) return undefined;
+  const body = neutralizeMemoryFences(rawBody);
   const topics = listMemoryTopicFiles(workspace);
   const query = userQuery?.trim() ?? "";
   const relevant = query !== "" ? findRelevantMemoryTopics(workspace, query) : [];
@@ -338,7 +345,7 @@ export function memoryPromptSection(workspace: string, userQuery?: string): stri
   const prefetchNote =
     prefetch.length > 0
       ? `\nPrefetched topic blurbs (no query match — scan before opening every file):\n${prefetch
-          .map((p) => `- ${MEMORY_TOPIC_DIR}/${p.name}: ${p.blurb}`)
+          .map((p) => `- ${MEMORY_TOPIC_DIR}/${p.name}: ${neutralizeMemoryFences(p.blurb)}`)
           .join("\n")}`
       : "";
   const excerpts =
@@ -348,7 +355,7 @@ export function memoryPromptSection(workspace: string, userQuery?: string): stri
       ? `\n\n<memory-topic-excerpts>\n${excerpts
           .map(
             (e) =>
-              `### ${MEMORY_TOPIC_DIR}/${e.name}\n${e.excerpt}\n(Use read on this path for the full topic if needed.)`,
+              `### ${MEMORY_TOPIC_DIR}/${e.name}\n${neutralizeMemoryFences(e.excerpt)}\n(Use read on this path for the full topic if needed.)`,
           )
           .join("\n\n")}\n</memory-topic-excerpts>`
       : "";

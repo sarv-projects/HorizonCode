@@ -14,14 +14,36 @@
  * `cancel()` and the assembly-cancel notices are unchanged.
  */
 
-import type { ProviderEvent } from "../../contracts";
+import type { ProviderEvent, ToolInputError } from "../../contracts";
 import { parseToolArguments } from "../json-repair";
-import { isCompleteToolArgsObject } from "./tool-args-object";
+import { replayableToolCallArguments } from "./replay-args";
+import { isCompleteToolArgsObject, strictParseToolArgsObject } from "./tool-args-object";
 
 export interface AssembledToolCall {
   id: string;
   name: string;
   arguments: string;
+  /** ADDITIVE (Track A): present when final accumulated arguments failed strict JSON object parsing. */
+  toolInputError?: ToolInputError;
+}
+
+/**
+ * Strictly validate an assembled tool call's final arguments on finish.
+ * Valid JSON objects pass through unchanged with no `toolInputError`; malformed,
+ * truncated, or non-object payloads preserve the raw string and attach a
+ * structured `toolInputError` instead of silently corrupting into `{}`.
+ */
+export function finalizeAssembledToolCall(call: AssembledToolCall): AssembledToolCall {
+  const strict = strictParseToolArgsObject(call.arguments);
+  if ("error" in strict) {
+    return {
+      id: call.id,
+      name: call.name,
+      arguments: call.arguments,
+      toolInputError: strict.error,
+    };
+  }
+  return { id: call.id, name: call.name, arguments: strict.json };
 }
 
 /** Structured refusal when a FINAL assembled tool call's arguments are broken. */
@@ -57,8 +79,9 @@ export function validateFinalToolArguments(call: AssembledToolCall): AssembledAr
     return { ok: false, refusal: { id: call.id, name: call.name, reason: parsed.error } };
   }
   // Syntax repair was applied; feed the REPAIRED JSON downstream, never the raw
-  // malformed bytes.
-  return { ok: true, arguments: JSON.stringify(parsed.args) };
+  // malformed bytes. The replay helper codifies the execution-fidelity contract
+  // (oh-my-pi must-steal #12): replay carries what actually executed.
+  return { ok: true, arguments: replayableToolCallArguments(call.arguments, parsed.args) };
 }
 
 /**
@@ -141,17 +164,22 @@ export class ToolCallAssembler {
   /**
    * Emit completed assemblies (name present). Empty args become `"{}"` so a
    * no-argument tool stays parseable — same contract as openai.ts historically.
+   * Track A: strictly parses final accumulated arguments; malformed/truncated
+   * or non-object payloads attach `toolInputError` without silent corruption.
    */
   flushCompleted(): AssembledToolCall[] {
     const out: AssembledToolCall[] = [];
     for (const index of [...this.partials.keys()].sort((a, b) => a - b)) {
       const call = this.partials.get(index);
       if (!call || call.name === "") continue;
-      out.push({
-        id: call.id !== "" ? call.id : `call_${index + 1}`,
-        name: call.name,
-        arguments: call.args.trim() === "" ? "{}" : call.args,
-      });
+      const rawArgs = call.args.trim() === "" ? "{}" : call.args;
+      out.push(
+        finalizeAssembledToolCall({
+          id: call.id !== "" ? call.id : `call_${index + 1}`,
+          name: call.name,
+          arguments: rawArgs,
+        }),
+      );
     }
     this.partials.clear();
     return out;

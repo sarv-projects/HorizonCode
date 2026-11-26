@@ -24,10 +24,11 @@
  */
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import * as net from "node:net";
 import type { Writable } from "node:stream";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import {
   clearKernelControlSecret,
@@ -72,7 +73,11 @@ import { applyGuardG1Wire } from "./guard-g1-wire";
 import { HUMAN_APPROVAL_PRINCIPAL } from "../contracts";
 import { ownerVisibleToSession } from "./human-approval-principal";
 import { assertHumanApprovalPathAttestationForMint } from "./human-approval-principal-strict";
-import { verifyParentReceiptIssuerStamps } from "./receipt-issuer-verify";
+import {
+  loadReceiptIssuerKeyFromStateDirSync,
+  verifyParentReceiptIssuerStamps,
+  verifyReceiptIssuerStamp,
+} from "./receipt-issuer-verify";
 import { createReceiptForHash, hashReceiptVersioned, receiptPreimageVersioned } from "./receipt-schema";
 import { canonicalJson, sha256Hex } from "./canon";
 import { withFileLock } from "./file-lock";
@@ -84,8 +89,10 @@ import { assertSupervisorBinarySeal } from "./kernel-binary-seal";
 const SYMLINK_HOP_LIMIT = 40;
 
 /** True when `target` (absolute) is not inside `root` (absolute). */
-function escapesRoot(root: string, target: string): boolean {
-  const rel = path.relative(root, target);
+function escapesRoot(root: string, target: string, platform: NodeJS.Platform = process.platform): boolean {
+  const r = platform === "win32" ? root.toLowerCase() : root;
+  const t = platform === "win32" ? target.toLowerCase() : target;
+  const rel = path.relative(r, t);
   return rel !== "" && (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel));
 }
 
@@ -161,15 +168,52 @@ export function resolveSymlinkChain(target: string): string | undefined {
  * cannot complete. Protected-path callers must treat `undefined` as a refusal
  * (fail closed); scope classification treats it as outside.
  */
-export function resolvedInside(target: string, root: string): boolean | undefined {
+export function resolvedInside(
+  target: string,
+  root: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean | undefined {
   const resolvedTarget = resolveSymlinkChain(target);
   const resolvedRoot = resolveSymlinkChain(root);
   if (resolvedTarget === undefined || resolvedRoot === undefined) return undefined;
-  if (resolvedTarget === resolvedRoot) return true;
-  return !escapesRoot(resolvedRoot, resolvedTarget);
+  const cmpTarget = platform === "win32" ? resolvedTarget.toLowerCase() : resolvedTarget;
+  const cmpRoot = platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
+  if (cmpTarget === cmpRoot) return true;
+  return !escapesRoot(cmpRoot, cmpTarget, platform);
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+
+/**
+ * D-5: independent re-read of captured stream bytes through a temp file.
+ * `undefined` means the round trip was unavailable, so the caller reports a
+ * single observation rather than pretending to have compared two.
+ */
+/** Best-effort removal of the one-shot Windows launch credential. */
+function safeUnlink(file: string): void {
+  try {
+    unlinkSync(file);
+  } catch {
+    /* the kernel already removed it, or it never existed */
+  }
+}
+
+function rereadCapturedStream(bytes: Uint8Array | Buffer): Buffer | undefined {
+  const dir = tmpdir();
+  const file = path.join(dir, `hz-stream-${process.pid}-${randomUUID()}.bin`);
+  try {
+    writeFileSync(file, bytes);
+    return readFileSync(file);
+  } catch {
+    return undefined;
+  } finally {
+    try {
+      unlinkSync(file);
+    } catch {
+      /* already gone */
+    }
+  }
+}
 
 /** A chain's last-record anchor; "corrupt" when present but unreadable. */
 type ChainHead = { seq: number; hash: string } | "corrupt";
@@ -366,34 +410,137 @@ export function workspaceFromKernelStateDir(stateDir: string): string {
 /** Path-like tokens in a shell command (conservative; fail closed on hits). */
 function pathTokensInShellCommand(command: string): string[] {
   const out: string[] = [];
-  const re = /(?:(?:\.\.?|~)\/|\/|\.hz(?:code)?\/)[^\s;&|<>()'"`]+/g;
+  const re = /(?:(?:\.\.?|~)\/|\/|[A-Za-z]:\/|\.hz(?:code)?\/)[^\s;&|<>()'"`]+/gi;
   for (const raw of command.match(re) ?? []) {
     out.push(raw.replace(/\\+$/g, "").replace(/['"]/g, ""));
   }
   return out;
 }
 
+/** True when a single shell glob segment (e.g. `k*`, `st?te`, `[k]ernel`) can match `literal`. */
+function globSegmentMatches(pattern: string, literal: string, caseInsensitive: boolean): boolean {
+  if (!/[*?[\]]/.test(pattern)) {
+    return caseInsensitive ? pattern.toLowerCase() === literal.toLowerCase() : pattern === literal;
+  }
+  let rx = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (ch === "*") {
+      rx += ".*";
+    } else if (ch === "?") {
+      rx += ".";
+    } else if (ch === "[") {
+      const close = pattern.indexOf("]", i + 1);
+      if (close > i + 1) {
+        const cls = pattern.slice(i + 1, close).replace(/^!/, "^");
+        rx += `[${cls}]`;
+        i = close;
+      } else {
+        rx += "\\[";
+      }
+    } else {
+      rx += ch.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+  }
+  rx += "$";
+  try {
+    return new RegExp(rx, caseInsensitive ? "i" : "").test(literal);
+  } catch {
+    return true; // fail closed on malformed glob character class
+  }
+}
+
+/** True when a shell command contains a globbed path referencing `.hz/state/kernel` or `.hzcode/kernel`. */
+function shellCommandHasGlobbedKernelState(command: string, caseInsensitive: boolean): boolean {
+  if (!/[*?[\]]/.test(command)) return false;
+  const tokens = command.split(/[\s;&|<>()`]+/).filter((t) => t !== "");
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/['"]/g, "").replace(/\\/g, "/");
+    const segs = token.split("/").filter((s) => s !== "");
+    for (let i = 0; i < segs.length; i += 1) {
+      const s0 = segs[i]!;
+      const s1 = segs[i + 1];
+      const s2 = segs[i + 2];
+      if (s1 === undefined) continue;
+      if (globSegmentMatches(s0, ".hz", caseInsensitive)) {
+        if (s1 === "**" || s1.includes("**")) return true;
+        if (s2 !== undefined && globSegmentMatches(s1, "state", caseInsensitive)) {
+          if (s2 === "**" || s2.includes("**") || globSegmentMatches(s2, "kernel", caseInsensitive)) return true;
+        }
+      }
+      if (globSegmentMatches(s0, ".hzcode", caseInsensitive)) {
+        if (s1 === "**" || s1.includes("**") || globSegmentMatches(s1, "kernel", caseInsensitive)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Normalize a path to forward slashes; handle Windows drive paths even on POSIX hosts. */
+function normalizePathForCheck(p: string): string {
+  const fwd = p.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(fwd)) {
+    return path.posix.normalize(fwd).replace(/\/+$/, "");
+  }
+  return path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/** True when normalized `target` equals or is inside normalized `root`. */
+function normalizedPathInside(target: string, root: string, caseInsensitive: boolean): boolean {
+  const t = caseInsensitive ? target.toLowerCase() : target;
+  const r = caseInsensitive ? root.toLowerCase() : root;
+  return t === r || t.startsWith(`${r}/`);
+}
+
 /**
  * True when a shell command string names (or resolves into) the kernel state
  * directory. Absolute state-dir substrings, canonical/legacy relative markers,
- * and path-like tokens resolved against the workspace are checked. Unresolvable
- * symlink walks count as a hit (fail closed).
+ * quoted/globbed references, Windows drive paths, and path-like tokens resolved
+ * against the workspace are checked. Unresolvable symlink walks count as a hit
+ * (fail closed).
  */
-export function shellCommandReferencesKernelState(command: string, stateDir: string): boolean {
+export function shellCommandReferencesKernelState(
+  command: string,
+  stateDir: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   if (typeof command !== "string" || command.trim() === "") return false;
+  const caseInsensitive = platform === "win32";
   const normalized = command.replace(/\\/g, "/");
-  const stateNorm = path.resolve(stateDir).replace(/\\/g, "/");
-  if (normalized.includes(stateNorm)) return true;
+  // Strip shell quotes so `".hz/state/kernel"` or `.hz/"state"/kernel` cannot evade substring checks.
+  const dequoted = normalized.replace(/['"]/g, "");
+  const stateNorm = normalizePathForCheck(stateDir);
+  const cmpNorm = caseInsensitive ? normalized.toLowerCase() : normalized;
+  const cmpDequoted = caseInsensitive ? dequoted.toLowerCase() : dequoted;
+  const cmpState = caseInsensitive ? stateNorm.toLowerCase() : stateNorm;
+
+  if (cmpNorm.includes(cmpState) || cmpDequoted.includes(cmpState)) return true;
   for (const marker of [".hz/state/kernel", ".hzcode/kernel"]) {
-    if (normalized.includes(marker)) return true;
+    if (cmpNorm.includes(marker) || cmpDequoted.includes(marker)) return true;
   }
-  const workspace = workspaceFromKernelStateDir(stateDir);
-  for (const token of pathTokensInShellCommand(normalized)) {
-    const abs =
-      token.startsWith("/") || /^[A-Za-z]:\//.test(token)
-        ? path.resolve(token)
-        : path.resolve(workspace, token);
-    if (resolvedInside(abs, stateDir) !== false) return true;
+  if (shellCommandHasGlobbedKernelState(normalized, caseInsensitive)) return true;
+
+  const isWinDriveState = /^[A-Za-z]:\//.test(stateNorm);
+  const workspace = isWinDriveState
+    ? stateNorm.replace(/\/(?:\.hz\/state\/kernel|\.hzcode\/kernel)$/i, "")
+    : workspaceFromKernelStateDir(stateDir);
+
+  for (const source of [normalized, dequoted]) {
+    for (const token of pathTokensInShellCommand(source)) {
+      if (/^[A-Za-z]:\//.test(token)) {
+        const tokenNorm = normalizePathForCheck(token);
+        if (normalizedPathInside(tokenNorm, stateNorm, caseInsensitive)) return true;
+        if (!isWinDriveState && resolvedInside(path.resolve(token), stateDir, platform) !== false) return true;
+        continue;
+      }
+      if (isWinDriveState) {
+        const joined = token.startsWith("/") ? token : path.posix.normalize(`${workspace}/${token}`);
+        if (normalizedPathInside(joined, stateNorm, caseInsensitive)) return true;
+        continue;
+      }
+      const abs = token.startsWith("/") ? path.resolve(token) : path.resolve(workspace, token);
+      if (resolvedInside(abs, stateDir, platform) !== false) return true;
+    }
   }
   return false;
 }
@@ -414,20 +561,22 @@ export function shellCommandReferencesKernelState(command: string, stateDir: str
  * allow. Keep the two lists in step; the Rust rule is authoritative when a
  * trusted kernel is present.
  */
-export function isSensitiveWriteTarget(target: string): boolean {
-  const parts = path
-    .resolve(target)
+function isSensitivePathString(resolvedPath: string): boolean {
+  const parts = resolvedPath
     .replace(/\\/g, "/")
     .split("/")
     .filter((part) => part !== "")
     .map((part) => part.toLowerCase());
   const base = parts[parts.length - 1] ?? "";
   for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i] === ".husky" && i + 1 < parts.length) return true;
+    if (parts[i] === ".vscode" && parts[i + 1] === "tasks.json" && i + 2 === parts.length) return true;
     if (parts[i] !== ".git") continue;
     if (parts[i + 1] === "hooks") return true;
     if (parts[i + 1] === "config" && i + 2 === parts.length) return true;
   }
   if (base === ".env" || base.startsWith(".env.")) return true;
+  if (base === "dockerfile" || base.startsWith("dockerfile.")) return true;
   if (
     [
       "package.json",
@@ -436,11 +585,20 @@ export function isSensitiveWriteTarget(target: string): boolean {
       "bun.lockb",
       "pnpm-lock.yaml",
       "yarn.lock",
+      "cargo.toml",
       "cargo.lock",
+      "build.rs",
+      "pyproject.toml",
+      ".npmrc",
+      ".pypirc",
+      ".netrc",
+      ".gitmodules",
+      ".gitconfig",
+      "docker-compose.yml",
+      "docker-compose.yaml",
       ".gitlab-ci.yml",
       "makefile",
       "gnumakefile",
-      "dockerfile",
       ".bashrc",
       ".bash_profile",
       ".zshrc",
@@ -457,22 +615,38 @@ export function isSensitiveWriteTarget(target: string): boolean {
   return false;
 }
 
-export function protectedPathRefusal(action: GuardAction, stateDir: string): string | undefined {
+export function isSensitiveWriteTarget(target: string): boolean {
+  const resolved = resolveSymlinkChain(target);
+  if (resolved === undefined) return true; // fail closed on unresolvable symlink chain
+  return isSensitivePathString(path.resolve(target)) || isSensitivePathString(resolved);
+}
+
+export function protectedPathRefusal(
+  action: GuardAction,
+  stateDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
   if (action === null || typeof action !== "object") return undefined;
   if (action.kind === "fs.write") {
     const target = typeof action.target === "string" ? action.target : "";
     if (target === "") return undefined;
+    // Handle Windows drive-letter paths (e.g. C:\... / C:/...) case-insensitively on win32.
+    if (platform === "win32" && (/^[A-Za-z]:[\\/]/.test(target) || /^[A-Za-z]:[\\/]/.test(stateDir))) {
+      if (normalizedPathInside(normalizePathForCheck(target), normalizePathForCheck(stateDir), true)) {
+        return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
+      }
+    }
     // The chain walk resolves dangling links too: a link to `<state>/policy.json`
     // that does not exist yet still lands inside the state dir. An unresolvable
     // walk (a link loop) is a refusal as well — undefined must never widen a write.
-    const inside = resolvedInside(path.resolve(target), stateDir);
+    const inside = resolvedInside(path.resolve(target), stateDir, platform);
     if (inside === false) return undefined;
     return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
   }
   if (action.kind === "shell.exec") {
     const target = typeof action.target === "string" ? action.target : "";
     if (target === "") return undefined;
-    if (!shellCommandReferencesKernelState(target, stateDir)) return undefined;
+    if (!shellCommandReferencesKernelState(target, stateDir, platform)) return undefined;
     return `HZ_PRECONDITION_FAILED: kernel-state-protected: shell.exec command references the kernel state directory (${stateDir})`;
   }
   return undefined;
@@ -494,9 +668,14 @@ export function isMemoryManifestWrite(action: GuardAction, stateDir: string): bo
   if (action === null || typeof action !== "object" || action.kind !== "fs.write") return false;
   const target = typeof action.target === "string" ? action.target : "";
   if (target === "") return false;
+  const resolvedTarget = resolveSymlinkChain(target);
+  if (resolvedTarget === undefined) return true; // fail closed on unresolvable symlink chain
   const manifest = memoryManifestPathForStateDir(stateDir);
-  const resolvedTarget = path.resolve(target);
-  if (resolvedInside(resolvedTarget, path.dirname(manifest)) === false) return false;
+  const resolvedManifestDir = resolveSymlinkChain(path.dirname(manifest));
+  if (resolvedManifestDir === undefined) return true;
+  const inside = resolvedInside(resolvedTarget, resolvedManifestDir);
+  if (inside === undefined) return true;
+  if (inside === false) return false;
   return path.basename(resolvedTarget).toLowerCase() === "memory.md";
 }
 
@@ -519,8 +698,22 @@ const BOUND_LEASE_MS = 120_000;
  * for checks carrying the same session id — a subagent child re-enters approval
  * instead of inheriting its parent's "always" grant (docs/09 R-tools-32).
  */
+export interface LeaseMintOpts {
+  principal?: typeof HUMAN_APPROVAL_PRINCIPAL;
+  humanSig?: string;
+  humanPubKeyHex?: string;
+  humanNonce?: string;
+  humanIssuedAt?: number;
+  intentDigest?: string;
+}
+
 interface OwnedLease extends Lease {
   owner?: string;
+  humanSig?: string;
+  humanPubKeyHex?: string;
+  humanNonce?: string;
+  humanIssuedAt?: number;
+  intentDigest?: string;
 }
 
 function leaseVisibleTo(lease: Lease, sessionId: string | undefined): boolean {
@@ -649,6 +842,14 @@ export function resolveKernelSocketPath(
  * fallback path, and it is what keeps the product usable on a machine where the
  * Rust binary has not been built yet.
  */
+/** Result of querying the R170 cross-process reconcile barrier (`reconcile.gate`). */
+export interface ReconcileBarrierStatus {
+  blocked: boolean;
+  unresolvedCount: number;
+  unresolvedIds: string[];
+  reason?: string;
+}
+
 export class LocalKernel {
   readonly stateDir: string;
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -1133,6 +1334,19 @@ export class LocalKernel {
     if (issuer.ok === false) {
       return { ok: false, count, brokenAt: issuer.seq ?? count };
     }
+    // R172 strict parity with Rust `receipts.rs` and the workspace verifier:
+    // every v2 row must be keyed when HZ_R172_REQUIRE_KEYED=1.
+    if (process.env.HZ_R172_REQUIRE_KEYED === "1") {
+      const firstV2 = chainRows.find((r) => (r as { schemaVersion?: number }).schemaVersion === 2);
+      if (firstV2 !== undefined) {
+        const key = loadReceiptIssuerKeyFromStateDirSync(this.stateDir);
+        if (key === undefined) return { ok: false, count, brokenAt: firstV2.seq };
+        for (const receipt of chainRows) {
+          if ((receipt as { schemaVersion?: number }).schemaVersion !== 2) continue;
+          if (!verifyReceiptIssuerStamp(receipt, key)) return { ok: false, count, brokenAt: receipt.seq };
+        }
+      }
+    }
     return { ok: true, count };
   }
 
@@ -1186,7 +1400,7 @@ export class LocalKernel {
       if (exactMatch) {
         this.leases.delete(exactMatch.leaseId);
         return wire({
-          decision: "allow",
+          decision: "ask",
           leaseId: exactMatch.leaseId,
           reason: `lease ${exactMatch.leaseId} (exact) covers sensitive-write ${action.kind} on ${action.target} (consumed)`,
         });
@@ -1214,7 +1428,7 @@ export class LocalKernel {
     if (heldMatch) {
       this.leases.delete(heldMatch.leaseId);
       return wire({
-        decision: "allow",
+        decision: "ask",
         leaseId: heldMatch.leaseId,
         reason: `lease ${heldMatch.leaseId} (${heldMatch.pattern}) covers ${action.kind} on ${action.target} (consumed)`,
       });
@@ -1233,7 +1447,7 @@ export class LocalKernel {
       if (grant) {
         const bound = this.mintBoundLease(action.kind, action.target, grant, now);
         return wire({
-          decision: "allow",
+          decision: "ask",
           leaseId: bound.leaseId,
           reason: `grant ${grant.leaseId} covers ${action.kind} on ${action.target} (minted one-use lease ${bound.leaseId})`,
         });
@@ -1259,7 +1473,7 @@ export class LocalKernel {
       }
       const leaseId = newId();
       return wire({
-        decision: "allow",
+        decision: "ask",
         leaseId,
         reason: `policy allow: ${allow.kind} @ ${allow.scope} (action ${action.kind} on ${action.target}; minted one-use lease ${leaseId})`,
       });
@@ -1273,7 +1487,7 @@ export class LocalKernel {
     pattern: string,
     ttlMs: number,
     sessionId?: string,
-    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+    opts?: LeaseMintOpts,
   ): Promise<Lease> {
     // The Rust kernel refuses an empty pattern (string_param); mirror that here
     // instead of widening it to `*`, or one approval would mean two things.
@@ -1305,6 +1519,11 @@ export class LocalKernel {
       lease.owner = opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? `human:${sessionId}` : sessionId;
       if (opts?.principal === HUMAN_APPROVAL_PRINCIPAL) lease.principal = HUMAN_APPROVAL_PRINCIPAL;
     }
+    if (typeof opts?.humanSig === "string") lease.humanSig = opts.humanSig;
+    if (typeof opts?.humanPubKeyHex === "string") lease.humanPubKeyHex = opts.humanPubKeyHex;
+    if (typeof opts?.humanNonce === "string") lease.humanNonce = opts.humanNonce;
+    if (typeof opts?.humanIssuedAt === "number") lease.humanIssuedAt = opts.humanIssuedAt;
+    if (typeof opts?.intentDigest === "string") lease.intentDigest = opts.intentDigest;
     this.leases.set(lease.leaseId, lease);
     return lease;
   }
@@ -1321,7 +1540,7 @@ export class LocalKernel {
     pattern: string,
     ttlMs: number,
     sessionId?: string,
-    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+    opts?: LeaseMintOpts,
   ): Promise<Lease> {
     if (typeof pattern !== "string" || pattern === "") throw new Error("grant pattern must be a non-empty string");
     if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(kind)) {
@@ -1342,6 +1561,11 @@ export class LocalKernel {
       grant.owner = opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? `human:${sessionId}` : sessionId;
       if (opts?.principal === HUMAN_APPROVAL_PRINCIPAL) grant.principal = HUMAN_APPROVAL_PRINCIPAL;
     }
+    if (typeof opts?.humanSig === "string") grant.humanSig = opts.humanSig;
+    if (typeof opts?.humanPubKeyHex === "string") grant.humanPubKeyHex = opts.humanPubKeyHex;
+    if (typeof opts?.humanNonce === "string") grant.humanNonce = opts.humanNonce;
+    if (typeof opts?.humanIssuedAt === "number") grant.humanIssuedAt = opts.humanIssuedAt;
+    if (typeof opts?.intentDigest === "string") grant.intentDigest = opts.intentDigest;
     this.grants.set(grant.leaseId, grant);
     return grant;
   }
@@ -1391,6 +1615,11 @@ export class LocalKernel {
     return lease;
   }
 
+  /** Local fallback has no cross-process Rust OwnerLog latch. */
+  async checkReconcileBarrier(): Promise<ReconcileBarrierStatus> {
+    return { blocked: false, unresolvedCount: 0, unresolvedIds: [] };
+  }
+
   async close(): Promise<void> {
     this.locks.clear();
     this.tails.clear();
@@ -1430,11 +1659,20 @@ export function resolveKernelBinary(env: Record<string, string | undefined> = pr
   const override = kernelBinOverride(env);
   if (override !== "") return existsSync(override) ? override : undefined;
   const repoRoot = path.resolve(import.meta.dir, "../../..");
-  const candidates = [
-    path.join(repoRoot, "kernel", "target", "release", "hz-kernel"),
-    path.join(repoRoot, "kernel", "target", "debug", "hz-kernel"),
+  return kernelBinaryCandidates(repoRoot, process.platform).find((candidate) => existsSync(candidate));
+}
+
+/**
+ * Candidate kernel binaries for a repo root and platform, release before debug.
+ * Windows builds carry `.exe`; looking only for the bare name meant the product
+ * never found its kernel there and silently ran untrusted/read-only.
+ */
+export function kernelBinaryCandidates(repoRoot: string, platform: string): string[] {
+  const suffix = platform === "win32" ? ".exe" : "";
+  return [
+    path.join(repoRoot, "kernel", "target", "release", `hz-kernel${suffix}`),
+    path.join(repoRoot, "kernel", "target", "debug", `hz-kernel${suffix}`),
   ];
-  return candidates.find((candidate) => existsSync(candidate));
 }
 
 /** Companion binary for `HZ_SANDBOX_EXEC=1` child wrapping (docs/33 §5.3). */
@@ -1484,7 +1722,9 @@ export class KernelClient {
   private socket?: net.Socket;
   /** When true, close/disconnect must not SIGKILL the kernel (orphan survive). */
   private detachSurvive = false;
+  private static readonly MAX_TIMED_OUT_IDS = 256;
   private readonly pending = new Map<number, PendingCall>();
+  private readonly timedOutIds = new Set<number>();
   private writeChain: Promise<void> = Promise.resolve();
   private stdoutBuffer = "";
   private nextId = 1;
@@ -1501,6 +1741,10 @@ export class KernelClient {
   #controlSecret?: string;
   private reason = "local fallback";
   private startPromise?: Promise<KernelMode>;
+  /** Windows launch credential file, cleaned on every exit path (ruling 908/915). */
+  private windowsLaunchControlFile?: string;
+  /** Windows one-shot control named-pipe server, closed after first delivery or teardown. */
+  private windowsControlServer?: net.Server;
   private exitHook?: () => void;
   private readonly diagnostics: string[] = [];
   /**
@@ -1638,11 +1882,70 @@ export class KernelClient {
       // allowlist without proving control of this launch-private pipe.
       // The key is NOT passed in argv/environment or serialized in a result.
       const controlSecret = randomBytes(32).toString("hex");
-      const spawnArgs = ["--state-dir", this.stateDir, "--control-fd", "3"];
+      // Windows has no inherited fd 3 for a Node/Bun child. The same launch
+      // secret travels in a one-shot private file inside the kernel state dir
+      // that the kernel reads and DELETES before serving (ruling 908).
+      const windowsControl = process.platform === "win32";
+      let launchControlFile: string | undefined;
+      let controlPipeName: string | undefined;
+      let controlServer: net.Server | undefined;
+      // H-29 (ruling 917): the parent owns a private named pipe and writes the
+      // secret to the first connection. Bun 1.3.14 crashes on a Windows
+      // named-pipe CLIENT socket (panic "No handlers set on Socket"), so the
+      // kernel-owned server primitive (ruling 923) stays unwired here.
+      if (windowsControl) {
+        const pipePath = `\\\\.\\pipe\\hz-control-${process.pid}-${randomUUID()}`;
+        try {
+          let delivered = false;
+          const server = net.createServer((sock) => {
+            sock.on("error", () => undefined);
+            if (delivered) {
+              sock.destroy();
+              return;
+            }
+            delivered = true;
+            sock.end(`${controlSecret}\n`);
+            if (this.windowsControlServer === server) {
+              this.windowsControlServer = undefined;
+            }
+            try {
+              server.close();
+            } catch {
+              /* already closed */
+            }
+          });
+          await new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(pipePath, () => resolve());
+          });
+          controlServer = server;
+          this.windowsControlServer = server;
+          controlPipeName = pipePath;
+        } catch (err) {
+          controlServer?.close();
+          controlServer = undefined;
+          this.closeWindowsControlServer();
+          this.capture(`control pipe unavailable (${errorMessage(err)}); using the one-shot control file`);
+        }
+        if (controlPipeName === undefined) {
+          mkdirSync(this.stateDir, { recursive: true });
+          launchControlFile = path.join(
+            this.stateDir,
+            `hzk.launch.${process.pid}.${randomUUID()}.control`,
+          );
+          writeFileSync(launchControlFile, `${controlSecret}\n`, { mode: 0o600 });
+          this.windowsLaunchControlFile = launchControlFile;
+        }
+      }
+      const spawnArgs = controlPipeName !== undefined
+        ? ["--state-dir", this.stateDir, "--control-pipe", controlPipeName]
+        : windowsControl
+          ? ["--state-dir", this.stateDir, "--control-file", launchControlFile as string]
+          : ["--state-dir", this.stateDir, "--control-fd", "3"];
       if (socketPath) spawnArgs.push("--socket", socketPath);
       const child = spawn(binary, spawnArgs, {
         cwd: this.workspace,
-        stdio: ["pipe", "pipe", "pipe", "pipe"],
+        stdio: windowsControl ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
         // Explicit env snapshot at spawn: a runtime mutation of process.env
         // (HZ_ANCHOR_KEY set just before start) must reach the child, and the
         // child must never inherit anything else implicitly. Relying on the
@@ -1660,10 +1963,12 @@ export class KernelClient {
       // failed spawns have null streams, and would otherwise raise an
       // unhandled error even though startBinary's try/catch ran.
       child.on("error", (err: Error) => this.fallBack(`kernel process error: ${err.message}`));
-      const controlPipe = child.stdio[3] as Writable | null;
+      const controlPipe = windowsControl ? null : (child.stdio[3] as Writable | null);
       if (!child.stdin || !child.stdout || !child.stderr ||
-          !controlPipe || typeof controlPipe.end !== "function") {
-        throw new Error("private kernel control pipe unavailable");
+          (!windowsControl && (!controlPipe || typeof controlPipe.end !== "function"))) {
+        if (launchControlFile !== undefined) safeUnlink(launchControlFile);
+        this.closeWindowsControlServer();
+        throw new Error("private kernel control channel unavailable");
       }
       this.#controlSecret = controlSecret;
       // H-29 / 632: seal control secret for detach reattach (mode 0600).
@@ -1678,11 +1983,13 @@ export class KernelClient {
       }
       // A failed/old child can close fd 3 before the parent writes. Absorb
       // EPIPE as a kernel-start failure, not an unhandled process exception.
-      controlPipe.on("error", (error: Error) =>
-        this.capture(`private kernel control pipe: ${error.message}`),
-      );
+      if (controlPipe !== null) {
+        controlPipe.on("error", (error: Error) =>
+          this.capture(`private kernel control pipe: ${error.message}`),
+        );
+      }
       this.wire(child);
-      controlPipe.end(`${controlSecret}\n`);
+      if (controlPipe !== null) controlPipe.end(`${controlSecret}\n`);
 
       // Prefer socket RPC once the durable listener is up (stdio stays as
       // fallback drain on the kernel side).
@@ -1717,7 +2024,13 @@ export class KernelClient {
       return this.modeValue;
     } catch (err) {
       this.capture(`start failed: ${errorMessage(err)}`);
-      // Failed starts must never leave a half-bound orphan listener.
+      // Failed starts must never leave a half-bound orphan listener, nor a
+      // one-shot Windows launch credential on disk.
+      this.closeWindowsControlServer();
+      if (this.windowsLaunchControlFile !== undefined) {
+        safeUnlink(this.windowsLaunchControlFile);
+        this.windowsLaunchControlFile = undefined;
+      }
       await this.disconnectTransport({ killOrphan: true });
       this.setMode("untrusted", `kernel start failed (${errorMessage(err)}) — using the local fallback`);
       return this.modeValue;
@@ -1834,6 +2147,10 @@ export class KernelClient {
     if (id < 0) return; // unsolicited line
     const pending = this.pending.get(id);
     if (!pending) {
+      if (this.timedOutIds.delete(id)) {
+        this.capture(`discarded late response for timed-out request id ${id}`);
+        return;
+      }
       this.fallBack(`kernel answered unknown request id ${id}`);
       return;
     }
@@ -1862,7 +2179,20 @@ export class KernelClient {
     this.setMode("untrusted", reason);
   }
 
+  private closeWindowsControlServer(): void {
+    const srv = this.windowsControlServer;
+    this.windowsControlServer = undefined;
+    if (srv) {
+      try {
+        srv.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+
   private async disconnectTransport(opts: { killOrphan: boolean }): Promise<void> {
+    this.closeWindowsControlServer();
     const socket = this.socket;
     this.socket = undefined;
     if (socket) {
@@ -1947,6 +2277,12 @@ export class KernelClient {
         const call = this.pending.get(id);
         if (!call) return;
         this.pending.delete(id);
+        this.timedOutIds.add(id);
+        while (this.timedOutIds.size > KernelClient.MAX_TIMED_OUT_IDS) {
+          const oldest = this.timedOutIds.values().next().value;
+          if (oldest === undefined) break;
+          this.timedOutIds.delete(oldest);
+        }
         call.reject(new Error(`kernel timeout after ${timeoutMs}ms (${method})`));
       }, timeoutMs);
       this.pending.set(id, {
@@ -1982,6 +2318,14 @@ export class KernelClient {
     switch (method) {
       case "ping":
         return this.local.ping() as unknown as Promise<KernelRequestMap[M]["result"]>;
+      case "doctor.statusz": {
+        // In-process fallback: ready + version only; no Rust OwnerLog counts.
+        return this.local.ping().then((localPing) => ({
+          ready: true,
+          version: localPing.version,
+          uptimeMs: 0,
+        })) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      }
       case "log.append":
         return this.local.appendEvent(String(p.stream), p.event as EventSeed) as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "log.read": {
@@ -2011,25 +2355,37 @@ export class KernelClient {
           typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "guard.lease": {
-        const principal =
-          p.principal === HUMAN_APPROVAL_PRINCIPAL ? ({ principal: HUMAN_APPROVAL_PRINCIPAL } as const) : undefined;
+        const mintOpts: LeaseMintOpts = {
+          ...(p.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+          ...(typeof p.humanSig === "string" ? { humanSig: p.humanSig } : {}),
+          ...(typeof p.humanPubKeyHex === "string" ? { humanPubKeyHex: p.humanPubKeyHex } : {}),
+          ...(typeof p.humanNonce === "string" ? { humanNonce: p.humanNonce } : {}),
+          ...(typeof p.humanIssuedAt === "number" ? { humanIssuedAt: p.humanIssuedAt } : {}),
+          ...(typeof p.intentDigest === "string" ? { intentDigest: p.intentDigest } : {}),
+        };
         return this.local.makeLease(
           p.kind as GuardKind,
           String(p.pattern ?? "*"),
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
-          principal,
+          Object.keys(mintOpts).length > 0 ? mintOpts : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       }
       case "guard.grant": {
-        const principal =
-          p.principal === HUMAN_APPROVAL_PRINCIPAL ? ({ principal: HUMAN_APPROVAL_PRINCIPAL } as const) : undefined;
+        const mintOpts: LeaseMintOpts = {
+          ...(p.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+          ...(typeof p.humanSig === "string" ? { humanSig: p.humanSig } : {}),
+          ...(typeof p.humanPubKeyHex === "string" ? { humanPubKeyHex: p.humanPubKeyHex } : {}),
+          ...(typeof p.humanNonce === "string" ? { humanNonce: p.humanNonce } : {}),
+          ...(typeof p.humanIssuedAt === "number" ? { humanIssuedAt: p.humanIssuedAt } : {}),
+          ...(typeof p.intentDigest === "string" ? { intentDigest: p.intentDigest } : {}),
+        };
         return this.local.makeGrant(
           p.kind as GuardKind,
           String(p.pattern ?? "*"),
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
-          principal,
+          Object.keys(mintOpts).length > 0 ? mintOpts : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       }
       case "guard.grant.query":
@@ -2074,11 +2430,14 @@ export class KernelClient {
         ): string => {
           const resolvedRoot = path.resolve(root);
           const candidate = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.join(resolvedRoot, rawPath);
-          const rootPrefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : `${resolvedRoot}${path.sep}`;
-          if (candidate !== resolvedRoot && !candidate.startsWith(rootPrefix)) {
+          if (resolvedInside(candidate, resolvedRoot) !== true) {
             throw new Error(`HZ_PRECONDITION_FAILED: effect.execute ${op} path must resolve inside sandboxRoot`);
           }
           return candidate;
+        };
+        const assertNotProtectedTarget = (candidate: string): void => {
+          const refusal = protectedPathRefusal({ kind: "fs.write", target: candidate }, this.stateDir);
+          if (refusal !== undefined) throw new Error(refusal);
         };
         if (kindLower === "fs.write") {
           const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
@@ -2111,6 +2470,7 @@ export class KernelClient {
             );
           }
           const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.write");
+          assertNotProtectedTarget(candidate);
           return writeBytesAtomicInSandbox(sandboxRoot, candidate, payload)
             .then(() => {
               const primary = observePostimageDigest(candidate);
@@ -2340,13 +2700,14 @@ export class KernelClient {
             }
             planned.push(entry);
           }
-          // Verify all preimages against disk before any write (LocalKernel mirror of Rust).
+          // Verify all preimages and protected-path containment before any write (LocalKernel mirror of Rust).
           for (const entry of planned) {
             const candidate = pathInsideSandbox(
               sandboxRoot,
               entry.path,
               entry.opKind === "fs.edit" ? "fs.edit" : "fs.write",
             );
+            assertNotProtectedTarget(candidate);
             if (entry.expectedPreimageDigest === null) {
               if (existsSync(candidate)) {
                 return Promise.reject(
@@ -2365,10 +2726,13 @@ export class KernelClient {
             }
           }
           for (const ren of plannedRenames) {
+            const fromCandidate = pathInsideSandbox(sandboxRoot, ren.from, "fs.rename");
+            const toCandidate = pathInsideSandbox(sandboxRoot, ren.to, "fs.rename");
+            assertNotProtectedTarget(fromCandidate);
+            assertNotProtectedTarget(toCandidate);
             if (typeof ren.expectedPreimageDigest === "string") {
-              const candidate = pathInsideSandbox(sandboxRoot, ren.from, "fs.rename");
-              const primary = observePostimageDigest(candidate);
-              const confirm = observePostimageDigest(candidate);
+              const primary = observePostimageDigest(fromCandidate);
+              const confirm = observePostimageDigest(fromCandidate);
               const stability = assessPostimageObservation(primary, confirm);
               if (!stability.observationStable || primary !== ren.expectedPreimageDigest) {
                 return Promise.reject(
@@ -2378,10 +2742,11 @@ export class KernelClient {
             }
           }
           for (const del of plannedDeletes) {
+            const delCandidate = pathInsideSandbox(sandboxRoot, del.path, "fs.delete");
+            assertNotProtectedTarget(delCandidate);
             if (typeof del.expectedPreimageDigest === "string") {
-              const candidate = pathInsideSandbox(sandboxRoot, del.path, "fs.delete");
-              const primary = observePostimageDigest(candidate);
-              const confirm = observePostimageDigest(candidate);
+              const primary = observePostimageDigest(delCandidate);
+              const confirm = observePostimageDigest(delCandidate);
               const stability = assessPostimageObservation(primary, confirm);
               if (!stability.observationStable || primary !== del.expectedPreimageDigest) {
                 return Promise.reject(
@@ -2403,7 +2768,6 @@ export class KernelClient {
             }
           }
           return (async () => {
-            const { rename: fsRename } = await import("node:fs/promises");
             const resolvedPaths: string[] = [];
             for (const entry of collapsed) {
               const candidate = pathInsideSandbox(
@@ -2411,22 +2775,25 @@ export class KernelClient {
                 entry.path,
                 entry.opKind === "fs.edit" ? "fs.edit" : "fs.write",
               );
+              assertNotProtectedTarget(candidate);
               await writeBytesAtomicInSandbox(sandboxRoot, candidate, entry.payload);
               resolvedPaths.push(candidate);
             }
             for (const ren of plannedRenames) {
               const fromPath = pathInsideSandbox(sandboxRoot, ren.from, "fs.rename");
               const toPath = pathInsideSandbox(sandboxRoot, ren.to, "fs.rename");
-              await fsRename(fromPath, toPath);
+              assertNotProtectedTarget(fromPath);
+              assertNotProtectedTarget(toPath);
+              await renameFileInSandbox(sandboxRoot, fromPath, toPath);
               // Prefer observing rename destinations; drop the source write path if renamed.
               const srcIdx = resolvedPaths.indexOf(fromPath);
               if (srcIdx >= 0) resolvedPaths[srcIdx] = toPath;
               else resolvedPaths.push(toPath);
             }
-            const { unlink } = await import("node:fs/promises");
             for (const del of plannedDeletes) {
               const delPath = pathInsideSandbox(sandboxRoot, del.path, "fs.delete");
-              await unlink(delPath);
+              assertNotProtectedTarget(delPath);
+              await deleteFileInSandbox(sandboxRoot, delPath);
               resolvedPaths.push(delPath);
             }
             const contentDigests: Array<string | null> = [];
@@ -2520,6 +2887,7 @@ export class KernelClient {
             );
           }
           const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.edit");
+          assertNotProtectedTarget(candidate);
           if (!existsSync(candidate)) {
             return Promise.reject(
               new Error("HZ_PRECONDITION_FAILED: effect.execute fs.edit requires an existing file"),
@@ -2592,6 +2960,7 @@ export class KernelClient {
             );
           }
           const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.delete");
+          assertNotProtectedTarget(candidate);
           const missing = (): boolean => !existsSync(candidate);
           return deleteFileInSandbox(sandboxRoot, candidate)
             .then(() => {
@@ -2642,6 +3011,8 @@ export class KernelClient {
           }
           const fromCandidate = pathInsideSandbox(sandboxRoot, rawFrom, "fs.rename");
           const toCandidate = pathInsideSandbox(sandboxRoot, rawTo, "fs.rename");
+          assertNotProtectedTarget(fromCandidate);
+          assertNotProtectedTarget(toCandidate);
           return renameFileInSandbox(sandboxRoot, fromCandidate, toCandidate)
             .then(() => {
               const primary = observePostimageDigest(toCandidate);
@@ -2743,8 +3114,14 @@ export class KernelClient {
             const stderrTruncated = stderrBuf.length > SHELL_STDERR_CAP;
             const stdout = stdoutTruncated ? stdoutBuf.subarray(0, SHELL_STDOUT_CAP) : stdoutBuf;
             const stderr = stderrTruncated ? stderrBuf.subarray(0, SHELL_STDERR_CAP) : stderrBuf;
-            const stdoutObs = observeCapturedShellStreamDigest(stdout);
-            const stderrObs = observeCapturedShellStreamDigest(stderr);
+            // D-5: a genuine second observation for the local fallback too — the
+            // captured bytes are written and re-read through an independent I/O
+            // path, and the digests are compared (one buffer hashed twice is not
+            // a check).
+            const stdoutSecond = rereadCapturedStream(stdout);
+            const stderrSecond = rereadCapturedStream(stderr);
+            const stdoutObs = observeCapturedShellStreamDigest(stdout, stdoutSecond);
+            const stderrObs = observeCapturedShellStreamDigest(stderr, stderrSecond);
             const resultDigestStable = shellExecResultDigestStable(stdoutObs, stderrObs);
             const result: KernelRequestMap["effect.execute"]["result"] = {
               verdict: resultDigestStable ? "settled" : "unknown",
@@ -2760,6 +3137,8 @@ export class KernelClient {
               ...(stdoutObs.observationStable && stdoutObs.digest ? { stdoutDigest: stdoutObs.digest } : {}),
               ...(stderrObs.observationStable && stderrObs.digest ? { stderrDigest: stderrObs.digest } : {}),
               ...(stdoutObs.confirmDigest ? { stdoutConfirmDigest: stdoutObs.confirmDigest } : {}),
+              stdoutDoubleObserved: stdoutObs.doubleObserved,
+              stderrDoubleObserved: stderrObs.doubleObserved,
               ...(stderrObs.confirmDigest ? { stderrConfirmDigest: stderrObs.confirmDigest } : {}),
             };
             return Promise.resolve(result) as unknown as Promise<KernelRequestMap[M]["result"]>;
@@ -2861,7 +3240,8 @@ export class KernelClient {
     // independently observed effect receipts internally; raw NDJSON callers
     // cannot forge either class on the product-bound transport.
     const authMethod = method === "guard.lease" || method === "guard.grant" ||
-      method === "guard.allowlist.amend" || method === "receipt.issue";
+      method === "guard.allowlist.amend" || method === "receipt.issue" ||
+      method === "effect.owner.recover";
     if (this.modeValue === "trusted" && (this.child || this.socket) && !this.closed) {
       try {
         if (authMethod && !this.#controlSecret) {
@@ -2913,6 +3293,11 @@ export class KernelClient {
 
   async ping(): Promise<KernelRequestMap["ping"]["result"]> {
     return this.rpc("ping", {});
+  }
+
+  /** Group G: bounded, content-free loopback diagnostic status (read-only). */
+  async doctorStatusz(): Promise<KernelRequestMap["doctor.statusz"]["result"]> {
+    return this.rpc("doctor.statusz", {});
   }
 
   /** Append one event; the log assigns seq, prevHash and hash. */
@@ -3015,7 +3400,7 @@ export class KernelClient {
     pattern: string,
     ttlMs: number,
     sessionId?: string,
-    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+    opts?: LeaseMintOpts,
   ): Promise<Lease> {
     assertHumanApprovalPathAttestationForMint(opts);
     return this.rpc("guard.lease", {
@@ -3024,6 +3409,11 @@ export class KernelClient {
       ttlMs,
       sessionId,
       ...(opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+      ...(typeof opts?.humanSig === "string" ? { humanSig: opts.humanSig } : {}),
+      ...(typeof opts?.humanPubKeyHex === "string" ? { humanPubKeyHex: opts.humanPubKeyHex } : {}),
+      ...(typeof opts?.humanNonce === "string" ? { humanNonce: opts.humanNonce } : {}),
+      ...(typeof opts?.humanIssuedAt === "number" ? { humanIssuedAt: opts.humanIssuedAt } : {}),
+      ...(typeof opts?.intentDigest === "string" ? { intentDigest: opts.intentDigest } : {}),
     } as unknown as KernelRequestMap["guard.lease"]["params"]);
   }
 
@@ -3038,7 +3428,7 @@ export class KernelClient {
     pattern: string,
     ttlMs: number,
     sessionId?: string,
-    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+    opts?: LeaseMintOpts,
   ): Promise<Lease> {
     assertHumanApprovalPathAttestationForMint(opts);
     const grant = await this.rpc("guard.grant", {
@@ -3047,6 +3437,11 @@ export class KernelClient {
       ttlMs,
       sessionId,
       ...(opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+      ...(typeof opts?.humanSig === "string" ? { humanSig: opts.humanSig } : {}),
+      ...(typeof opts?.humanPubKeyHex === "string" ? { humanPubKeyHex: opts.humanPubKeyHex } : {}),
+      ...(typeof opts?.humanNonce === "string" ? { humanNonce: opts.humanNonce } : {}),
+      ...(typeof opts?.humanIssuedAt === "number" ? { humanIssuedAt: opts.humanIssuedAt } : {}),
+      ...(typeof opts?.intentDigest === "string" ? { intentDigest: opts.intentDigest } : {}),
     } as unknown as KernelRequestMap["guard.grant"]["params"]);
     this.local.adoptGrantMirror(grant);
     return grant;
@@ -3145,6 +3540,64 @@ export class KernelClient {
   }
 
   /**
+   * R170 cross-process reconcile barrier query (`reconcile.gate` RPC).
+   * Falls back gracefully to `{ blocked: false, unresolvedCount: 0, unresolvedIds: [] }`
+   * when talking to an older kernel binary that does not implement `reconcile.gate`
+   * or when running on `LocalKernel`.
+   */
+  async checkReconcileBarrier(): Promise<ReconcileBarrierStatus> {
+    const fallback: ReconcileBarrierStatus = {
+      blocked: false,
+      unresolvedCount: 0,
+      unresolvedIds: [],
+    };
+    const strictBarrier = process.env.HZ_R170_SQLITE_BARRIER === "1";
+    if (this.modeValue !== "trusted" || (!this.child && !this.socket) || this.closed) {
+      return this.local.checkReconcileBarrier();
+    }
+    try {
+      const raw = (await this.callRemote(
+        "reconcile.gate",
+        {},
+      )) as unknown as Partial<ReconcileBarrierStatus> | null | undefined;
+      if (!raw || typeof raw !== "object") {
+        if (strictBarrier) {
+          return {
+            blocked: true,
+            unresolvedCount: 0,
+            unresolvedIds: [],
+            reason: "reconcile.gate RPC returned invalid response",
+          };
+        }
+        return fallback;
+      }
+      const unresolvedIds = Array.isArray(raw.unresolvedIds)
+        ? raw.unresolvedIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const unresolvedCount =
+        typeof raw.unresolvedCount === "number" && Number.isFinite(raw.unresolvedCount)
+          ? raw.unresolvedCount
+          : unresolvedIds.length;
+      return {
+        blocked: Boolean(raw.blocked),
+        unresolvedCount,
+        unresolvedIds,
+        ...(typeof raw.reason === "string" ? { reason: raw.reason } : {}),
+      };
+    } catch (err) {
+      if (strictBarrier) {
+        return {
+          blocked: true,
+          unresolvedCount: 0,
+          unresolvedIds: [],
+          reason: `reconcile.gate RPC error: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      return fallback;
+    }
+  }
+
+  /**
    * Release this client. In detach mode (`HZ_KERNEL_DETACH` / `HZ_KERNEL_SOCKET`)
    * the kernel orphan is left listening for H-29 reattach; otherwise the child
    * is SIGTERM/SIGKILL'd.
@@ -3159,6 +3612,12 @@ export class KernelClient {
       call.reject(new Error("kernel client closed"));
     }
     await this.disconnectTransport({ killOrphan: !this.detachSurvive });
+    this.closeWindowsControlServer();
+    // A launch that never consumed its credential must not leave it behind.
+    if (this.windowsLaunchControlFile !== undefined) {
+      safeUnlink(this.windowsLaunchControlFile);
+      this.windowsLaunchControlFile = undefined;
+    }
     await this.local.close();
   }
 }

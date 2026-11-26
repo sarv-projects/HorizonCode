@@ -14,9 +14,7 @@ pub fn recheck_path_in_sandbox(
     expected_resolved: Option<&Path>,
 ) -> Result<PathBuf, String> {
     if !guard::path_contained_in(sandbox_root, candidate) {
-        return Err(
-            "HZ_PRECONDITION_FAILED: mutation path outside sandboxRoot".to_string(),
-        );
+        return Err("HZ_PRECONDITION_FAILED: mutation path outside sandboxRoot".to_string());
     }
     let resolved = guard::lexical_resolve(candidate).ok_or_else(|| {
         "HZ_PRECONDITION_FAILED: mutation path could not be re-resolved".to_string()
@@ -89,9 +87,7 @@ pub fn verify_fd_contained_in_sandbox(
             );
         }
         if !guard::path_contained_in(sandbox_root, _opened_path) {
-            return Err(
-                "HZ_PRECONDITION_FAILED: opened path outside sandboxRoot".to_string(),
-            );
+            return Err("HZ_PRECONDITION_FAILED: opened path outside sandboxRoot".to_string());
         }
         Ok(())
     }
@@ -123,10 +119,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn recheck_refuses_resolution_move() {
-        #[cfg(not(unix))]
-        return;
-
         let sandbox = fresh_sandbox("move");
         let candidate = sandbox.join("a.txt");
         fs::write(&candidate, b"x").unwrap();

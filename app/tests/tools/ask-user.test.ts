@@ -73,4 +73,59 @@ describe("ask_user", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("declined");
   });
+
+  test("multi_select parses comma-separated indices and labels", async () => {
+    const ctx = mockToolContext({
+      askUser: async () => "1, 3",
+    });
+    const result = await askUserTool.execute(
+      {
+        question: "Select multiple features",
+        options: ["auth", "payments", "analytics", "search"],
+        multi_select: true,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("auth, analytics");
+  });
+
+  test("timeout_ms falls back to default when user takes too long", async () => {
+    const ctx = mockToolContext({
+      askUser: async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return "slow answer";
+      },
+    });
+    const result = await askUserTool.execute(
+      {
+        question: "Continue?",
+        options: ["yes", "no"],
+        default: "yes",
+        timeout_ms: 20,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("yes");
+  });
+
+  test("timeout_ms fails when user times out and no default provided", async () => {
+    const ctx = mockToolContext({
+      askUser: async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return "slow answer";
+      },
+    });
+    const result = await askUserTool.execute(
+      {
+        question: "Continue?",
+        options: ["yes", "no"],
+        timeout_ms: 20,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("timed out");
+  });
 });

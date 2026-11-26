@@ -99,4 +99,33 @@ describe("egress connect proxy", () => {
       echo.close();
     }
   });
+
+  test("refuseNonPublic: a resolved non-public IP is refused through the CONNECT handler", async () => {
+    const proxy = await startEgressConnectProxy({
+      forward: true,
+      policy: [{ host: "public.example", decision: "allow" }],
+      resolve: async () => ["169.254.169.254"], // metadata endpoint
+      refuseNonPublic: true,
+    });
+    try {
+      // Use a raw socket so the CONNECT response line is observable.
+      const { socket } = await new Promise<{ socket: net.Socket; head: Buffer }>((resolve, reject) => {
+        const s = net.connect(proxy.port, "127.0.0.1", () => resolve({ socket: s, head: Buffer.alloc(0) }));
+        s.once("error", reject);
+      });
+      socket.write(`CONNECT public.example:443 HTTP/1.1\r\nHost: public.example:443\r\n\r\n`);
+      const status = await new Promise<string>((resolve, reject) => {
+        let buf = "";
+        socket.on("data", (d) => {
+          buf += d.toString("latin1");
+          if (buf.includes("\r\n")) resolve(buf.split("\r\n")[0]!);
+        });
+        socket.once("error", reject);
+      });
+      expect(status).toContain("502");
+      socket.destroy();
+    } finally {
+      proxy.stop();
+    }
+  });
 });

@@ -23,7 +23,12 @@ import {
 } from "./banks";
 import { loadMemoryManifest, loadMemoryTopicBodies } from "./manifest";
 import { mmrLiteSelect } from "./mmr-lite";
+import { assertSqliteReconcileBarrierClear } from "../session";
 import { metricContract } from "../metrics";
+import { sha256Hex } from "../canon";
+import { reciprocalRankFusion } from "./rrf";
+import { storeDayDecay } from "./decay";
+import { applySupersession, factKey, type MemoryFactRow } from "./supersession";
 
 const TABLE = "memory_fts";
 
@@ -41,6 +46,10 @@ export type MemorySearchOptions = {
    * `sharedMemorySearch` enables this by default.
    */
   diversify?: boolean;
+  /** When true, fuse RRF + store-day decay + supersession (opt-in; default false). */
+  rank?: boolean;
+  /** Optional content→storedAtMs overrides used by ranked decay/supersession. */
+  storedAt?: Map<string, number>;
 };
 
 export const MEMORY_FACT_MAX_CHARS = 5000;
@@ -107,6 +116,15 @@ function openDbAt(dbPath: string): Database {
   } else {
     migrateLegacyFtsIfNeeded(db);
   }
+  // ADDITIVE (plan Task 24): optional store-day metadata. No backfill of
+  // existing FTS rows; an absent row means "unknown age" = no decay.
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS memory_fact_meta (content_sha256 TEXT PRIMARY KEY, stored_at TEXT NOT NULL);`,
+  );
+  // V-20: per-bank freshness watermark for a fully rebuilt recall index.
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS memory_index_meta (bank TEXT PRIMARY KEY, watermark TEXT NOT NULL, model_fingerprint TEXT NOT NULL);`,
+  );
   chmodSqliteFiles(dbPath);
   return db;
 }
@@ -132,13 +150,75 @@ function dbForBank(workspace: string, bank: MemoryBankId, home?: string): Databa
   return bankStorageKind(bank) === "workspace" ? openWorkspaceDb(workspace) : openUserDb(home);
 }
 
+/**
+ * V-20: stable fingerprint of the model that produced a recall index. Derived
+ * from the active provider/model ids, not a hash of weights (which the runtime
+ * cannot observe). Both ids are additive config and may be absent.
+ */
+export function modelVersionFingerprint(
+  provider: string | undefined,
+  model: string | undefined,
+): string {
+  return `${provider?.trim() || "unknown"}:${model?.trim() || "unknown"}`;
+}
+
+/** V-20: deterministic watermark of the facts and the model fingerprint. */
+export function memoryIndexWatermark(
+  facts: readonly string[],
+  modelFingerprint: string,
+): string {
+  const normalized = [...facts].map((f) => f.trim()).filter((f) => f !== "").sort();
+  return sha256Hex(JSON.stringify({ facts: normalized, modelFingerprint }));
+}
+
+/** V-20: freshness metadata for a bank's rebuilt recall index, or undefined. */
+export function memoryIndexMeta(
+  workspace: string,
+  bank: MemoryBankId = PROJECT_BANK,
+  home?: string,
+): { watermark: string; modelFingerprint: string } | undefined {
+  const dbPath = memoryDbPathForBank(workspace, bank, home);
+  const db = dbForBank(workspace, bank, home);
+  try {
+    const row = db
+      .query(`SELECT watermark, model_fingerprint FROM memory_index_meta WHERE bank=?`)
+      .get(bank) as { watermark: string; model_fingerprint: string } | null;
+    return row === null
+      ? undefined
+      : { watermark: row.watermark, modelFingerprint: row.model_fingerprint };
+  } finally {
+    closeDb(db, dbPath);
+  }
+}
+
+/**
+ * V-20 (ruling 930): refresh a bank's watermark once per incremental call,
+ * preserving whatever model fingerprint a full rebuild recorded. The rescan is
+ * per CALL, not per fact (a per-fact scan was rejected as a perf regression).
+ */
+function refreshIndexWatermark(db: Database, bank: MemoryBankId): void {
+  const meta = db
+    .query(`SELECT model_fingerprint FROM memory_index_meta WHERE bank=?`)
+    .get(bank) as { model_fingerprint: string } | null;
+  const fingerprint = meta?.model_fingerprint ?? "unknown";
+  const rows = db
+    .query(`SELECT content FROM ${TABLE} WHERE bank=?`)
+    .all(bank) as Array<{ content: string }>;
+  db.prepare(
+    `INSERT INTO memory_index_meta(bank, watermark, model_fingerprint) VALUES (?, ?, ?)
+     ON CONFLICT(bank) DO UPDATE SET watermark=excluded.watermark, model_fingerprint=excluded.model_fingerprint`,
+  ).run(bank, memoryIndexWatermark(rows.map((row) => row.content), fingerprint), fingerprint);
+}
+
 /** Test hook: replace one bank's facts in the appropriate db file. */
 export function replaceMemoryIndex(
   workspace: string,
   facts: readonly string[],
   bank: MemoryBankId = PROJECT_BANK,
   home?: string,
+  opts?: { modelFingerprint?: string },
 ): void {
+  assertSqliteReconcileBarrierClear("memory.store.replaceMemoryIndex");
   const dbPath = memoryDbPathForBank(workspace, bank, home);
   const db = dbForBank(workspace, bank, home);
   db.prepare(`DELETE FROM ${TABLE} WHERE bank=?`).run(bank);
@@ -150,6 +230,13 @@ export function replaceMemoryIndex(
     }
   });
   tx(facts);
+  const fingerprint =
+    opts?.modelFingerprint ??
+    modelVersionFingerprint(process.env.HZ_PROVIDER, process.env.HZ_MODEL);
+  db.prepare(
+    `INSERT INTO memory_index_meta(bank, watermark, model_fingerprint) VALUES (?, ?, ?)
+     ON CONFLICT(bank) DO UPDATE SET watermark=excluded.watermark, model_fingerprint=excluded.model_fingerprint`,
+  ).run(bank, memoryIndexWatermark(facts, fingerprint), fingerprint);
   closeDb(db, dbPath);
 }
 
@@ -241,6 +328,83 @@ export function memorySearchHits(
   return merged.slice(0, limit);
 }
 
+/** Store-day lookup by content hash; absent row or bad timestamp = unknown. */
+function metaStoredAt(
+  workspace: string,
+  bank: MemoryBankId,
+  content: string,
+  home?: string,
+): number | undefined {
+  const db = dbForBank(workspace, bank, home);
+  try {
+    const row = db
+      .query("SELECT stored_at FROM memory_fact_meta WHERE content_sha256 = ?")
+      .get(sha256Hex(content)) as { stored_at: string } | null;
+    if (row === null) return undefined;
+    const ms = Date.parse(row.stored_at);
+    return Number.isNaN(ms) ? undefined : ms;
+  } catch {
+    return undefined;
+  } finally {
+    closeDb(db, memoryDbPathForBank(workspace, bank, home));
+  }
+}
+
+/**
+ * Opt-in additive ranking (plan Task 24): RRF-fuse per-bank BM25 lists, apply
+ * store-day decay and lexical supersession. `rank` absent/false delegates to
+ * `memorySearchHits` byte-identically. No embeddings, no contract change.
+ */
+export function memorySearchRanked(
+  workspace: string,
+  query: string,
+  opts: MemorySearchOptions & { nowMs?: number } = {},
+  home?: string,
+): MemoryHit[] {
+  if (opts.rank !== true) return memorySearchHits(workspace, query, opts, home);
+  const match = ftsQuery(query);
+  if (match === undefined) return [];
+  const limit = opts.limit ?? 8;
+  const banks = opts.banks ?? [PROJECT_BANK];
+  const perBank = Math.max(1, Math.ceil(limit / banks.length));
+
+  const rankings: string[][] = [];
+  const bankByContent = new Map<string, MemoryBankId>();
+  for (const bank of banks) {
+    const rows = searchOneBankScored(workspace, bank, match, perBank, home);
+    rankings.push(rows.map((r) => r.content));
+    for (const row of rows) {
+      if (!bankByContent.has(row.content)) bankByContent.set(row.content, bank);
+    }
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const scored = reciprocalRankFusion(rankings)
+    .map((fused) => {
+      const override = opts.storedAt?.get(fused.id);
+      const storedAtMs = override ?? metaStoredAt(
+        workspace,
+        bankByContent.get(fused.id) ?? PROJECT_BANK,
+        fused.id,
+        home,
+      );
+      const score = fused.score * (storedAtMs === undefined ? 1 : storeDayDecay(1, storedAtMs, nowMs));
+      return { id: fused.id, score, storedAtMs };
+    })
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+
+  const factRows: MemoryFactRow[] = scored.map((s) => ({
+    id: s.id,
+    content: s.id,
+    storedAtMs: s.storedAtMs ?? 0,
+  }));
+  const { active } = applySupersession(factRows);
+  return active.slice(0, limit).map((fact) => ({
+    bank: bankByContent.get(fact.id) ?? PROJECT_BANK,
+    content: fact.content,
+  }));
+}
+
 /** Back-compat: content strings only (project bank). */
 export function memorySearch(workspace: string, query: string, limit = 8): string[] {
   return memorySearchHits(workspace, query, { limit, banks: [PROJECT_BANK] }).map((h) => h.content);
@@ -272,6 +436,7 @@ export function rememberMemoryFact(
   bank: MemoryBankId = PROJECT_BANK,
   home?: string,
 ): RememberMemoryResult {
+  assertSqliteReconcileBarrierClear("memory.store.rememberMemoryFact");
   const text = content.trim();
   if (text === "") return { ok: false, reason: "empty" };
   if ([...text].length > MEMORY_FACT_MAX_CHARS) return { ok: false, reason: "too_long" };
@@ -282,6 +447,10 @@ export function rememberMemoryFact(
       .get(bank, text) as { n: number } | null;
     if (dupe !== null) return { ok: false, reason: "duplicate" };
     db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`).run(text, bank);
+    db.prepare(
+      `INSERT INTO memory_fact_meta (content_sha256, stored_at) VALUES (?, ?) ON CONFLICT(content_sha256) DO NOTHING`,
+    ).run(sha256Hex(text), new Date().toISOString());
+    refreshIndexWatermark(db, bank);
     // MEMORY.md sync is opt-in and must be Guard-admitted by the tool layer
     // (`memory_remember`) — never append from the store path.
     return { ok: true, bank, memoryIndex: "skipped" as const };
@@ -298,6 +467,7 @@ export function forgetMemoryFacts(
   opts: { bank?: MemoryBankId; query?: string; content?: string; limit?: number },
   home?: string,
 ): ForgetMemoryResult {
+  assertSqliteReconcileBarrierClear("memory.store.forgetMemoryFacts");
   const bank = opts.bank ?? PROJECT_BANK;
   const limit = opts.limit ?? 8;
   const exact = opts.content?.trim() ?? "";
@@ -331,6 +501,7 @@ export function forgetMemoryFacts(
       }
     });
     tx([...toDelete]);
+    if (deleted > 0) refreshIndexWatermark(db, bank);
     return { deleted, removed };
   } finally {
     closeDb(db, memoryDbPathForBank(workspace, bank, home));
@@ -437,3 +608,221 @@ export function memoryBanksPublication(workspace: string, home?: string): string
   }
   return blocks;
 }
+
+export interface StoredMemoryFact {
+  /** Stable SHA-256 content identifier. */
+  id: string;
+  bank: MemoryBankId;
+  content: string;
+  storedAt?: string;
+  storedAtMs: number;
+}
+
+/** Read all indexed facts (with optional store-day timestamps) for a bank. */
+export function listMemoryFacts(
+  workspace: string,
+  bank: MemoryBankId = PROJECT_BANK,
+  home?: string,
+): StoredMemoryFact[] {
+  const dbPath = memoryDbPathForBank(workspace, bank, home);
+  if (!existsSync(dbPath)) return [];
+  const db = dbForBank(workspace, bank, home);
+  try {
+    const rows = db
+      .query(`SELECT content FROM ${TABLE} WHERE bank=?`)
+      .all(bank) as Array<{ content: string }>;
+    const metaRows = db
+      .query(`SELECT content_sha256, stored_at FROM memory_fact_meta`)
+      .all() as Array<{ content_sha256: string; stored_at: string }>;
+    const metaByHash = new Map<string, string>();
+    for (const m of metaRows) metaByHash.set(m.content_sha256, m.stored_at);
+    return rows
+      .map((r) => r.content.trim())
+      .filter((c) => c.length > 0)
+      .map((content) => {
+        const id = sha256Hex(content);
+        const storedAt = metaByHash.get(id);
+        const parsed = storedAt !== undefined ? Date.parse(storedAt) : Number.NaN;
+        return {
+          id,
+          bank,
+          content,
+          ...(storedAt !== undefined ? { storedAt } : {}),
+          storedAtMs: Number.isNaN(parsed) ? 0 : parsed,
+        };
+      });
+  } finally {
+    closeDb(db, dbPath);
+  }
+}
+
+export type MemoryDeltaOp = "UPSERT" | "SUPERSEDE" | "DELETE";
+
+export interface MemoryDelta {
+  op: MemoryDeltaOp;
+  /** Optional content SHA-256 id (or exact content) of the target fact. */
+  id?: string;
+  /** Normalized lexical key (from `factKey`). */
+  key: string;
+  /** Fact content (new text for UPSERT/SUPERSEDE, target text for DELETE). */
+  text: string;
+  /** Human-readable reason for emitting this delta. */
+  reason: string;
+  /** Optional previous content being replaced by SUPERSEDE. */
+  replaces?: string;
+  /** Optional ISO-8601 timestamp to store in `memory_fact_meta`. */
+  storedAt?: string;
+}
+
+export interface ApplyMemoryDeltasResult {
+  applied: number;
+  upserted: number;
+  superseded: number;
+  deleted: number;
+  skipped: number;
+}
+
+/**
+ * Apply itemized SQLite memory deltas (`UPSERT` | `SUPERSEDE` | `DELETE`)
+ * atomically in a single transaction, respecting `HZ_R170_SQLITE_BARRIER=1`.
+ * Never rewrites monolithic Markdown files.
+ */
+export function applyMemoryDeltas(
+  workspace: string,
+  deltas: readonly MemoryDelta[],
+  opts: { bank?: MemoryBankId; home?: string; nowIso?: string } = {},
+): ApplyMemoryDeltasResult {
+  assertSqliteReconcileBarrierClear("memory.store.applyMemoryDeltas");
+  if (deltas.length === 0) {
+    return { applied: 0, upserted: 0, superseded: 0, deleted: 0, skipped: 0 };
+  }
+  const bank = opts.bank ?? PROJECT_BANK;
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const dbPath = memoryDbPathForBank(workspace, bank, opts.home);
+  const db = dbForBank(workspace, bank, opts.home);
+
+  try {
+    const selectAll = db.prepare(`SELECT content FROM ${TABLE} WHERE bank=?`);
+    const existsStmt = db.prepare(`SELECT 1 AS n FROM ${TABLE} WHERE bank=? AND content=? LIMIT 1`);
+    const insertFts = db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`);
+    const deleteFts = db.prepare(`DELETE FROM ${TABLE} WHERE bank=? AND content=?`);
+    const upsertMeta = db.prepare(
+      `INSERT INTO memory_fact_meta (content_sha256, stored_at) VALUES (?, ?)
+       ON CONFLICT(content_sha256) DO UPDATE SET stored_at=excluded.stored_at`,
+    );
+    const deleteMeta = db.prepare(`DELETE FROM memory_fact_meta WHERE content_sha256=?`);
+
+    let applied = 0;
+    let upserted = 0;
+    let superseded = 0;
+    let deleted = 0;
+    let skipped = 0;
+
+    const findById = (id: string): string[] => {
+      const rows = selectAll.all(bank) as Array<{ content: string }>;
+      return rows
+        .map((r) => r.content)
+        .filter((c) => c === id || sha256Hex(c) === id);
+    };
+
+    const findByKey = (key: string): string[] => {
+      if (key === "") return [];
+      const rows = selectAll.all(bank) as Array<{ content: string }>;
+      return rows.map((r) => r.content).filter((c) => factKey(c) === key);
+    };
+
+    const tx = db.transaction((items: readonly MemoryDelta[]) => {
+      for (const delta of items) {
+        const text = delta.text.trim();
+        const ts = delta.storedAt ?? nowIso;
+
+        if (delta.op === "UPSERT") {
+          if (text === "" || [...text].length > MEMORY_FACT_MAX_CHARS) {
+            skipped += 1;
+            continue;
+          }
+          const dupe = existsStmt.get(bank, text) as { n: number } | null;
+          if (dupe !== null) {
+            skipped += 1;
+            continue;
+          }
+          insertFts.run(text, bank);
+          upsertMeta.run(sha256Hex(text), ts);
+          upserted += 1;
+          applied += 1;
+          continue;
+        }
+
+        if (delta.op === "SUPERSEDE") {
+          if (text === "" || [...text].length > MEMORY_FACT_MAX_CHARS) {
+            skipped += 1;
+            continue;
+          }
+          const targets = new Set<string>();
+          if (delta.replaces && delta.replaces.trim() !== "") {
+            targets.add(delta.replaces.trim());
+          } else if (delta.id && delta.id.trim() !== "") {
+            for (const c of findById(delta.id.trim())) targets.add(c);
+          } else if (delta.key.trim() !== "") {
+            for (const c of findByKey(delta.key.trim())) targets.add(c);
+          }
+          for (const oldContent of targets) {
+            if (oldContent === text) continue;
+            deleteFts.run(bank, oldContent);
+            deleteMeta.run(sha256Hex(oldContent));
+          }
+          const dupe = existsStmt.get(bank, text) as { n: number } | null;
+          if (dupe === null) {
+            insertFts.run(text, bank);
+          }
+          upsertMeta.run(sha256Hex(text), ts);
+          superseded += 1;
+          applied += 1;
+          continue;
+        }
+
+        if (delta.op === "DELETE") {
+          const targets = new Set<string>();
+          if (text !== "") targets.add(text);
+          if (delta.id && delta.id.trim() !== "") {
+            for (const c of findById(delta.id.trim())) targets.add(c);
+          }
+          let removedHere = 0;
+          for (const target of targets) {
+            const res = deleteFts.run(bank, target);
+            if (res.changes > 0) {
+              removedHere += res.changes;
+              deleteMeta.run(sha256Hex(target));
+            }
+          }
+          if (removedHere > 0) {
+            deleted += removedHere;
+            applied += 1;
+          } else {
+            skipped += 1;
+          }
+        }
+      }
+    });
+
+    tx(deltas);
+    if (applied > 0) refreshIndexWatermark(db, bank);
+    return { applied, upserted, superseded, deleted, skipped };
+  } finally {
+    closeDb(db, dbPath);
+  }
+}
+
+export {
+  buildStartupMemoryMap,
+  maybeScheduleAutoDream,
+  runAutoDream,
+  shouldRunAutoDream,
+  type AutoDreamGateDecision,
+  type AutoDreamHandle,
+  type AutoDreamRunOptions,
+  type AutoDreamRunResult,
+  type AutoDreamScheduleOptions,
+  type StartupMemoryMapOptions,
+  type StartupMemoryMapResult,
+} from "./auto-dream";

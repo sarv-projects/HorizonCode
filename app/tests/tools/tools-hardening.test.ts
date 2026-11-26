@@ -205,8 +205,8 @@ function serverCommand(ws: string): string {
   return `${process.execPath} ${file}`;
 }
 
-describe("preview lifecycle is process-global", () => {
-  test("S1 starts; S2 sees the pid and stops it by id", async () => {
+describe("preview lifecycle is session-scoped (close() stops all)", () => {
+  test("S1 starts; S2 cannot see or stop S1's preview; S1 sees and stops it by id", async () => {
     const ws = scratchDir("hz-hard-sessions-");
     const command = serverCommand(ws);
     const s1 = mockToolContext({ cwd: ws, workspace: ws, sessionId: "hardening-s1" });
@@ -219,10 +219,17 @@ describe("preview lifecycle is process-global", () => {
     expect(pid).toBeGreaterThan(0);
     expect(id).not.toBe("");
 
-    const seenFromS2 = await previewTool.execute({ action: "status" }, s2);
-    expect(seenFromS2.output).toContain(`pid ${pid}`);
+    const seenFromS1 = await previewTool.execute({ action: "status" }, s1);
+    expect(seenFromS1.output).toContain(`pid ${pid}`);
 
-    const stopped = await previewTool.execute({ action: "stop", id }, s2);
+    const seenFromS2 = await previewTool.execute({ action: "status" }, s2);
+    expect(seenFromS2.output).toBe("No previews.");
+
+    const stopFromS2 = await previewTool.execute({ action: "stop", id }, s2);
+    expect(stopFromS2.output).toContain(`No preview with id ${id}`);
+    expect(alive(pid)).toBe(true);
+
+    const stopped = await previewTool.execute({ action: "stop", id }, s1);
     expect(stopped.output).toContain("Stopped preview");
     await sleep(500);
     expect(alive(pid)).toBe(false);

@@ -18,7 +18,7 @@ import { formatDuration, pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } fro
 import { formatUnknownEffectAnnouncement, screenReaderMode } from "./a11y";
 import { formatUnknownEffectNotice } from "./unknown-chip";
 import {
-  bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
+  bold, colorLevel, cyan, dim, green, red, sanitizeDisplay, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
 } from "./style";
 
 export interface RenderOptions {
@@ -44,6 +44,8 @@ export interface RenderOptions {
   unfoldDiff?: boolean;
   /** Unfold shell tool output panels (docs/13 D9). */
   unfoldOutput?: boolean;
+  /** When true, collapse intermediate tool chatter to prompt + diffstat + final response (`/focus`). */
+  focusMode?: () => boolean;
 }
 
 function envTruthy(env: Record<string, string | undefined>, key: string): boolean {
@@ -118,7 +120,7 @@ function diffLine(line: string): string {
 }
 
 function firstLine(text: unknown, limit = 1000): string {
-  const s = sanitizeText(text).trim();
+  const s = sanitizeDisplay(text).trim();
   const line = s.split("\n")[0] ?? "";
   return line.length > limit ? truncate(line, limit) : line;
 }
@@ -163,8 +165,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
   const emitArgs = (name: string, args: unknown): void => {
     ensureLineStart();
     const width = terminalWidth();
-    const compact = compactArgs(args);
-    const head = cyan("\u23fa") + " " + bold(name);
+    const compact = sanitizeText(compactArgs(args));
+    const head = cyan("\u23fa") + " " + bold(sanitizeText(name));
     const oneLine = head + (compact ? dim("(" + compact + ")") : "");
     if (!wrap || visibleWidth(oneLine) <= width) {
       write(oneLine + "\n");
@@ -177,7 +179,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     } catch {
       pretty = compact;
     }
-    const prettyLines = strip(pretty).split("\n");
+    const prettyLines = sanitizeText(pretty).split("\n");
     if (prettyLines.length > 1) {
       const first = prettyLines[0].trim();
       const last = prettyLines[prettyLines.length - 1].trim();
@@ -499,17 +501,29 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
 
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
+    const inFocus = opts.focusMode?.() === true;
     if (ev.type === "assistant.thinking") {
       // Additive event: ignored outside rich mode so the plain transcript is unchanged.
-      if (rich && typeof ev.text === "string" && ev.text !== "") {
+      if (!inFocus && rich && typeof ev.text === "string" && ev.text !== "") {
         if (thinkBuf === "") thinkStart = Date.now();
-        if (thinkBuf.length < 64_000) thinkBuf += sanitizeText(ev.text);
+        if (thinkBuf.length < 64_000) thinkBuf += sanitizeDisplay(ev.text);
       }
       return;
     }
     if (rich && ev.type !== "context.usage") flushThinking();
     if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
     if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "subagent.start" && ev.type !== "subagent.end" && ev.type !== "context.usage") flushFold();
+    if (inFocus) {
+      if (
+        ev.type === "subagent.start" ||
+        ev.type === "subagent.end" ||
+        ev.type === "subagent.event" ||
+        ev.type === "notice" ||
+        (ev.type === "tool.card" && ev.status !== "error")
+      ) {
+        return;
+      }
+    }
     switch (ev.type) {
       case "subagent.start":
       case "subagent.end":
@@ -552,17 +566,17 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       }
       case "assistant.delta": {
         sawDelta = true;
-        if (rich) mdPush(sanitizeText(ev.text));
-        else write(sanitizeText(ev.text));
+        if (rich) mdPush(sanitizeDisplay(ev.text));
+        else write(sanitizeDisplay(ev.text));
         break;
       }
       case "assistant.done": {
         // Some runtimes only emit the finished text: never swallow it.
         if (!sawDelta && typeof ev.text === "string" && ev.text.trim() !== "") {
           if (rich) {
-            mdPush(sanitizeText(ev.text));
+            mdPush(sanitizeDisplay(ev.text));
             mdFinish();
-          } else write(sanitizeText(ev.text));
+          } else write(sanitizeDisplay(ev.text));
         }
         sawDelta = false;
         ensureLineStart();
@@ -585,7 +599,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           }
           break;
         }
-        const name = sanitizeText(ev.name) || "tool";
+        const name = sanitizeDisplay(ev.name) || "tool";
         if (ev.status === "running") {
           emitArgs(name, ev.args);
         } else {
@@ -605,24 +619,24 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
         break;
       }
       case "notice":
-        emit(dim("\u00b7 " + sanitizeText(ev.message)), dim);
+        emit(dim("\u00b7 " + sanitizeDisplay(ev.message)), dim);
         break;
       case "effect.unknown":
         if (screenReaderMode()) {
           ensureLineStart();
-          write(sanitizeText(formatUnknownEffectAnnouncement(ev)) + "\n");
+          write(sanitizeDisplay(formatUnknownEffectAnnouncement(ev)) + "\n");
         }
         emit(
-          dim("\u00b7 " + sanitizeText(formatUnknownEffectNotice(ev))),
+          dim("\u00b7 " + sanitizeDisplay(formatUnknownEffectNotice(ev))),
           dim,
         );
         break;
       case "effect.reconciled":
-        emit(dim(`\u00b7 effect reconciled (${sanitizeText(ev.effectId).slice(0, 8)})`), dim);
+        emit(dim(`\u00b7 effect reconciled (${sanitizeDisplay(ev.effectId).slice(0, 8)})`), dim);
         break;
       case "error": {
         const msg = ev.code !== undefined ? `[${ev.code}] ${ev.message}` : ev.message;
-        emit(red("\u26a0 " + sanitizeText(msg)), red);
+        emit(red("\u26a0 " + sanitizeDisplay(msg)), red);
         break;
       }
       case "turn.done":
@@ -651,11 +665,11 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     },
     notice: (message: string) => {
       settle();
-      emit(dim("\u00b7 " + sanitizeText(message)), dim);
+      emit(dim("\u00b7 " + sanitizeDisplay(message)), dim);
     },
     error: (message: string) => {
       settle();
-      emit(red("\u26a0 " + sanitizeText(message)), red);
+      emit(red("\u26a0 " + sanitizeDisplay(message)), red);
     },
     atLineStart: () => atStart,
     ...(rich ? { liveLines, lastThinking: () => thinkLast } : {}),

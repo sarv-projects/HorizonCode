@@ -353,18 +353,20 @@ describe("review fixes", () => {
       else process.env.HORIZON_GUARDIAN = saved;
     });
     const kernel = { checkGuard: async () => ({ decision: "ask", reason: "needs approval" }) } as unknown as KernelClient;
-    const ask = (): Promise<boolean> => {
+    const ask = (rel = "id_rsa"): Promise<boolean> => {
       const gate = new GuardGate(workspace, kernel, [], () => (async () => false) as unknown as ApprovalHandler, undefined, "accept-edits");
-      const target = path.join(workspace, ".ssh", "config");
+      const target = path.join(workspace, rel);
       return gate.approve({ title: "Write", detail: target, kind: "fs.write" }, fsw(target));
     };
     test("enforce refuses a guardian deny in accept-edits", async () => {
       process.env.HORIZON_GUARDIAN = "enforce";
       expect(await ask()).toBe(false);
     });
-    test("advisory default still auto-answers it", async () => {
+    test("advisory default still auto-answers non-boundary guardian deny, while system boundary paths stay refused", async () => {
       delete process.env.HORIZON_GUARDIAN;
-      expect(await ask()).toBe(true);
+      expect(await ask("my_id_rsa_backup.txt")).toBe(true);
+      expect(await ask("id_rsa")).toBe(false);
+      expect(await ask(path.join(".ssh", "config"))).toBe(false);
     });
   });
 

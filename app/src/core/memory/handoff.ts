@@ -20,6 +20,7 @@ import {
   workspaceStateFile,
 } from "../paths";
 import { metricContract } from "../metrics";
+import { assertSqliteReconcileBarrierClear } from "../session";
 import { mmrLiteSelect, type ScoredMemoryCandidate } from "./mmr-lite";
 
 export const SECTION_SOFT_CAP_CHARS = 5000;
@@ -109,6 +110,20 @@ export function resolveHandoffBranch(workspace: string, override?: string): { br
   const o = override?.trim();
   if (o !== undefined && o !== "") return { branch: o, detached: false };
   try {
+    const ws = path.resolve(workspace);
+    const hasGit = existsSync(path.join(ws, ".git"));
+    const topRes = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: 2000,
+    });
+    if (topRes.status === 0) {
+      const top = path.resolve(topRes.stdout.trim());
+      const parsedWs = path.parse(ws);
+      if ((top === parsedWs.root || top !== ws) && !hasGit) {
+        return { branch: `detached:${workspaceScopeId(workspace)}`, detached: true };
+      }
+    }
     const res = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd: workspace,
       encoding: "utf8",
@@ -382,6 +397,7 @@ function latestHandoffIdOnBranch(db: Database, branch: string): string | null {
 
 /** Test hook: wipe handoff tables. */
 export function resetHandoffsForTests(workspace: string): void {
+  assertSqliteReconcileBarrierClear("memory.handoff.resetHandoffsForTests");
   const db = openDb(workspace);
   try {
     db.exec(`DELETE FROM ${FTS}; DELETE FROM ${HANDOFFS}; DELETE FROM ${DURABLE_TODOS};`);
@@ -401,6 +417,7 @@ export function createHandoff(
     session_id?: string;
   },
 ): HandoffCreateResult {
+  assertSqliteReconcileBarrierClear("memory.handoff.createHandoff");
   const { branch } = resolveHandoffBranch(workspace, opts?.branch);
   const warnings = collectSectionWarnings(sections);
   const id = `hnd_${randomUUID().replace(/-/g, "")}`;

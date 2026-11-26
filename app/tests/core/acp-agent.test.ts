@@ -162,4 +162,56 @@ describe("acp-agent (ruling 642)", () => {
       }),
     ).toBe("hello\nworld");
   });
+
+  test("session/load and session/setMcpServers support (ruling 863)", async () => {
+    const agent = new AcpAgent();
+    await agent.handleMessage({
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: { protocolVersion: 2 },
+    });
+
+    const created = await agent.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "session/new",
+      params: { cwd: "/tmp/hz-acp-load" },
+    });
+    const sessionId = (created as { result: { sessionId: string } }).result.sessionId;
+
+    // session/load loads the existing session
+    const loaded = await agent.handleMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/load",
+      params: { sessionId },
+    });
+    expect(loaded && "result" in loaded).toBe(true);
+    const session = (loaded as { result: { session: { sessionId: string; cwd: string } } }).result.session;
+    expect(session.sessionId).toBe(sessionId);
+    expect(session.cwd).toBe("/tmp/hz-acp-load");
+
+    // session/load with unknown id and no cwd fails
+    const failLoad = await agent.handleMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/load",
+      params: { sessionId: "sess_nonexistent" },
+    });
+    expect(failLoad && "error" in failLoad).toBe(true);
+
+    // session/setMcpServers sets client MCP servers
+    const setMcp = await agent.handleMessage({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "session/setMcpServers",
+      params: {
+        sessionId,
+        servers: [{ name: "local-mcp", command: "node", args: ["server.js"] }],
+      },
+    });
+    expect(setMcp && "result" in setMcp).toBe(true);
+    expect((setMcp as { result: { ok: boolean; serverCount: number } }).result.serverCount).toBe(1);
+  });
 });

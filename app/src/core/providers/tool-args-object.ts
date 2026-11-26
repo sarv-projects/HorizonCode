@@ -4,6 +4,84 @@
  * `{}`. Kept outside adapter message / SSE loops.
  */
 
+import type { ToolInputError } from "../../contracts";
+import { boundRawToolArguments } from "./replay-args";
+
+/** Result of strictly parsing final tool-call arguments as a plain JSON object. */
+export type StrictToolArgsParseResult =
+  | { ok: true; args: Record<string, unknown>; json: string }
+  | { ok: false; error: ToolInputError };
+
+/**
+ * Track A strict finish parse: strictly `JSON.parse` the accumulated raw
+ * argument value and require a plain JSON object `{...}` (rejecting primitives,
+ * arrays, null, truncated JSON, and malformed syntax). Empty/whitespace-only
+ * strings normalize to `"{}"` (no-argument tool call).
+ */
+export function strictParseToolArgsObject(raw: unknown): StrictToolArgsParseResult {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    try {
+      const json = JSON.stringify(raw);
+      return { ok: true, args: raw as Record<string, unknown>, json };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: "tool_input_error",
+          message: `Failed to serialize tool arguments object: ${err instanceof Error ? err.message : String(err)}`,
+          rawInput: boundRawToolArguments(String(raw)),
+        },
+      };
+    }
+  }
+  if (typeof raw !== "string") {
+    const kind = raw === null ? "null" : Array.isArray(raw) ? "array" : typeof raw;
+    let snippet: string;
+    try {
+      snippet = JSON.stringify(raw) ?? String(raw);
+    } catch {
+      snippet = String(raw);
+    }
+    return {
+      ok: false,
+      error: {
+        code: "tool_input_error",
+        message: `Tool arguments must be a JSON object (got ${kind})`,
+        rawInput: boundRawToolArguments(snippet),
+      },
+    };
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: true, args: {}, json: "{}" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: "tool_input_error",
+        message: `Invalid JSON in tool arguments: ${err instanceof Error ? err.message : String(err)}`,
+        rawInput: boundRawToolArguments(raw),
+      },
+    };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const kind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+    return {
+      ok: false,
+      error: {
+        code: "tool_input_error",
+        message: `Tool arguments must be a JSON object (got ${kind})`,
+        rawInput: boundRawToolArguments(raw),
+      },
+    };
+  }
+  return { ok: true, args: parsed as Record<string, unknown>, json: raw };
+}
+
 export function toolArgsObject(raw: unknown): Record<string, unknown> {
   const text = typeof raw === "string" ? raw.trim() : "";
   if (text === "") return {};

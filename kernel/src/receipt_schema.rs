@@ -11,7 +11,15 @@ const BINDINGS: &[&str] = &[
     "parentReceiptId",
 ];
 const V1_FIELDS: &[&str] = &[
-    "id", "seq", "ts", "action", "tool", "argsDigest", "resultDigest", "prevHash", "leaseId",
+    "id",
+    "seq",
+    "ts",
+    "action",
+    "tool",
+    "argsDigest",
+    "resultDigest",
+    "prevHash",
+    "leaseId",
 ];
 
 pub fn issue_v2(input: &Value) -> Result<bool, String> {
@@ -20,8 +28,10 @@ pub fn issue_v2(input: &Value) -> Result<bool, String> {
         Some(Value::Number(n)) if n.as_u64() == Some(2) => {}
         _ => return Err("HZ_PRECONDITION_FAILED: unsupported receipt schema version".into()),
     }
-    Ok(input.get("schemaVersion").is_some() ||
-        BINDINGS.iter().any(|key| input.get(*key).is_some()))
+    Ok(
+        input.get("schemaVersion").is_some()
+            || BINDINGS.iter().any(|key| input.get(*key).is_some()),
+    )
 }
 
 pub fn check_version(record: &Value) -> Result<bool, String> {
@@ -31,12 +41,19 @@ pub fn check_version(record: &Value) -> Result<bool, String> {
     if version.as_u64() != Some(2) {
         return Err("HZ_PRECONDITION_FAILED: unsupported receipt schema version".into());
     }
-    let keys = record.as_object().ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt not an object".to_string())?;
+    let keys = record
+        .as_object()
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt not an object".to_string())?;
     for name in keys.keys() {
-        if name != "hash" && name != "schemaVersion" && name != "issuerStamp"
+        if name != "hash"
+            && name != "schemaVersion"
+            && name != "issuerStamp"
             && !BINDINGS.contains(&name.as_str())
-            && !V1_FIELDS.contains(&name.as_str()) {
-            return Err(format!("HZ_PRECONDITION_FAILED: unexpected receipt v2 field {name}"));
+            && !V1_FIELDS.contains(&name.as_str())
+        {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: unexpected receipt v2 field {name}"
+            ));
         }
     }
     if let Some(effect) = record.get("effectId") {
@@ -46,19 +63,23 @@ pub fn check_version(record: &Value) -> Result<bool, String> {
     }
     for key in ["postimageDigest", "postimagePath"] {
         if record.get(key).is_some_and(|v| !v.is_string()) {
-            return Err(format!("HZ_PRECONDITION_FAILED: receipt v2 {key} must be a string"));
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: receipt v2 {key} must be a string"
+            ));
         }
     }
     if let Some(children) = record.get("childEffectIds") {
-        let entries = children.as_array()
-            .ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt v2 childEffectIds invalid".to_string())?;
+        let entries = children.as_array().ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: receipt v2 childEffectIds invalid".to_string()
+        })?;
         if entries.len() > 1_000 {
             return Err("HZ_PRECONDITION_FAILED: receipt v2 childEffectIds budget exceeded".into());
         }
         let mut seen = std::collections::HashSet::new();
         for child in entries {
-            let name = child.as_str().filter(|s| !s.is_empty())
-                .ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt v2 childEffectIds invalid".to_string())?;
+            let name = child.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: receipt v2 childEffectIds invalid".to_string()
+            })?;
             if !seen.insert(name) {
                 return Err("HZ_PRECONDITION_FAILED: receipt v2 childEffectIds duplicate".into());
             }
@@ -88,7 +109,9 @@ pub fn preimage(record: &Value) -> Result<Value, String> {
 
 pub fn hash(record: &Value) -> Result<String, String> {
     let preimage = preimage(record)?;
-    Ok(crate::canon::sha256_hex(&crate::canon::canonical_json(&preimage)))
+    Ok(crate::canon::sha256_hex(&crate::canon::canonical_json(
+        &preimage,
+    )))
 }
 
 #[cfg(test)]

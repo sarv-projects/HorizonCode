@@ -11,6 +11,7 @@
 import { cacheableBlocksCutIndex } from "./cacheable-messages-prefix";
 import {
   applyCacheBreakpoints,
+  cacheBreakpointsEnabled,
   planCacheBreakpoints,
   type CacheableBlock,
 } from "./cache-breakpoints";
@@ -25,10 +26,8 @@ type WireSlot =
   | { target: "message"; msgIndex: number; blockIndex: number };
 
 export function anthropicCacheBreakpointsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env.HZ_ANTHROPIC_CACHE_BREAKPOINTS?.trim().toLowerCase();
-  if (raw === undefined || raw === "") return true;
-  if (raw === "0" || raw === "false" || raw === "off" || raw === "no") return false;
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  // D-11: one reading for planner + wire (cache-breakpoints.ts owns it).
+  return cacheBreakpointsEnabled(env);
 }
 
 function cacheableKind(

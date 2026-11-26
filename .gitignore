@@ -36,3 +36,8 @@ repo-tour/
 
 # Competitive steal/learn clones + notes (never commit)
 repo_take/
+
+# Local runtime config, code-intelligence cache, and Playwright MCP state
+app/.config/
+.code-intelligence/
+.playwright-mcp/

@@ -38,9 +38,9 @@ export function guardG1WireHonesty(env: NodeJS.ProcessEnv = process.env): GuardG
   };
 }
 
-/** True when additive G1 vocabulary disagrees with the legacy primary field (V2 not active). */
+/** True when an external/stale wire payload still emitted legacy `"allow"` alongside `g1:"ask"`. */
 export function guardG1LegacyWireMismatch(decision: GuardDecision): boolean {
-  return decision.g1 === "ask" && decision.decision === "allow";
+  return decision.g1 === "ask" && (decision.decision as string) === "allow";
 }
 
 /** Once-per-turn notice when admission is G1-shaped but the wire still says allow. */

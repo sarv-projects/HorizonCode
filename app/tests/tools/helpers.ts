@@ -72,7 +72,7 @@ export interface MockCtxOptions {
   workspace?: string;
   sessionId?: string;
   /** Guard answer: a fixed decision, or a function for per-action behaviour. */
-  decision?: GuardDecisionValue | DecisionFn;
+  decision?: GuardDecisionValue | "allow" | DecisionFn;
   /** Reason attached to a fixed guard decision. */
   decisionReason?: string;
   /** Approve answer: a fixed boolean, or a function for per-request behaviour. */
@@ -115,9 +115,21 @@ export function mockToolContext(opts: MockCtxOptions = {}): MockToolContext {
 
     async guard(action: GuardAction): Promise<GuardDecision> {
       guardCalls.push(action);
-      const decision = opts.decision ?? "allow";
-      if (typeof decision === "function") return decision(action);
-      return opts.decisionReason === undefined ? { decision } : { decision, reason: opts.decisionReason };
+      const raw = opts.decision ?? "allow";
+      if (typeof raw === "function") {
+        const out = await raw(action);
+        if ((out.decision as string) === "allow") {
+          return { ...out, decision: "ask", g1: "ask", leaseId: out.leaseId ?? `mock-lease-${guardCalls.length}` };
+        }
+        return out;
+      }
+      if (raw === "allow") {
+        const base: GuardDecision = { decision: "ask", g1: "ask", leaseId: `mock-lease-${guardCalls.length}` };
+        return opts.decisionReason === undefined ? base : { ...base, reason: opts.decisionReason };
+      }
+      return opts.decisionReason === undefined
+        ? { decision: raw, g1: raw }
+        : { decision: raw, g1: raw, reason: opts.decisionReason };
     },
 
     async approve(req: ApprovalRequest): Promise<boolean> {

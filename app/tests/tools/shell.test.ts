@@ -83,7 +83,10 @@ describe("shell tool", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe("timed out after 200ms");
     expect(r.output).toContain("[timed out after 200ms]");
-    expect(elapsed).toBeLessThan(3000);
+    // The exact timeout error above is the contract. The wall-clock bound only
+    // sanity-checks that sleep 5 was killed; like the sibling test below, 3 s
+    // was flaky on the /mnt/c host under full-suite load, so allow 5 s.
+    expect(elapsed).toBeLessThan(5000);
   });
 
   test("kills a compound command that exceeds timeoutMs", async () => {
@@ -92,12 +95,13 @@ describe("shell tool", () => {
     const elapsed = Date.now() - started;
     expect(r.ok).toBe(false);
     expect(r.error).toBe("timed out after 200ms");
-    expect(elapsed).toBeLessThan(3000);
+    expect(elapsed).toBeLessThan(5000); // /mnt/c full-suite slack; see note above
   });
 
   test("does not wait for a background process that outlives the command", async () => {
+    const ws = makeWorkspace({ "bg.sh": "sleep 5 &\necho started\n" });
     const started = Date.now();
-    const r = await shellTool.execute({ command: "sleep 5 & echo started" }, mockToolContext());
+    const r = await shellTool.execute({ command: "bash bg.sh" }, mockToolContext({ cwd: ws }));
     const elapsed = Date.now() - started;
     expect(r.ok).toBe(true);
     expect(r.output).toContain("Output:\nstarted");
@@ -105,6 +109,14 @@ describe("shell tool", () => {
     // The command returns after bash exits; 3s was flaky on the /mnt/c host
     // under full-suite load. The assertion is "does not wait for sleep 5".
     expect(elapsed).toBeLessThan(5000);
+  });
+
+  test("refuses top-level background operator & fail-closed before running", async () => {
+    const ctx = mockToolContext();
+    const r = await shellTool.execute({ command: "sleep 5 & echo started" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("background operator &");
+    expect(ctx.guardCalls.length).toBe(0);
   });
 
   test("asks for approval with the command and honours a decline", async () => {

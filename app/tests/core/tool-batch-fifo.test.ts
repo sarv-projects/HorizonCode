@@ -4,9 +4,53 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ToolCall } from "../../src/contracts";
-import { batchSegments, runClassedToolBatchFifo } from "../../src/core/tool-batch-fifo";
+import {
+  batchSegments,
+  DEFAULT_MAX_BATCH_CONCURRENCY,
+  runClassedToolBatchFifo,
+} from "../../src/core/tool-batch-fifo";
 
 const mk = (id: string, name: string): ToolCall => ({ id, name, arguments: "{}" });
+
+describe("bounded shared-segment concurrency", () => {
+  test("shared calls never exceed maxConcurrency and start in FIFO order", async () => {
+    let active = 0;
+    let peak = 0;
+    const starts: number[] = [];
+    const calls = Array.from({ length: 6 }, (_, i) => mk(String(i), "read"));
+    const out = await runClassedToolBatchFifo(calls, {
+      maxConcurrency: 2,
+      runCall: async (call) => {
+        starts.push(Number(call.id));
+        active += 1;
+        peak = Math.max(peak, active);
+        await Bun.sleep(5);
+        active -= 1;
+      },
+    });
+    expect(out).toEqual({ aborted: false, fatal: false });
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(starts.slice(0, 2)).toEqual([0, 1]);
+    expect(DEFAULT_MAX_BATCH_CONCURRENCY).toBe(4);
+  });
+
+  test("abort before an acquire does not start a new call", async () => {
+    const controller = new AbortController();
+    const starts: string[] = [];
+    const calls = Array.from({ length: 4 }, (_, i) => mk(String(i), "read"));
+    const out = await runClassedToolBatchFifo(calls, {
+      signal: controller.signal,
+      maxConcurrency: 1,
+      runCall: async (call) => {
+        starts.push(call.id);
+        controller.abort();
+        await Bun.sleep(1);
+      },
+    });
+    expect(out.aborted).toBe(true);
+    expect(starts).toEqual(["0"]);
+  });
+});
 
 describe("runClassedToolBatchFifo", () => {
   test("runs segments in order and shared calls overlap", async () => {

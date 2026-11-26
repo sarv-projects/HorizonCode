@@ -1,6 +1,7 @@
 /** `todo` — session-scoped todo checklist. */
 
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import {
   branchKeyForWorkspace,
   durableTodosEnabled,
@@ -395,6 +396,7 @@ export const todoTool: Tool = {
 
       return { ok: true, output: checklist(list) };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(e instanceof Error ? e.message : String(e));
     }
   },
@@ -406,4 +408,7 @@ export const todoWriteTool: Tool = {
   name: "todo_write",
   description:
     "Alias for `todo`: session checklist list/add/done/drop/merge (Engram `todo_write` naming). Durable when HZ_TODO_DURABLE=1.",
+  // D-13 residual (ruling 910): the alias stays resolvable for a stale client
+  // call but is NOT a second spec in the model's tool list (one checklist tool).
+  exposure: "hidden",
 };

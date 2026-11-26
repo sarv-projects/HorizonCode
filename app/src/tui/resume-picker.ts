@@ -6,6 +6,7 @@
 
 import type { SessionInfo } from "../core/session";
 import { bufferFromLines, type CellBuffer } from "./cellbuffer";
+import { sanitizeDisplay } from "./style";
 
 export type ResumePickerItem = SessionInfo & {
   snippet?: string;
@@ -166,8 +167,8 @@ export function formatResumePickerRow(
   const w = Math.max(10, Math.floor(width));
   const mark = item.id === currentSessionId ? "*" : " ";
   const caret = selected ? ">" : " ";
-  const title = (item.title ?? "").replace(/\s+/g, " ").trim() || "(no title)";
-  const id = item.id;
+  const title = sanitizeDisplay(item.title ?? "").replace(/\s+/g, " ").trim() || "(no title)";
+  const id = sanitizeDisplay(item.id);
   const prefix = `${caret}${mark} ${id}  `;
   const meta = formatResumePickerRowMeta(item, nowMs);
   const metaPad = meta === "" ? "" : `  ${meta}`;
@@ -181,7 +182,7 @@ export function formatResumePickerRow(
 export function formatResumePickerForkPreview(item: ResumePickerItem): string | undefined {
   const fork = item.forkedFrom;
   if (fork === undefined) return undefined;
-  const parent = fork.sessionId;
+  const parent = sanitizeDisplay(fork.sessionId);
   const shortParent = parent.length > 14 ? `${parent.slice(0, 12)}…` : parent;
   return `fork ${shortParent} @ msg ${fork.messageIndex}`;
 }
@@ -190,7 +191,7 @@ export function formatResumePickerSnippet(item: ResumePickerItem, width: number)
   const parts: string[] = [];
   const forkLine = formatResumePickerForkPreview(item);
   if (forkLine !== undefined) parts.push(forkLine);
-  const raw = item.snippet?.replace(/\s+/g, " ").trim();
+  const raw = item.snippet !== undefined ? sanitizeDisplay(item.snippet).replace(/\s+/g, " ").trim() : undefined;
   if (raw !== undefined && raw !== "") parts.push(raw);
   if (parts.length === 0) return undefined;
   const w = Math.max(10, Math.floor(width));
@@ -211,9 +212,9 @@ export interface ResumePickerFrameInput {
 export function buildResumePickerFrame(opts: ResumePickerFrameInput): CellBuffer {
   const w = Math.max(24, Math.floor(opts.width));
   const h = Math.max(5, Math.floor(opts.height));
-  const header = (opts.header ?? DEFAULT_HEADER).slice(0, w);
+  const header = sanitizeDisplay(opts.header ?? DEFAULT_HEADER).slice(0, w);
   const filterLabel = "Filter: ";
-  const filterLine = (filterLabel + opts.state.query).slice(0, w).padEnd(w, " ");
+  const filterLine = (filterLabel + sanitizeDisplay(opts.state.query)).slice(0, w).padEnd(w, " ");
   const footer =
     (opts.state.items.length === 0
       ? "No matching sessions · Esc starts a new chat"

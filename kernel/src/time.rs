@@ -92,25 +92,56 @@ pub fn parse_iso_millis(s: &str) -> Option<i64> {
     } else if rest.starts_with('+') || rest.starts_with('-') {
         let sign: i64 = if rest.starts_with('-') { -1 } else { 1 };
         let body = &rest[1..];
-        if !body.is_ascii() {
+        if !body.is_ascii() || body.is_empty() {
             return None;
         }
         let (h, m) = match body.split_once(':') {
-            Some((h, m)) => (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?),
-            None if body.len() == 4 => (body[0..2].parse().ok()?, body[2..4].parse().ok()?),
-            None => (body.parse::<i64>().ok()?, 0),
+            Some((h, m)) => {
+                if h.is_empty() || m.is_empty() || !h.bytes().all(|b| b.is_ascii_digit()) || !m.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)
+            }
+            None if body.len() == 4 && body.bytes().all(|b| b.is_ascii_digit()) => {
+                (body[0..2].parse().ok()?, body[2..4].parse().ok()?)
+            }
+            None if body.bytes().all(|b| b.is_ascii_digit()) => (body.parse::<i64>().ok()?, 0),
+            None => return None,
         };
-        sign * (h * 60 + m)
+        if !(0..=23).contains(&h) || !(0..=59).contains(&m) {
+            return None;
+        }
+        let total_minutes = h.checked_mul(60)?.checked_add(m)?;
+        sign.checked_mul(total_minutes)?
     } else {
         return None;
     };
 
-    Some(
-        days_from_civil(year, month, day) * MS_PER_DAY + hour * 3_600_000 + minute * 60_000
-            + second * 1_000
-            + milli
-            - offset_minutes * 60_000,
-    )
+    let days_ms = days_from_civil(year, month, day).checked_mul(MS_PER_DAY)?;
+    let offset_ms = offset_minutes.checked_mul(60_000)?;
+    days_ms
+        .checked_add(hour.checked_mul(3_600_000)?)?
+        .checked_add(minute.checked_mul(60_000)?)?
+        .checked_add(second.checked_mul(1_000)?)?
+        .checked_add(milli)?
+        .checked_sub(offset_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_iso_millis_rejects_overflowing_or_out_of_range_tz_offsets() {
+        assert!(parse_iso_millis("2026-11-26T12:00:00+999999999999999999").is_none());
+        assert!(parse_iso_millis("2026-11-26T12:00:00+25:00").is_none());
+        assert!(parse_iso_millis("2026-11-26T12:00:00-05:99").is_none());
+        assert!(parse_iso_millis("2026-11-26T12:00:00+05:30").is_some());
+        assert!(parse_iso_millis("2026-11-26T12:00:00-0400").is_some());
+        let utc = parse_iso_millis("2026-11-26T06:30:00Z").unwrap();
+        let ist = parse_iso_millis("2026-11-26T12:00:00+05:30").unwrap();
+        assert_eq!(utc, ist);
+    }
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).

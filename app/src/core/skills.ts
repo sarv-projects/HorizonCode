@@ -25,7 +25,7 @@
  * silently — a bad skill file must never break a chat turn.
  */
 
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { skillsDir as resolveWorkspaceSkillsDir, userSkillsDir } from "./paths";
@@ -123,7 +123,11 @@ function skillDirs(workspace: string, home?: string): string[] {
       userSkillsDir(resolvedHome),
     );
   }
-  dirs.push(path.join(workspace, ".claude", "skills"), resolveWorkspaceSkillsDir(workspace));
+  dirs.push(
+    path.join(workspace, ".claude", "skills"),
+    path.join(workspace, ".hz", "skills"),
+    resolveWorkspaceSkillsDir(workspace),
+  );
   return dirs;
 }
 
@@ -171,12 +175,22 @@ export function listSkills(workspace: string, trust?: WorkspaceTrustOptions): Sk
         );
   const byName = new Map<string, Skill>();
   const projectDir = resolveWorkspaceSkillsDir(workspace);
+  const hzCompatDir = path.join(workspace, ".hz", "skills");
+  const claudeProjectDir = path.join(workspace, ".claude", "skills");
   for (const dir of skillDirs(workspace, trust?.home)) {
-    if (!projectSkillsOk && dir === projectDir) {
-      if (digestWorkspaceSkills(workspace) !== null) {
+    const gateClaude = trust?.trustedWorkspaceHooks !== undefined && dir === claudeProjectDir;
+    const isHzCompat = dir === hzCompatDir;
+    if (!projectSkillsOk && (dir === projectDir || isHzCompat || gateClaude)) {
+      if (dir === projectDir && digestWorkspaceSkills(workspace) !== null) {
         trust?.onNotice?.("workspace skills ignored (untrusted workspace or digest changed)");
       }
       continue;
+    }
+    try {
+      const dirStat = lstatSync(dir);
+      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue;
+    } catch {
+      continue; // no skills directory here
     }
     let entries: string[];
     try {
@@ -279,4 +293,123 @@ export function activeSkillSection(skill: Skill): string {
     ? `\n\nSkill folder: ${skill.dir}\nResources (read on demand):\n${skill.resources.map((r) => "- " + r).join("\n")}`
     : "";
   return `## Active skill: ${skill.name}\n\n${capped}${res}`;
+}
+
+/** Compatibility alias for listSkills(). */
+export const loadSkills = listSkills;
+
+/* ---------------- Pillar 6: Host-Controlled Skill Crystallization ---------------- */
+
+/** Strict skill name grammar for host-promoted skills (no traversal, lowercase slug). */
+export const VERIFIED_SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * Strip invisible Unicode tag characters (`U+E0000–U+E007F`) and bidi/zero-width
+ * control characters that could conceal injected instructions inside saved skills.
+ */
+function stripSkillInvisibleUnicode(text: string): string {
+  if (typeof text !== "string" || text === "") return "";
+  return text
+    .replace(/[\u{E0000}-\u{E007F}]/gu, "")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "");
+}
+
+function assertNoSymlink(target: string): void {
+  try {
+    if (lstatSync(target).isSymbolicLink()) {
+      throw new Error(`saveVerifiedSkill: refusing to traverse or overwrite symlink: ${target}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+  }
+}
+
+export interface SaveVerifiedSkillOptions {
+  name: string;
+  description: string;
+  script: string;
+  language?: string;
+}
+
+export interface SaveVerifiedSkillResult {
+  skillDir: string;
+  skillMdPath: string;
+  scriptPath: string;
+}
+
+/**
+ * Pillar 6 — Host-Controlled Skill Crystallization (human/host command ONLY;
+ * explicitly NOT registered as an LLM-callable tool to prevent self-promotion
+ * skill poisoning).
+ *
+ * Writes `<workspace>/.hz/state/skills/<name>/SKILL.md` and
+ * `<workspace>/.hz/state/skills/<name>/scripts/run.ts` with `0600` permissions,
+ * validating `name`, refusing symlinks, and stripping invisible Unicode.
+ */
+export function saveVerifiedSkill(
+  workspace: string,
+  opts: SaveVerifiedSkillOptions,
+): SaveVerifiedSkillResult {
+  const name = typeof opts?.name === "string" ? opts.name.trim() : "";
+  if (!VERIFIED_SKILL_NAME_RE.test(name)) {
+    throw new Error(
+      `saveVerifiedSkill: invalid skill name ${JSON.stringify(name)} (must match ${String(VERIFIED_SKILL_NAME_RE)})`,
+    );
+  }
+  const cleanDescription = stripSkillInvisibleUnicode(opts.description ?? "")
+    .replace(/\r?\n+/g, " ")
+    .trim();
+  const cleanScript = stripSkillInvisibleUnicode(opts.script ?? "");
+  const cleanLang = stripSkillInvisibleUnicode(opts.language ?? "ts")
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .trim() || "ts";
+
+  const resolvedWorkspace = path.resolve(workspace);
+  const hzDir = path.join(resolvedWorkspace, ".hz");
+  const stateDir = path.join(hzDir, "state");
+  const skillsRoot = path.join(stateDir, "skills");
+  const skillDir = path.join(skillsRoot, name);
+  const scriptsDir = path.join(skillDir, "scripts");
+  const skillMdPath = path.join(skillDir, "SKILL.md");
+  const scriptPath = path.join(scriptsDir, "run.ts");
+
+  for (const p of [resolvedWorkspace, hzDir, stateDir, skillsRoot, skillDir, scriptsDir, skillMdPath, scriptPath]) {
+    assertNoSymlink(p);
+  }
+
+  mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
+
+  const backtickRuns = cleanScript.match(/`+/g);
+  const maxBackticks = backtickRuns ? Math.max(...backtickRuns.map((run) => run.length)) : 0;
+  const fence = "`".repeat(Math.max(4, maxBackticks + 1));
+
+  const skillMd = [
+    "---",
+    `name: ${name}`,
+    `description: ${JSON.stringify(cleanDescription)}`,
+    "---",
+    "",
+    `# ${name}`,
+    "",
+    cleanDescription !== "" ? cleanDescription : "Host-verified reusable Code Mode skill.",
+    "",
+    "Run the verified script at `scripts/run.ts`:",
+    "",
+    `${fence}${cleanLang}`,
+    cleanScript.trimEnd(),
+    fence,
+    "",
+  ].join("\n");
+
+  writeFileSync(skillMdPath, skillMd, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(scriptPath, cleanScript, { encoding: "utf8", mode: 0o600 });
+
+  try {
+    chmodSync(skillMdPath, 0o600);
+    chmodSync(scriptPath, 0o600);
+  } catch {
+    /* best-effort on filesystems without POSIX chmod */
+  }
+
+  return { skillDir, skillMdPath, scriptPath };
 }

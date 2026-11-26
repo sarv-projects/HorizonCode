@@ -405,7 +405,7 @@ fn owner_shell_guard_requires_authorization_even_for_output_only_argv() {
     let issued: Value = serde_json::from_str(receipts_file.lines().last().unwrap()).unwrap();
     assert_eq!(issued["leaseId"], minted["leaseId"]);
     let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
-    assert_eq!(events["events"][0]["payload"]["details"]["guardDecision"], "allow");
+    assert_eq!(events["events"][0]["payload"]["details"]["guardDecision"], "ask");
     assert_eq!(events["events"][0]["payload"]["details"]["guardLeaseId"], minted["leaseId"]);
     assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
 }
@@ -519,6 +519,46 @@ fn owner_shell_reduced_fs_postimages_touch_rm_mkdir() {
     assert_eq!(replay["ok"], true, "{replay}");
     assert!(replay["checked"].as_u64().unwrap_or(0) >= 3, "{replay}");
     // File postimages are path-checked; stdout/stderr streams are ancillary here.
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn owner_shell_reduced_fs_postimages_rmdir() {
+    let state = TempDir::new("owner-shell-rmdir");
+    let sandbox = TempDir::new("owner-shell-rmdir-workspace");
+    let mut kernel = Kernel::start(state.path());
+    let target = sandbox.path().join("empty-dir");
+    std::fs::create_dir(&target).unwrap();
+
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "rmdir empty-dir", "ttlMs": 60_000
+    }));
+    let result = kernel.ok("effect.execute", json!({
+        "effectId": "shell-rmdir-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["rmdir", "empty-dir"] }
+        }
+    }));
+    assert_eq!(result["ownerLogSettled"], true);
+    assert!(!target.exists());
+
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    let settled = events["events"].as_array().unwrap().iter().find(|event| {
+        event["type"] == "owner.settled" && event["payload"]["effectId"] == "shell-rmdir-fs"
+    }).unwrap();
+    let rows = settled["payload"]["details"]["postimages"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], target.to_string_lossy().as_ref());
+    assert_eq!(rows[0]["state"], "absent");
+    assert_eq!(rows[0]["via"], "shell.rmdir");
+
+    let replay = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(replay["ok"], true, "{replay}");
+    assert!(replay["checked"].as_u64().unwrap_or(0) >= 1, "{replay}");
+    assert!(replay["history"]["historicalAbsenceFacts"].as_u64().unwrap_or(0) >= 1, "{replay}");
     assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
 }
 
@@ -882,6 +922,7 @@ fn owner_executed_unknown_attested_abandon_clears_fence_without_settling() {
 }
 
 #[test]
+#[cfg(unix)]
 fn owner_executed_unknown_observe_settle_after_crash_before_settle() {
     let state = TempDir::new("owner-recover-observe");
     let sandbox = TempDir::new("owner-recover-observe-workspace");
@@ -943,6 +984,7 @@ fn owner_executed_unknown_observe_settle_after_crash_before_settle() {
 }
 
 #[test]
+#[cfg(unix)]
 fn owner_executed_unknown_observe_settle_fs_edit_after_crash_before_settle() {
     let state = TempDir::new("owner-recover-observe-edit");
     let sandbox = TempDir::new("owner-recover-observe-edit-workspace");
@@ -1018,6 +1060,7 @@ fn owner_executed_unknown_observe_settle_fs_edit_after_crash_before_settle() {
 }
 
 #[test]
+#[cfg(unix)]
 fn owner_executed_unknown_observe_settle_fs_delete_after_crash_before_settle() {
     let state = TempDir::new("owner-recover-observe-delete");
     let sandbox = TempDir::new("owner-recover-observe-delete-workspace");
@@ -1073,6 +1116,89 @@ fn owner_executed_unknown_observe_settle_fs_delete_after_crash_before_settle() {
         "effectId": "deleted-but-not-settled",
         "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "fs.delete", "spec": { "path": "gone.txt" } }
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
+}
+
+#[test]
+#[cfg(unix)]
+fn owner_executed_unknown_observe_settle_fs_rename_after_crash_before_settle() {
+    let state = TempDir::new("owner-recover-observe-rename");
+    let sandbox = TempDir::new("owner-recover-observe-rename-workspace");
+    fs::write(sandbox.path().join("old.txt"), b"renamed-bytes").unwrap();
+    let preimage_digest = sha256_bytes(b"renamed-bytes");
+    let execute_params = json!({
+        "effectId": "renamed-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "fs.rename",
+            "spec": {
+                "from": "old.txt",
+                "to": "new.txt",
+                "expectedPreimageDigest": preimage_digest
+            }
+        }
+    });
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_BEFORE_OWNER_SETTLE", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1021, "method": "effect.execute", "params": execute_params
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(88));
+    assert!(!sandbox.path().join("old.txt").exists());
+    assert_eq!(fs::read(sandbox.path().join("new.txt")).unwrap(), b"renamed-bytes");
+
+    let mut owner = Kernel::start(state.path());
+    assert_eq!(owner.ok("effect.owner.status", json!({}))["blocked"], true);
+
+    let wrong = owner.err("effect.owner.recover", json!({
+        "effectId": "renamed-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "fs.rename",
+            "spec": {
+                "from": "old.txt",
+                "to": "other.txt",
+                "expectedPreimageDigest": preimage_digest
+            }
+        }
+    }));
+    assert!(wrong.contains("digest mismatch") || wrong.contains("does not match"), "{wrong}");
+
+    let settled = owner.ok("effect.owner.recover", json!({
+        "effectId": "renamed-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "fs.rename",
+            "spec": {
+                "from": "old.txt",
+                "to": "new.txt",
+                "expectedPreimageDigest": preimage_digest
+            }
+        }
+    }));
+    assert_eq!(settled["settled"], true, "{settled}");
+    assert_eq!(settled["observedRecovery"], true);
+    assert_eq!(settled["blocked"], false);
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    let types: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"owner.settled"), "{types:?}");
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "renamed-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.rename", "spec": { "from": "old.txt", "to": "new.txt" } }
     }));
     assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
 }
@@ -1298,6 +1424,7 @@ fn owner_event_stream_is_not_caller_appendable() {
     assert_eq!(kernel.ok("effect.owner.status", json!({}))["unresolved"], 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn kernel_socket_serve_survives_closed_stdin() {
     // H-29 / ruling 625: with --socket, closing stdin (parent death) must not
@@ -1429,6 +1556,7 @@ fn kernel_stdio_second_owner_refuses_supervisor_lease() {
     let _ = fs::remove_file(&stderr2);
 }
 
+#[cfg(unix)]
 #[test]
 fn kernel_socket_second_owner_refuses_supervisor_lease() {
     // CB-6 / ruling 635: a second live --socket owner on the same state dir
@@ -1866,10 +1994,14 @@ fn guard_decision(
     scope: Option<&str>,
     leases: Option<Value>,
 ) -> String {
-    guard_check(kernel, kind, target, scope, leases)["decision"]
-        .as_str()
-        .expect("decision string")
-        .to_string()
+    let d = guard_check(kernel, kind, target, scope, leases);
+    let raw = d["decision"].as_str().expect("decision string");
+    assert_ne!(raw, "allow", "G1 wire must never emit bare decision:\"allow\": {d}");
+    if raw == "ask" && d["leaseId"].as_str().is_some_and(|s| !s.is_empty()) {
+        "allow".to_string()
+    } else {
+        raw.to_string()
+    }
 }
 
 /* ---------------------------------- fixtures ---------------------------------- */
@@ -2689,7 +2821,7 @@ fn guard_lease_still_beats_a_matching_ask_rule() {
         json!({ "kind": "shell.exec", "pattern": "echo *", "ttlMs": 60_000 }),
     );
     let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], lease["leaseId"]);
     // outside the lease the ask rule still wins over nothing
     assert_eq!(
@@ -2755,7 +2887,7 @@ fn guard_mcp_invoke_evaluates_and_unknown_kinds_stay_refused() {
         json!({ "kind": "mcp.invoke", "pattern": "github:create_pr", "ttlMs": 60_000 }),
     );
     let decision = guard_check(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], lease["leaseId"]);
     // ...exactly once (ruling 32), and only for its own target.
     assert_eq!(
@@ -3020,7 +3152,7 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
 
     // the held lease applies to subsequent checks without being passed in
     let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], exact["leaseId"]);
 
     // exact means exact
@@ -3055,7 +3187,7 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
         json!({ "kind": "net.fetch", "pattern": "*", "ttlMs": 60_000 }),
     );
     let decision = guard_check(&mut kernel, "net.fetch", "https://any.example/x?q=1", None, None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], star["leaseId"]);
 
     // A caller-supplied lease is a claim, not a mint: only leases this kernel
@@ -3084,7 +3216,7 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
         json!({ "kind": "fs.write", "pattern": "/tmp/*", "ttlMs": 60_000 }),
     );
     let decision = guard_check(&mut kernel, "fs.write", "/tmp/scratch.txt", Some("outside"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], issued["leaseId"]);
 
     // The same rule covers a lease that happens to be malformed or expired:
@@ -3365,10 +3497,13 @@ fn guard_decision_with_session(
         params["sessionId"] = json!(session);
     }
     let decision = kernel.ok("guard.check", params);
-    decision["decision"]
-        .as_str()
-        .expect("decision string")
-        .to_string()
+    let raw = decision["decision"].as_str().expect("decision string");
+    assert_ne!(raw, "allow", "G1 wire must never emit bare decision:\"allow\": {decision}");
+    if raw == "ask" && decision["leaseId"].as_str().is_some_and(|s| !s.is_empty()) {
+        "allow".to_string()
+    } else {
+        raw.to_string()
+    }
 }
 
 /// A lease minted with a sessionId is owner-scoped: a check carrying a different
@@ -3394,7 +3529,7 @@ fn guard_lease_owner_scoping() {
             "sessionId": "parent",
         }),
     );
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], lease["leaseId"]);
 
     // a different session (the child) must ask again — and so must a caller
@@ -3437,7 +3572,7 @@ fn guard_lease_owner_scoping() {
             "sessionId": "child",
         }),
     );
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], legacy["leaseId"]);
 }
 
@@ -3593,7 +3728,7 @@ fn guard_lease_is_consumed_at_most_once() {
         json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
     );
     let first = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
-    assert_eq!(first["decision"], json!("allow"));
+    assert_eq!(first["decision"], json!("ask"));
     assert_eq!(first["leaseId"], lease["leaseId"]);
     assert!(
         first["reason"].as_str().unwrap_or("").contains("consumed"),
@@ -3625,7 +3760,7 @@ fn guard_lease_is_consumed_at_most_once() {
     );
     assert_ne!(second["leaseId"], lease["leaseId"]);
     let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert_eq!(decision["leaseId"], second["leaseId"]);
 }
 
@@ -3654,7 +3789,7 @@ fn guard_grant_mints_one_fresh_lease_per_effect() {
         "guard.check",
         json!({ "action": { "kind": "shell.exec", "target": "echo one" }, "sessionId": "s1" }),
     );
-    assert_eq!(d1["decision"], json!("allow"));
+    assert_eq!(d1["decision"], json!("ask"));
     assert!(
         d1["reason"].as_str().unwrap_or("").contains("minted one-use lease"),
         "the allow must name the minted lease: {}",
@@ -3667,7 +3802,7 @@ fn guard_grant_mints_one_fresh_lease_per_effect() {
         "guard.check",
         json!({ "action": { "kind": "shell.exec", "target": "echo two" }, "sessionId": "s1" }),
     );
-    assert_eq!(d2["decision"], json!("allow"));
+    assert_eq!(d2["decision"], json!("ask"));
     let id2 = d2["leaseId"].as_str().unwrap_or("").to_string();
     assert!(id2 != id1 && id2 != id1, "each effect gets a distinct lease: {} vs {}", id1, id2);
 
@@ -3678,7 +3813,7 @@ fn guard_grant_mints_one_fresh_lease_per_effect() {
         "guard.check",
         json!({ "action": { "kind": "shell.exec", "target": "echo one" }, "sessionId": "s1" }),
     );
-    assert_eq!(d3["decision"], json!("allow"));
+    assert_eq!(d3["decision"], json!("ask"));
     assert!(
         d3["reason"].as_str().unwrap_or("").contains("minted one-use lease"),
         "a repeat is a fresh mint, not a consulted lease: {}",
@@ -3794,7 +3929,8 @@ fn guard_memory_manifest_write_asks_despite_policy_allow() {
     let ordinary = hz.path().join("ok.txt");
     let ordinary = ordinary.to_str().expect("utf8");
     let allowed = guard_check(&mut kernel, "fs.write", ordinary, Some("workspace"), None);
-    assert_eq!(allowed["decision"], json!("allow"), "{}", allowed);
+    assert_eq!(allowed["decision"], json!("ask"), "{}", allowed);
+    assert!(allowed["leaseId"].as_str().is_some_and(|s| !s.is_empty()), "{}", allowed);
 }
 
 /// A grant is an answer to `ask`, never a bypass: policy deny still wins over a
@@ -3817,7 +3953,7 @@ fn guard_grant_never_beats_deny_and_never_fires_on_allow() {
         json!({ "kind": "fs.write", "pattern": target, "ttlMs": 60_000 }),
     );
     let decision = guard_check(&mut kernel, "fs.write", target, Some("workspace"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert!(
         decision["reason"].as_str().unwrap_or("").contains("policy allow"),
         "an allow rule answers on its own: {}",
@@ -4056,6 +4192,25 @@ fn protocol_survives_malformed_and_unknown_requests() {
     assert_eq!(report["ok"], json!(true));
 }
 
+/// Group G: `doctor.statusz` is a bounded, content-free loopback diagnostic.
+#[test]
+fn doctor_statusz_is_bounded_and_content_free() {
+    let dir = TempDir::new("statusz");
+    let mut kernel = Kernel::start(dir.path());
+    let st = kernel.ok("doctor.statusz", json!({}));
+    assert_eq!(st["ready"], json!(true), "{st}");
+    assert!(st["version"].is_string(), "{st}");
+    assert!(st["uptimeMs"].as_u64().is_some(), "{st}");
+    // No effect ids or detailed content leak through this surface.
+    assert!(st.get("unresolvedIds").is_none(), "{st}");
+    assert!(st.get("executedUnknownIds").is_none(), "{st}");
+    assert!(st.get("recoveryPlaybook").is_none(), "{st}");
+    assert!(st.get("detail").is_none(), "{st}");
+    // No egress/sandbox enforcement claim.
+    let rendered = st.to_string().to_ascii_lowercase();
+    assert!(!rendered.contains("enforced"), "{st}");
+}
+
 #[test]
 fn protocol_handles_megabyte_and_unicode_payloads() {
     let dir = TempDir::new("large");
@@ -4196,7 +4351,7 @@ fn allowlist_allow_admits_shell_exec() {
     );
 
     let decision = guard_check(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None);
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert!(
         decision["reason"].as_str().unwrap_or("").contains("allowlist allow"),
         "allow reason must cite the allowlist: {}",
@@ -4223,10 +4378,57 @@ fn allowlist_allow_admits_shell_exec() {
         Some("workspace"),
         None,
     );
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert!(
         decision["reason"].as_str().unwrap_or("").contains("policy allow"),
         "fs.write must still go through policy, not the allowlist: {}",
+        decision
+    );
+}
+
+#[test]
+fn allowlist_allow_does_not_override_policy_deny_or_ask() {
+    let dir = TempDir::new("allowlist-policy-order");
+
+    // R1 is deny > lease > ask > allow ACROSS layers. An allowlist allow is an
+    // admission candidate, never a verdict: a policy deny for the same kind
+    // still refuses the command.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "shell.exec", "scope": "workspace", "decision": "deny" }
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    write_allowlist(
+        dir.path(),
+        json!([{ "program": "git", "args": ["status"], "decision": "allow" }]),
+    );
+    let mut kernel = Kernel::start(dir.path());
+    let decision = guard_check(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"), "{}", decision);
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("policy deny"),
+        "policy deny must win over an allowlist allow: {}",
+        decision
+    );
+
+    // ask beats allow as well: a policy ask is not silently admitted by the
+    // allowlist.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "shell.exec", "scope": "workspace", "decision": "ask" }
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let decision = guard_check(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"), "{}", decision);
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("policy ask"),
+        "policy ask must win over an allowlist allow: {}",
         decision
     );
 }
@@ -4283,7 +4485,7 @@ fn malformed_allowlist_is_a_typed_refusal() {
         Some("workspace"),
         None,
     );
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
 }
 
 #[test]
@@ -4411,7 +4613,7 @@ fn egress_allow_rule_admits_net_fetch() {
         Some("workspace"),
         None,
     );
-    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["decision"], json!("ask"));
     assert!(
         decision["reason"].as_str().unwrap_or("").contains("egress allow"),
         "allow reason must cite the egress decider: {}",

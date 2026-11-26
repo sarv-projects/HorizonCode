@@ -8,6 +8,7 @@
  */
 
 import type { GuardAction, GuardKind } from "../contracts";
+import { scanShellCommand } from "./shell-scan";
 
 export type SegmentRisk = "low" | "medium" | "high";
 
@@ -26,6 +27,33 @@ export type ShellCompoundAnalysis =
 const DENY_FRAGMENT = [/\brm\s+-[a-z]*r[a-z]*f?\s+\/(\s|$)/i, /\bmkfs\b/i, /\bdd\s+if=.*\bof=\/dev\//i, /:\(\)\s*\{/];
 const HIGH_FRAGMENT = [/\bsudo\b/i, /\bchmod\b/i, /\bcurl\b[^|]*\|\s*(sh|bash)\b/i, /\bgit\s+push\b.*--force/i, /\bwget\b/i, /\bcurl\b/i];
 
+/**
+ * Group C (grok exec_risk ADAPT, zero runtime dependency): data-driven wrapper
+ * heads that escalate risk. Pure/lexical, NOT tree-sitter AST. Risk-INCREASE
+ * only — a scorer never lowers a risk below the existing segment heuristics,
+ * and it is advisory (the Guard/execpolicy allow path is untouched).
+ */
+const EXEC_RISK_VEHICLES: readonly { head: RegExp; reason: string }[] = [
+  { head: /(?:^|\s)(?:sh|bash|zsh|dash)\b/i, reason: "shell interpreter vehicle" },
+  { head: /(?:^|\s)(?:env|nice|timeout|nohup|ionice|setsid)\b/i, reason: "execution wrapper vehicle" },
+  { head: /(?:^|\s)(?:npx|node|python3?|ruby|perl)\b/i, reason: "script-runtime vehicle" },
+  { head: /(?:^|\s)(?:docker|podman|kubectl)\b/i, reason: "container vehicle" },
+];
+
+export interface ExecRiskResult {
+  risk: SegmentRisk;
+  reason: string;
+}
+
+/** Lexical risk score over wrapper/vehicle heads; never lowers risk. */
+export function execRiskScore(text: string): ExecRiskResult {
+  const t = text.trim();
+  for (const rule of EXEC_RISK_VEHICLES) {
+    if (rule.head.test(t)) return { risk: "high", reason: rule.reason };
+  }
+  return { risk: "medium", reason: "no high-risk vehicle head detected" };
+}
+
 /** Coarse risk for one segment (mirrors approval-card heuristics). */
 export function segmentRisk(text: string): SegmentRisk {
   const t = text.trim();
@@ -34,7 +62,12 @@ export function segmentRisk(text: string): SegmentRisk {
   if (HIGH_FRAGMENT.some((re) => re.test(t))) return "high";
   if (/\b(rm|chmod|chown|dd|mkfs|curl|wget|git\s+push|kill)\b/i.test(t)) return "high";
   if (/^(sh|bash|zsh|dash)$/i.test(t)) return "high";
-  return "medium";
+  // P2 Static AST escalation: opaque/dynamic execution (eval, source, exec,
+  // $CMD, ${!var}, PowerShell iex / Invoke-Expression / & $var) always escalates to high.
+  if (scanShellCommand(t).opaque) return "high";
+  // Group C: data-driven vehicle/wrapper heads may ESCALATE to high, never
+  // lower a risk the existing heuristics already assigned.
+  return execRiskScore(t).risk;
 }
 
 export function maxSegmentRisk(segments: readonly ShellSegment[]): SegmentRisk {
@@ -60,7 +93,7 @@ function unparsedReason(command: string): string | undefined {
 
 type RawPiece = { text: string; joiner?: ShellSegment["joiner"] };
 
-function splitTopLevel(command: string): RawPiece[] | null {
+function splitTopLevel(command: string): { pieces: RawPiece[] } | { reason: string } {
   const out: RawPiece[] = [];
   let buf = "";
   let pendingJoiner: ShellSegment["joiner"] | undefined;
@@ -106,10 +139,33 @@ function splitTopLevel(command: string): RawPiece[] | null {
       i++;
       continue;
     }
+    if (c === "\n" || c === "\r") {
+      return { reason: "newline command separator" };
+    }
+    if (command.startsWith("<<<", i)) {
+      return { reason: "here-string <<<" };
+    }
+    if (command.startsWith("|&", i)) {
+      return { reason: "pipe-stderr operator |&" };
+    }
+    if (c === "{" || c === "}") {
+      return { reason: "brace group / expansion" };
+    }
     if (command.startsWith("&&", i)) {
       pushSegment();
       pendingJoiner = "&&";
       i += 2;
+      continue;
+    }
+    if (c === "&") {
+      const prev = command[i - 1];
+      const next = command[i + 1];
+      // Allow fd duplications (`2>&1`, `>&2`, `<&0`) and combined redirects (`&>`, `&>>`).
+      if (prev !== ">" && prev !== "<" && next !== ">") {
+        return { reason: "background operator &" };
+      }
+      buf += c;
+      i++;
       continue;
     }
     if (command.startsWith("||", i)) {
@@ -133,10 +189,10 @@ function splitTopLevel(command: string): RawPiece[] | null {
     buf += c;
     i++;
   }
-  if (quote !== null) return null;
-  if (escaped) return null;
+  if (quote !== null) return { reason: "unclosed quote or escape" };
+  if (escaped) return { reason: "unclosed quote or escape" };
   pushSegment();
-  return out;
+  return { pieces: out };
 }
 
 /** Parse a shell command line for compound segments, or refuse when unsafe to split. */
@@ -145,10 +201,10 @@ export function analyzeShellCompound(command: string): ShellCompoundAnalysis {
   if (reason !== undefined) return { ok: false, reason };
 
   const raw = splitTopLevel(command);
-  if (raw === null) return { ok: false, reason: "unclosed quote or escape" };
+  if ("reason" in raw) return { ok: false, reason: raw.reason };
 
   const segments: ShellSegment[] = [];
-  for (const piece of raw) {
+  for (const piece of raw.pieces) {
     const text = piece.text.trim();
     if (text === "") continue;
     segments.push({

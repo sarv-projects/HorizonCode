@@ -5,6 +5,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { displayWorkingDir } from "../prompt-working-directory";
 
 export interface EnvironmentInfo {
   workspace: string;
@@ -43,7 +44,7 @@ export function renderEnvironment(info: EnvironmentInfo): string {
   const tools = info.tools.length > 0 ? info.tools.join(", ") : "(none)";
   return [
     "Environment:",
-    `- Working directory (workspace): ${info.workspace}`,
+    `- Working directory (workspace): ${displayWorkingDir(info.workspace, process.env.HZ_PROMPT_WORKING_DIRECTORY)}`,
     `- Date: ${stamp}`,
     `- OS: ${info.os}; shell: ${info.shell}`,
     `- Git repository: ${info.isGitRepo ? "yes" : "no"}`,

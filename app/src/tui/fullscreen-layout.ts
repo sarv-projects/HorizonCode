@@ -11,6 +11,9 @@ export const FULLSCREEN_INPUT_PROMPT = "> ";
 /** Dim style for the reduced inset scrollback pane (ruling 299). */
 export const INSET_SCROLLBACK_PANE_STYLE: CellStyle = { dim: true };
 
+/** High-visibility warning banner style for persistent R170 latch / UNKNOWN banner (Track A4). */
+export const LATCH_BANNER_STYLE: CellStyle = { fg: 15, bg: 1, bold: true };
+
 export interface FullscreenLayoutRows {
   statusRow: number;
   transcriptStart: number;
@@ -101,6 +104,8 @@ export interface FullscreenFrameInput {
   width: number;
   height: number;
   status: string;
+  /** Optional persistent high-visibility warning banner painted on row 1 (e.g. R170 latch / UNKNOWN). */
+  banner?: string;
   transcript: readonly string[];
   input: string;
   prompt?: string;
@@ -114,26 +119,37 @@ export interface FullscreenInsetFrameInput extends FullscreenFrameInput {
   insetScrollBack?: number;
 }
 
-/** Build a full-screen cell grid: status, wrapped transcript tail, prompt + input. */
+/** Build a full-screen cell grid: status, optional warning banner, wrapped transcript tail, prompt + input. */
 export function buildFullscreenFrame(opts: FullscreenFrameInput): CellBuffer {
   const w = Math.max(20, Math.floor(opts.width));
   const h = Math.max(3, Math.floor(opts.height));
   const layout = fullscreenLayoutRows(h);
   const prompt = opts.prompt ?? FULLSCREEN_INPUT_PROMPT;
   const status = (opts.status ?? "").slice(0, w);
-  const tail = sliceTranscriptTail(opts.transcript, w, layout.transcriptRows);
-  while (tail.length < layout.transcriptRows) tail.unshift("");
+  const hasBanner = typeof opts.banner === "string" && opts.banner.trim() !== "" && h >= 4;
+  const bannerRow = hasBanner ? layout.transcriptStart : -1;
+  const transcriptStart = hasBanner ? layout.transcriptStart + 1 : layout.transcriptStart;
+  const transcriptRows = hasBanner ? Math.max(1, layout.transcriptRows - 1) : layout.transcriptRows;
+  const tail = sliceTranscriptTail(opts.transcript, w, transcriptRows);
+  while (tail.length < transcriptRows) tail.unshift("");
 
   const inputLine = (prompt + opts.input).slice(0, w);
   const grid: string[] = new Array(h).fill("");
   grid[layout.statusRow] = status.padEnd(w, " ").slice(0, w);
-  for (let i = 0; i < layout.transcriptRows; i += 1) {
-    const row = layout.transcriptStart + i;
+  if (hasBanner) {
+    grid[bannerRow] = padRow(opts.banner!.slice(0, w), w);
+  }
+  for (let i = 0; i < transcriptRows; i += 1) {
+    const row = transcriptStart + i;
     const src = tail[i] ?? "";
     grid[row] = src.padEnd(w, " ").slice(0, w);
   }
   grid[layout.inputRow] = inputLine.padEnd(w, " ").slice(0, w);
-  return bufferFromLines(grid, w, h);
+  const buf = bufferFromLines(grid, w, h);
+  if (hasBanner) {
+    applyFullRowStyle(buf, bannerRow, LATCH_BANNER_STYLE);
+  }
+  return buf;
 }
 
 function padRow(text: string, width: number): string {
@@ -148,6 +164,14 @@ function applyRowStyle(buf: CellBuffer, row: number, style: CellStyle): void {
   }
 }
 
+function applyFullRowStyle(buf: CellBuffer, row: number, style: CellStyle): void {
+  for (let col = 0; col < buf.width; col += 1) {
+    const i = row * buf.width + col;
+    const cell = buf.cells[i];
+    if (cell) buf.cells[i] = { ...cell, style };
+  }
+}
+
 /**
  * Fullscreen frame with a dim inset scrollback pane (Grok R1–R12 reduced; ruling 299).
  * Main transcript uses `transcript`; bottom `insetPaneRows` show `insetScrollback` tail.
@@ -158,9 +182,13 @@ export function buildFullscreenFrameWithInsetPane(opts: FullscreenInsetFrameInpu
   const layout = fullscreenLayoutWithInsetPane(h, opts.insetPaneRows);
   const prompt = opts.prompt ?? FULLSCREEN_INPUT_PROMPT;
   const status = (opts.status ?? "").slice(0, w);
+  const hasBanner = typeof opts.banner === "string" && opts.banner.trim() !== "" && layout.mainTranscriptRows >= 2;
+  const bannerRow = hasBanner ? layout.transcriptStart : -1;
+  const mainStart = hasBanner ? layout.transcriptStart + 1 : layout.transcriptStart;
+  const mainRows = hasBanner ? Math.max(1, layout.mainTranscriptRows - 1) : layout.mainTranscriptRows;
 
-  const mainTail = sliceTranscriptTail(opts.transcript, w, layout.mainTranscriptRows);
-  while (mainTail.length < layout.mainTranscriptRows) mainTail.unshift("");
+  const mainTail = sliceTranscriptTail(opts.transcript, w, mainRows);
+  while (mainTail.length < mainRows) mainTail.unshift("");
 
   const insetBack = Math.max(0, Math.floor(opts.insetScrollBack ?? 0));
   const insetTail = sliceTranscriptViewport(opts.insetScrollback, w, layout.insetPaneRows, insetBack);
@@ -169,8 +197,11 @@ export function buildFullscreenFrameWithInsetPane(opts: FullscreenInsetFrameInpu
   const inputLine = (prompt + opts.input).slice(0, w);
   const grid: string[] = new Array(h).fill("");
   grid[layout.statusRow] = padRow(status, w);
-  for (let i = 0; i < layout.mainTranscriptRows; i += 1) {
-    grid[layout.transcriptStart + i] = padRow(mainTail[i] ?? "", w);
+  if (hasBanner) {
+    grid[bannerRow] = padRow(opts.banner!.slice(0, w), w);
+  }
+  for (let i = 0; i < mainRows; i += 1) {
+    grid[mainStart + i] = padRow(mainTail[i] ?? "", w);
   }
   for (let i = 0; i < layout.insetPaneRows; i += 1) {
     grid[layout.insetPaneStart + i] = padRow(insetTail[i] ?? "", w);
@@ -178,6 +209,9 @@ export function buildFullscreenFrameWithInsetPane(opts: FullscreenInsetFrameInpu
   grid[layout.inputRow] = padRow(inputLine, w);
 
   const buf = bufferFromLines(grid, w, h);
+  if (hasBanner) {
+    applyFullRowStyle(buf, bannerRow, LATCH_BANNER_STYLE);
+  }
   for (let i = 0; i < layout.insetPaneRows; i += 1) {
     applyRowStyle(buf, layout.insetPaneStart + i, INSET_SCROLLBACK_PANE_STYLE);
   }

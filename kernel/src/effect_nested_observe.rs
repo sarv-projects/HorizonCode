@@ -38,13 +38,12 @@ fn verify_postimage_row(
     expected_digest: &Option<String>,
     expected_entry_kind: &Option<String>,
 ) -> (bool, Option<String>, bool) {
-    let actual_state = if fs::symlink_metadata(path)
-        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-    {
-        "absent"
-    } else {
-        "present"
-    };
+    let actual_state =
+        if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            "absent"
+        } else {
+            "present"
+        };
     let mut observed_digest = None;
     let stable = if expected_state == "present" && actual_state == "present" {
         if expected_entry_kind.as_deref() == Some("directory") {
@@ -79,10 +78,16 @@ fn verify_postimage_row(
     } else {
         true
     };
-    (stable && actual_state == expected_state && digest_ok, observed_digest, stable)
+    (
+        stable && actual_state == expected_state && digest_ok,
+        observed_digest,
+        stable,
+    )
 }
 
-fn parse_postimage_row(row: &Value) -> Result<(String, String, Option<String>, Option<String>), String> {
+fn parse_postimage_row(
+    row: &Value,
+) -> Result<(String, String, Option<String>, Option<String>), String> {
     let p = row["path"]
         .as_str()
         .filter(|p| Path::new(p).is_absolute())
@@ -115,20 +120,11 @@ fn parse_postimage_row(row: &Value) -> Result<(String, String, Option<String>, O
         .get("entryKind")
         .and_then(Value::as_str)
         .map(str::to_string);
-    Ok((
-        p.to_string(),
-        state.to_string(),
-        digest,
-        entry_kind,
-    ))
+    Ok((p.to_string(), state.to_string(), digest, entry_kind))
 }
 
 /// Classify one child's latest `owner.settled` details from OwnerLog.
-fn classify_child_settlement(
-    effect_id: &str,
-    details: Option<&Value>,
-    state_dir: &Path,
-) -> Value {
+fn classify_child_settlement(effect_id: &str, details: Option<&Value>, state_dir: &Path) -> Value {
     let Some(details) = details else {
         return json!({
             "effectId": effect_id,
@@ -194,8 +190,7 @@ fn classify_child_settlement(
                 }
             };
             let (path, state, digest, entry_kind) = parsed;
-            let (ok, _observed, stable) =
-                verify_postimage_row(&path, &state, &digest, &entry_kind);
+            let (ok, _observed, stable) = verify_postimage_row(&path, &state, &digest, &entry_kind);
             if ok {
                 if state == "absent" {
                     absent_ok += 1;
@@ -210,9 +205,13 @@ fn classify_child_settlement(
                 });
                 if state == "absent" {
                     let classification =
-                        crate::effect_absent_reconstruct::classify_independent_absence(Path::new(&path));
+                        crate::effect_absent_reconstruct::classify_independent_absence(Path::new(
+                            &path,
+                        ));
                     failure["absenceClassification"] = json!(
-                        crate::effect_absent_reconstruct::absence_classification_label(classification)
+                        crate::effect_absent_reconstruct::absence_classification_label(
+                            classification
+                        )
                     );
                 }
                 failures.push(failure);
@@ -226,7 +225,38 @@ fn classify_child_settlement(
                 "failures": failures,
             });
         }
-        let classification = if path_ok > 0 && absent_ok > 0 {
+        // A child may carry both file postimages and archived shell streams.
+        // Verify both; previously the stream was silently ignored in this case.
+        let mut stream_checked = 0usize;
+        if let Some(stream_ev) = stream {
+            match crate::effect_history::verify_stream_evidence(state_dir, stream_ev) {
+                Ok(n) if n > 0 => stream_checked = n,
+                Ok(_) => {
+                    return json!({
+                        "effectId": effect_id,
+                        "classification": "stream_evidence_empty",
+                        "ok": false,
+                    });
+                }
+                Err(reason) => {
+                    return json!({
+                        "effectId": effect_id,
+                        "classification": "stream_evidence_failed",
+                        "ok": false,
+                        "reason": reason,
+                    });
+                }
+            }
+        }
+        let classification = if stream_checked > 0 && path_ok > 0 && absent_ok > 0 {
+            "file_absence_and_stream_ok"
+        } else if stream_checked > 0 && path_ok > 0 {
+            "file_and_stream_ok"
+        } else if stream_checked > 0 && absent_ok > 0 {
+            "absence_and_stream_ok"
+        } else if stream_checked > 0 {
+            "stream_evidence_ok"
+        } else if path_ok > 0 && absent_ok > 0 {
             "file_and_absence_ok"
         } else if absent_ok > 0 {
             "absence_fact_ok"
@@ -239,6 +269,7 @@ fn classify_child_settlement(
             "ok": true,
             "pathsChecked": path_ok + absent_ok,
             "absenceFacts": absent_ok,
+            "streamChecked": stream_checked,
         });
     }
 
@@ -269,6 +300,47 @@ fn classify_child_settlement(
         "classification": "legacy_unverifiable",
         "ok": false,
     })
+}
+
+/// Add a bounded summary of deleted bytes reconstructable from CAS for the
+/// child effects this report already observed. Pure additive metadata: it does
+/// not change any node classification or claim full R172 observation.
+pub fn enrich_nested_observe_with_deleted_reconstruction(
+    report: &mut Value,
+    owner_events: &[Value],
+    state_dir: &Path,
+) {
+    let reconstructed =
+        crate::effect_history::reconstruct_deleted_from_cas(state_dir, owner_events);
+    let observed_ids: BTreeSet<String> = report["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| n["effectId"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let rows: Vec<Value> = reconstructed["reconstructed"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|row| {
+                    row["effectId"]
+                        .as_str()
+                        .map(|id| observed_ids.contains(id))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    report["deletedByteReconstruction"] = json!({
+        "ok": reconstructed["ok"],
+        "checked": rows.len(),
+        "reconstructed": rows,
+        "scope": "observed_child_absent_rows_with_prior_cas_version"
+    });
 }
 
 /// Walk `childEffectIds` from verified receipts; classify each child's OwnerLog settlement.
@@ -357,7 +429,9 @@ pub fn verify_nested_child_observe(
         }
     }
 
-    let has_roots = receipt_rows.iter().any(|r| !child_ids_from_receipt(r).is_empty());
+    let has_roots = receipt_rows
+        .iter()
+        .any(|r| !child_ids_from_receipt(r).is_empty());
     let ok = if !has_roots {
         true
     } else {
@@ -397,6 +471,101 @@ mod tests {
         assert_eq!(report["ok"], false);
         assert_eq!(report["refused"], 1);
         assert_eq!(report["nodes"][0]["classification"], "missing_in_ownerlog");
+    }
+
+    #[test]
+    fn nested_child_with_postimages_and_stream_checks_both() {
+        let root = std::env::temp_dir().join(format!("hz-nested-both-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let file = root.join("child.txt");
+        let file_bytes = b"child postimage";
+        fs::write(&file, file_bytes).unwrap();
+        let file_digest = crate::canon::sha256_bytes(file_bytes);
+        let stream_bytes = b"child stdout";
+        let stream_digest = crate::canon::sha256_bytes(stream_bytes);
+        crate::effect_history::archive_captured_bytes(&state, &stream_digest, stream_bytes)
+            .unwrap();
+
+        let receipts = vec![json!({
+            "effectId": "parent",
+            "childEffectIds": ["child-both"],
+        })];
+        let mut settlements = BTreeMap::new();
+        settlements.insert(
+            "child-both".to_string(),
+            json!({
+                "postimages": [{
+                    "path": file,
+                    "state": "present",
+                    "digest": file_digest,
+                }],
+                "streamEvidence": {
+                    "stdout": {
+                        "digest": stream_digest,
+                        "archive": stream_digest,
+                        "archivedBytes": stream_bytes.len(),
+                    },
+                    "exitCode": 0,
+                },
+            }),
+        );
+        let report = verify_nested_child_observe(&receipts, &settlements, &state);
+        assert_eq!(report["ok"], true, "{report}");
+        let node = &report["nodes"][0];
+        assert_eq!(node["classification"], "file_and_stream_ok", "{node}");
+        assert_eq!(node["streamChecked"], 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nested_observe_reports_reconstructable_deleted_bytes() {
+        let root = std::env::temp_dir().join(format!("hz-nested-deleted-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let path = root.join("gone.txt");
+        fs::write(&path, b"child bytes").unwrap();
+        let digest = crate::canon::sha256_bytes(b"child bytes");
+        let archive = crate::effect_history::archive_postimages(
+            &state,
+            &json!([{
+                "path": path, "state": "present", "digest": digest
+            }]),
+        )
+        .unwrap();
+        let present = json!({"type": "owner.settled", "payload": {
+            "effectId": "child-write", "details": {"postimages": archive}
+        }});
+        let absent = json!({"type": "owner.settled", "payload": {
+            "effectId": "child-delete", "details": {"postimages": [{
+                "path": path, "state": "absent"
+            }]}
+        }});
+        let receipts = vec![json!({
+            "effectId": "parent",
+            "childEffectIds": ["child-delete"],
+        })];
+        let mut settlements = BTreeMap::new();
+        settlements.insert(
+            "child-delete".to_string(),
+            json!({
+                "postimages": [{ "path": path, "state": "absent" }]
+            }),
+        );
+        let mut report = verify_nested_child_observe(&receipts, &settlements, &state);
+        enrich_nested_observe_with_deleted_reconstruction(&mut report, &[present, absent], &state);
+        assert_eq!(
+            report["deletedByteReconstruction"]["checked"], 1,
+            "{report}"
+        );
+        assert_eq!(
+            report["deletedByteReconstruction"]["reconstructed"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

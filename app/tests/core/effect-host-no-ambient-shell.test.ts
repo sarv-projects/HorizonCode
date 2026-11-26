@@ -59,12 +59,37 @@ describe("effectHostNoAmbientCompoundShellRefusal (ruling 652)", () => {
     ).toBeUndefined();
   });
 
-  test("allows simple argv miss only when not shape-blocked (timeout still Bun under default)", () => {
+  test("refuses timeoutMs shell under default/=1 instead of ambient Bun", () => {
     snap = snapshotEnv();
-    setEnv({ HZ_EFFECT_HOST_KERNEL: "default" });
+    for (const mode of ["default", "1"] as const) {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: mode });
+      const refusal = effectHostNoAmbientCompoundShellRefusal(
+        "shell",
+        { command: "echo hi", timeoutMs: 1000 },
+        false,
+      );
+      expect(refusal).toContain(EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE);
+      expect(refusal).toContain("timeoutMs");
+    }
+    setEnv({ HZ_EFFECT_HOST_KERNEL: "0" });
     expect(
       effectHostNoAmbientCompoundShellRefusal("shell", { command: "echo hi", timeoutMs: 1000 }, false),
     ).toBeUndefined();
+  });
+
+  test("refuses an unrouted simple shell under default/=1", () => {
+    snap = snapshotEnv();
+    for (const mode of ["default", "1"] as const) {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: mode });
+      const refusal = effectHostNoAmbientCompoundShellRefusal("shell", { command: "echo hi" }, false);
+      expect(refusal).toContain(EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE);
+      expect(refusal).toContain("kernel route unavailable");
+    }
+  });
+
+  test("kernel-routed shell is not refused again", () => {
+    snap = snapshotEnv();
+    setEnv({ HZ_EFFECT_HOST_KERNEL: "default" });
     expect(
       effectHostNoAmbientCompoundShellRefusal("shell", { command: "echo hi" }, true),
     ).toBeUndefined();
@@ -74,6 +99,8 @@ describe("effectHostNoAmbientCompoundShellRefusal (ruling 652)", () => {
     const def = effectHostDoctorPosture({ HZ_EFFECT_HOST_KERNEL: "default" });
     expect(def.detail.toLowerCase()).toContain("652");
     expect(def.detail.toLowerCase()).toContain("compound");
+    expect(def.detail).toContain("957");
+    expect(def.detail).toContain("958");
     expect(def.detail.toLowerCase()).not.toMatch(/compound.*fall back to ambient bun shell/i);
   });
 });

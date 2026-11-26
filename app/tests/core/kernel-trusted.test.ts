@@ -205,10 +205,12 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
     const outsideFile = "/etc/hosts";
 
     const readWorkspace = await client.checkGuard({ kind: "fs.read", target: workspaceFile }, "workspace");
-    expect(readWorkspace.decision).toBe("allow");
+    expect(readWorkspace.decision).toBe("ask");
+    expect(typeof readWorkspace.leaseId === "string" && readWorkspace.leaseId.length > 0).toBe(true);
 
     const writeWorkspace = await client.checkGuard({ kind: "fs.write", target: workspaceFile }, "workspace");
-    expect(writeWorkspace.decision).toBe("allow");
+    expect(writeWorkspace.decision).toBe("ask");
+    expect(typeof writeWorkspace.leaseId === "string" && writeWorkspace.leaseId.length > 0).toBe(true);
 
     const readOutside = await client.checkGuard({ kind: "fs.read", target: outsideFile }, "outside");
     expect(readOutside.decision).toBe("ask");
@@ -243,7 +245,7 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
 
     // Held by the kernel after guard.lease...
     const held = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
-    expect(held.decision).toBe("allow");
+    expect(held.decision).toBe("ask");
     expect(held.leaseId).toBe(lease.leaseId);
 
     // ...and the lease is spent by that allow (ruling 32): passing it explicitly
@@ -276,7 +278,9 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
       const denied = await policed.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace");
       expect(denied.decision).toBe("deny");
       expect(denied.reason ?? "").toContain("deny");
-      expect((await policed.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*")).decision).toBe("allow");
+      const shellAllowed = await policed.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
+      expect(shellAllowed.decision).toBe("ask");
+      expect(typeof shellAllowed.leaseId === "string" && shellAllowed.leaseId.length > 0).toBe(true);
       // Nothing in the file says what to do with a write: no matching rule, so ask.
       expect((await policed.checkGuard({ kind: "fs.write", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("ask");
     } finally {

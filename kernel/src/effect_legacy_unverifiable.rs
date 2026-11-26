@@ -8,15 +8,12 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 fn valid_digest(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    s.len() == 64
+        && s.bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-pub fn row_entry(
-    effect_id: &str,
-    path: Option<&str>,
-    reason: &str,
-    verify_ok: bool,
-) -> Value {
+pub fn row_entry(effect_id: &str, path: Option<&str>, reason: &str, verify_ok: bool) -> Value {
     json!({
         "effectId": effect_id,
         "path": path,
@@ -45,7 +42,12 @@ pub fn collect_legacy_unverifiable_rows(owner_events: &[Value]) -> Vec<Value> {
         if postimages.is_none() {
             // No postimages sidecar — entire settlement unverifiable unless handled elsewhere.
             if stream.is_none() {
-                rows.push(row_entry(id, None, "settlement_missing_postimages_and_stream", false));
+                rows.push(row_entry(
+                    id,
+                    None,
+                    "settlement_missing_postimages_and_stream",
+                    false,
+                ));
             } else {
                 rows.push(row_entry(
                     id,
@@ -160,7 +162,8 @@ pub fn refuse_retroactive_cas_backfill(row: &Value) -> Result<(), String> {
     let state = row["state"].as_str().unwrap_or("");
     if state != "present" {
         return Err(
-            "HZ_PRECONDITION_FAILED: retroactive CAS backfill applies only to present file rows".into(),
+            "HZ_PRECONDITION_FAILED: retroactive CAS backfill applies only to present file rows"
+                .into(),
         );
     }
     let digest = row["digest"].as_str().unwrap_or("");
@@ -191,7 +194,10 @@ mod tests {
         assert_eq!(report["ok"], false);
         assert_eq!(report["refused"], 1);
         assert_eq!(report["rows"][0]["classification"], "legacy_unverifiable");
-        assert_eq!(report["rows"][0]["reason"], "settlement_missing_postimages_and_stream");
+        assert_eq!(
+            report["rows"][0]["reason"],
+            "settlement_missing_postimages_and_stream"
+        );
         assert_eq!(report["rows"][0]["backfillRefused"], true);
     }
 
@@ -212,7 +218,10 @@ mod tests {
         })];
         let report = build_legacy_classify_report(&events);
         assert_eq!(report["refused"], 1);
-        assert_eq!(report["rows"][0]["reason"], "present_row_missing_cas_archive");
+        assert_eq!(
+            report["rows"][0]["reason"],
+            "present_row_missing_cas_archive"
+        );
         assert_eq!(legacy_row_count(&events), 1);
     }
 

@@ -82,14 +82,14 @@ describe("catalog-driven cost", () => {
     expect(estimateStepCostUsd(1_000_000, 1_000_000, "nvidia", "deepseek-ai/deepseek-v4.1-flash", catalog)).toBe(0);
   });
 
-  test("cache rates from the catalog are merged with the harness fallback", () => {
+  test("cache rates from the catalog are used and omitted cache rates default to zero", () => {
     const catalog = catalogWith("m", { input: 1, output: 2, cache_read: 0.25 });
     const resolved = resolveRates("nvidia", "m", catalog);
     expect(resolved.revision).toBe(catalogPriceTableRevision("nvidia", "m"));
     expect(resolved.rates.inputPerM).toBe(1);
     expect(resolved.rates.cacheReadPerM).toBe(0.25);
-    // cacheWritePerM absent in the catalog -> harness default (3.75).
-    expect(resolved.rates.cacheWritePerM).toBe(3.75);
+    // cacheWritePerM absent in the catalog -> defaults to 0 (no Claude Sonnet $3.75 fallback).
+    expect(resolved.rates.cacheWritePerM).toBe(0);
   });
 
   test("context tier overrides the base price when tokens are known", () => {

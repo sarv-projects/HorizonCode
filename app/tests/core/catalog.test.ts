@@ -39,6 +39,8 @@ import { cleanupTemps, tempDir } from "./helpers";
 
 /** Keep the offline curated floor unless a test explicitly loads the committed bundle. */
 const CURATED_ONLY = { HZ_NO_COMMITTED_SNAPSHOT: "1" } as const;
+/** Isolated empty home so a real ~/.hzcode/models-dev.cache.json never masks curated/snapshot tests. */
+const emptyHome = (): string => tempDir("hz-catalog-empty-home-");
 
 /** A synthetic external snapshot with `count` throwaway providers (for the floor). */
 function bigSnapshot(count: number): Record<string, unknown> {
@@ -54,10 +56,11 @@ function bigSnapshot(count: number): Record<string, unknown> {
 }
 
 test("loadCatalog returns the curated snapshot by default, with the 5 built-ins", () => {
-  const catalog = loadCatalog(CURATED_ONLY);
+  const catalog = loadCatalog(CURATED_ONLY, emptyHome());
   expect(catalog.source).toBe("curated");
   expect(catalog.rejected).toEqual([]);
   expect(Object.keys(catalog.providers).sort()).toEqual(["anthropic", "google", "mock", "ollama", "openai"]);
+  cleanupTemps();
 });
 
 test("curated default-model ids match DEFAULT_MODELS byte-for-byte", () => {
@@ -84,12 +87,13 @@ test("catalog lookups return the curated window and capabilities as DATA", () =>
 
 test("builtinDefaultModel resolves through the catalog, else the DEFAULT_MODELS fallback", () => {
   // Catalog hit: equals the curated default (which equals DEFAULT_MODELS).
-  expect(builtinDefaultModel("google", loadCatalog(CURATED_ONLY))).toBe("gemini-2.5-flash");
+  expect(builtinDefaultModel("google", loadCatalog(CURATED_ONLY, emptyHome()))).toBe("gemini-2.5-flash");
   // Catalog MISS: an empty external override that passes no floor would fall
   // back; simulate a catalog that lacks the provider and assert the fallback.
   const empty: Catalog & { source: "curated" } = { providers: {}, rejected: [], source: "curated" };
   expect(builtinDefaultModel("anthropic", empty)).toBe(DEFAULT_MODELS.anthropic);
   expect(builtinDefaultModel("ollama", empty)).toBe(DEFAULT_MODELS.ollama);
+  cleanupTemps();
 });
 
 test("validateCatalog throws below the floor and passes at/above it", () => {
@@ -109,7 +113,8 @@ test("the curated floor is deliberately NOT floor-validated (it is small by desi
   // loadCatalog serves it without error because the floor applies only to
   // externally-sourced snapshots, never the curated boot-time floor.
   expect(Object.keys(curatedCatalog().providers).length).toBeLessThan(MINIMUM_PROVIDERS);
-  expect(loadCatalog(CURATED_ONLY).source).toBe("curated");
+  expect(loadCatalog(CURATED_ONLY, emptyHome()).source).toBe("curated");
+  cleanupTemps();
 });
 
 test("committed models-dev.snapshot.json passes the provider floor when shipped", () => {
@@ -117,12 +122,14 @@ test("committed models-dev.snapshot.json passes the provider floor when shipped"
   const prev = process.env.HZ_NO_COMMITTED_SNAPSHOT;
   delete process.env.HZ_NO_COMMITTED_SNAPSHOT;
   try {
-    const loaded = loadCatalog({});
+    const loaded = loadCatalog({}, emptyHome());
     expect(loaded.source).toBe("snapshot");
     expect(Object.keys(loaded.providers).length).toBeGreaterThanOrEqual(MINIMUM_PROVIDERS);
     expect(countCatalogModels(loaded)).toBeGreaterThan(1000);
-    expect(statSync(COMMITTED_CATALOG_SNAPSHOT).size).toBeLessThan(2 * 1024 * 1024);
+    // OpenCode trimmed v2 snapshot is ~8.2 MiB (230+ providers, 8,700+ models).
+    expect(statSync(COMMITTED_CATALOG_SNAPSHOT).size).toBeLessThan(12 * 1024 * 1024);
   } finally {
+    cleanupTemps();
     if (prev === undefined) delete process.env.HZ_NO_COMMITTED_SNAPSHOT;
     else process.env.HZ_NO_COMMITTED_SNAPSHOT = prev;
   }
@@ -183,15 +190,16 @@ test("an override below the floor is rejected and loadCatalog falls back to cura
   writeFileSync(file, JSON.stringify(bigSnapshot(3)), "utf8");
 
   expect(loadSnapshotFile(file)).toBeUndefined();
-  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: file });
+  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: file }, emptyHome());
   expect(loaded.source).toBe("curated");
 
   cleanupTemps();
 });
 
 test("a missing or unreadable override file falls back to curated, never throws", () => {
-  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: "/does/not/exist/snapshot.json" });
+  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: "/does/not/exist/snapshot.json" }, emptyHome());
   expect(loaded.source).toBe("curated");
+  cleanupTemps();
 });
 
 test("fetchLiveCatalog uses conditional GET when a fetcher is injected", async () => {

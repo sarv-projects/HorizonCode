@@ -40,6 +40,30 @@ export { createOpenAiCompatibleProvider } from "./openai-compatible";
 export type { OpenAiCompatibleOptions } from "./openai-compatible";
 export { createGoogleProvider, toGoogleContents, toGoogleTools } from "./google";
 export { createOllamaProvider, toOllamaMessages, toOllamaTools } from "./ollama";
+export {
+  createWsFallbackLatch,
+  type WsFallbackLatch,
+  type WsFallbackLatchOptions,
+  type WsLatchState,
+} from "./ws-fallback-latch";
+import { createWsFallbackLatch, type WsFallbackLatch } from "./ws-fallback-latch";
+
+/** Process-local advisory WS→HTTP fallback latch keyed by routing token (V-2). */
+export const defaultWsFallbackLatch: WsFallbackLatch = createWsFallbackLatch();
+
+export function shouldAttemptWsRoute(token: string, latch: WsFallbackLatch = defaultWsFallbackLatch): boolean {
+  return latch.shouldAttemptWs(token);
+}
+
+export function recordWsRouteOutcome(
+  token: string,
+  ok: boolean,
+  reason = "ws_transport_error",
+  latch: WsFallbackLatch = defaultWsFallbackLatch,
+): void {
+  if (ok) latch.recordSuccess(token);
+  else latch.recordFailure(token, reason);
+}
 
 export interface MakeProviderOptions {
   /** Force the offline mock provider regardless of the configuration. */
@@ -100,6 +124,26 @@ function noModelProvider(provider: string): Provider {
   };
 }
 
+/** Fail closed when a resolved provider carries an unsupported wire protocol. */
+function unsupportedProtocolProvider(provider: string, protocol: string): Provider {
+  const message =
+    `Unsupported protocol "${protocol}" for provider "${provider}". ` +
+    `Supported protocols are: openai-chat, openai-responses, anthropic-messages, google-gemini, ollama.`;
+  return {
+    name: provider,
+    async *stream(): AsyncIterable<ProviderEvent> {
+      yield { type: "error", message };
+      yield { type: "done", stopReason: "end" };
+    },
+  };
+}
+
+function credentialApiKey(credential: NonNullable<HzConfig["resolved"]>["credential"]): string | undefined {
+  if (credential.kind === "apiKey") return credential.value;
+  if (credential.kind === "oauth") return credential.accessToken;
+  return undefined;
+}
+
 function withToolFormat(provider: Provider, config: HzConfig): Provider {
   if (config.toolFormat === "xml") return wrapXmlToolProvider(provider);
   if (config.toolFormat === "hermes") return wrapHermesToolProvider(provider);
@@ -133,24 +177,87 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
   const formatter = formatterFromResolvedConfig(config.formatMessageClass);
   const resolved = config.resolved;
   if (resolved) {
+    const missingEnvHint =
+      resolved.envKeys && resolved.envKeys.length > 0
+        ? resolved.envKeys.join(" or ")
+        : "HZ_API_KEY or the provider's envKey";
     if (resolved.credential.kind === "none" && resolved.wantsKey) {
-      return missingKeyProvider(resolved.name, "HZ_API_KEY or the provider's envKey");
+      return missingKeyProvider(resolved.name, missingEnvHint);
     }
     if (config.model === "") {
       return noModelProvider(resolved.name);
     }
     const home = typeof process.env.HOME === "string" && process.env.HOME !== "" ? process.env.HOME : undefined;
-    return withToolFormat(
-      createOpenAiCompatibleProvider({
-        name: resolved.name,
-        baseUrl: resolved.baseUrl,
-        credential: resolved.credential,
-        oauth: resolved.oauth,
-        home,
-        messageFormatter: formatter,
-      }),
-      config,
-    );
+    const key = credentialApiKey(resolved.credential);
+    switch (resolved.protocol) {
+      case "openai-chat":
+        return withToolFormat(
+          createOpenAiCompatibleProvider({
+            name: resolved.name,
+            baseUrl: resolved.baseUrl,
+            credential: resolved.credential,
+            oauth: resolved.oauth,
+            home,
+            messageFormatter: formatter,
+            headers: resolved.headers,
+            ...(resolved.toolIdMaxLength !== undefined
+              ? {
+                  toolIdRule: {
+                    vendor: resolved.name,
+                    maxLength: resolved.toolIdMaxLength,
+                    allowed: /[A-Za-z0-9_-]/,
+                    prefix: resolved.toolIdPrefix ?? "",
+                  },
+                }
+              : {}),
+          }),
+          config,
+        );
+      case "anthropic-messages": {
+        if (!key) return missingKeyProvider(resolved.name, missingEnvHint);
+        const inner = createAnthropicProvider({
+          apiKey: key,
+          baseUrl: resolved.baseUrl,
+          messageFormatter: formatter,
+          headers: resolved.headers,
+        });
+        return withToolFormat({ ...inner, name: resolved.name }, config);
+      }
+      case "openai-responses": {
+        if (!key) return missingKeyProvider(resolved.name, missingEnvHint);
+        const inner = wrapProviderWithResponsesSteer(
+          createOpenAiProvider({
+            apiKey: key,
+            baseUrl: resolved.baseUrl,
+            messageFormatter: formatter,
+            headers: resolved.headers,
+          }),
+          { apiKey: key },
+        );
+        return withToolFormat({ ...inner, name: resolved.name }, config);
+      }
+      case "google-gemini": {
+        if (!key) return missingKeyProvider(resolved.name, missingEnvHint);
+        const inner = createGoogleProvider({
+          apiKey: key,
+          baseUrl: resolved.baseUrl,
+          messageFormatter: formatter,
+          headers: resolved.headers,
+        });
+        return withToolFormat({ ...inner, name: resolved.name }, config);
+      }
+      case "ollama": {
+        const inner = createOllamaProvider({
+          apiKey: key,
+          baseUrl: resolved.baseUrl,
+          messageFormatter: formatter,
+          headers: resolved.headers,
+        });
+        return withToolFormat({ ...inner, name: resolved.name }, config);
+      }
+      default:
+        return unsupportedProtocolProvider(resolved.name, String(resolved.protocol));
+    }
   }
 
   switch (config.provider) {

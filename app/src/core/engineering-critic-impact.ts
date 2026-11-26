@@ -16,6 +16,7 @@ import { fileHasStructuralCall } from "./structural-call-impact";
 import { countIdents, lexicalSymbolSurface } from "../tools/repo-map";
 import { importersOfSymbol, loadSymbolGraph, symbolGraphEnabled } from "../tools/symbol-graph";
 import { isBinary, relPath } from "../tools/helpers";
+import { computeCallGraphBlastRadius, type CallGraph } from "./call-graph";
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -243,5 +244,28 @@ export function buildMutationSymbolImpact(
     summary: lines.join("\n"),
     exportedReach,
     highBlastRadius,
+  };
+}
+
+/**
+ * Computes call-graph blast radius directly using an in-memory CallGraph index.
+ */
+export function buildMutationCallGraphImpact(
+  workspace: string,
+  changedPaths: readonly string[],
+  graph: CallGraph,
+): { affectedFiles: string[]; totalCallSites: number; summary: string } | undefined {
+  if (changedPaths.length === 0) return undefined;
+  const { symbols } = collectExportedFromMutations(workspace, changedPaths);
+  const names = [...symbols.keys()];
+  if (names.length === 0) return undefined;
+
+  const blast = computeCallGraphBlastRadius(graph, names);
+  const summary = `[eng-brain call graph — ${names.length} mutated symbols affect ${blast.affectedFiles.length} file(s) across ${blast.totalCallSites} call site(s)]`;
+
+  return {
+    affectedFiles: blast.affectedFiles,
+    totalCallSites: blast.totalCallSites,
+    summary,
   };
 }

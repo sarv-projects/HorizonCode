@@ -75,6 +75,8 @@ export interface SessionVerifyReport {
   reconcile: EffectReconcileProbeReport;
   evidence: EffectEvidenceGateReport;
   postimageReplayEnabled: boolean;
+  /** Whether HZ_R172_REQUIRE_KEYED made receipt verification strict (ruling 754). */
+  strictKeyed: boolean;
   /** Nested child-receipt graph replay from one verified snapshot (ruling **456**). */
   nestedReceipts: NestedReceiptReplayVerdict;
   /** Nested child event-stream replay from a verified parent read (ruling **478**). */
@@ -105,7 +107,9 @@ export function buildSessionVerifyReport(
 ): SessionVerifyReport {
   const store = new SessionStore(workspace);
   const sessionFound = store.getSession(sessionId) !== null;
-  const chain = verifyReceiptChainSync(workspace);
+  const chain = verifyReceiptChainSync(workspace, {
+    requireKeyedIssuer: process.env.HZ_R172_REQUIRE_KEYED === "1",
+  });
   const sessionEvents = sessionFound
     ? verifySessionEventAnchorSync(workspace, sessionId)
     : { ok: true, label: `session events (${sessionId})`, count: 0, skipped: true };
@@ -146,6 +150,7 @@ export function buildSessionVerifyReport(
     reconcile,
     evidence,
     postimageReplayEnabled: replayOn,
+    strictKeyed: process.env.HZ_R172_REQUIRE_KEYED === "1",
     nestedReceipts,
     nestedEventStreams,
     nestedObserve,
@@ -238,6 +243,7 @@ export function renderSessionVerify(report: SessionVerifyReport): string {
       "  compaction chain: (no compactions.jsonl — no CompactionRecordV1 rows for this workspace yet; reduced writer appends on compaction)",
     );
   }
+  lines.push(`  strict keyed verify: ${report.strictKeyed ? "on" : "off"} (HZ_R172_REQUIRE_KEYED)`);
   lines.push(`  ${formatEffectReconcileProbeSummary(report.reconcile)}`);
   lines.push(`  ${formatEffectEvidenceGateSummary(report.evidence)}`);
   if (report.nestedObserve !== undefined) {

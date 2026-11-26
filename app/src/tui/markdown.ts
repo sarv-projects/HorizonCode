@@ -17,6 +17,7 @@
  */
 
 import { bgCode, colorLevel, fgCode, onBg, visibleWidth, type ColorLevel, type Role } from "./style";
+import { healStreamingInline } from "./markdown-tail-heal";
 
 export interface MarkdownOptions {
   /** columns available (callers leave the last one free) */
@@ -25,6 +26,12 @@ export interface MarkdownOptions {
   unicode?: boolean;
   /** emit OSC 8 hyperlinks (see `hyperlinksEnabled`) */
   hyperlinks?: boolean;
+  /**
+   * ADDITIVE (Group F patchmark ADAPT): when true, `flushPartial` closes
+   * unclosed inline markers in the shown tail so it renders consistently
+   * mid-stream. Default false = byte-identical existing behavior.
+   */
+  healPartial?: boolean;
 }
 
 export interface MarkdownStream {
@@ -135,10 +142,11 @@ export function renderInline(s: string, c: MdCtx): string {
       const m = /^\[([^\]]+)\]\(([^)\s]+)\)/.exec(s.slice(i));
       if (m) {
         const label = renderInline(m[1] as string, c);
-        const url = m[2] as string;
+        const rawUrl = m[2] as string;
+        const url = rawUrl.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
         let shown = fgRun("link", label, c, "4");
         if (c.hyperlinks && /^https?:\/\//.test(url)) shown = `\u001b]8;;${url}\u001b\\${shown}\u001b]8;;\u001b\\`;
-        out += shown + (m[1] === url ? "" : run("2", "22", ` (${url})`, c.level));
+        out += shown + (m[1] === rawUrl ? "" : run("2", "22", ` (${url})`, c.level));
         i += m[0].length;
         continue;
       }
@@ -413,6 +421,17 @@ export function createMarkdownStream(opts: MarkdownOptions): MarkdownStream {
     flushPartial() {
       if (fence || table.length > 0 || pending === "") return "";
       if (shown === 0 && BLOCK_START.test(pending)) return "";
+      // ADDITIVE heal mode: show the whole remaining prose tail with unclosed
+      // inline markers closed, so a mid-stream `*ital` renders as *ital*. The
+      // closers are display-only — `end()` re-renders from raw `pending`.
+      if (opts.healPartial === true) {
+        const tail = pending.slice(shown);
+        const space = tail.lastIndexOf(" ");
+        if (space < 0) return "";
+        const release = tail.slice(0, space + 1);
+        shown += release.length;
+        return healStreamingInline(release);
+      }
       // Release whole words up to the first inline marker, never past it.
       const mark = pending.slice(shown).search(INLINE_MARK);
       const upto = mark === -1 ? pending.length : shown + mark;

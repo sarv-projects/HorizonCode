@@ -1,44 +1,57 @@
+/**
+ * toolconv-history-rewrite.test.ts — D-8: history replay round-trips per dialect.
+ *
+ * For every in-band dialect the rewrite must emit text THAT DIALECT's own parser
+ * reads back as the same call. Before this, seven dialects replayed Hermes
+ * blocks, which their parsers could not read at all.
+ */
+
 import { describe, expect, test } from "bun:test";
 import type { ChatMsg } from "../../src/contracts";
 import { rewriteHistoryForTextToolconv } from "../../src/core/providers/toolconv/history-rewrite";
-import { prepareInnerTextToolRequest } from "../../src/core/providers/toolconv/wrap-shared";
-import { renderHermesToolInstructions } from "../../src/core/providers/toolconv/hermes";
+import { parseDeepseekToolCalls } from "../../src/core/providers/toolconv/deepseek";
+import { parseGeminiToolCalls } from "../../src/core/providers/toolconv/gemini";
+import { parseGemmaToolCalls } from "../../src/core/providers/toolconv/gemma";
+import { parseGlmToolCalls } from "../../src/core/providers/toolconv/glm";
+import { parseHarmonyToolCalls } from "../../src/core/providers/toolconv/harmony";
+import { parseKimiToolCalls } from "../../src/core/providers/toolconv/kimi";
+import { parseMinimaxToolCalls } from "../../src/core/providers/toolconv/minimax";
+import type { ToolFormat } from "../../src/core/config";
 
-describe("toolconv history rewrite", () => {
-  test("folds assistant tool_calls and paired tool results (hermes)", () => {
-    const messages: ChatMsg[] = [
-      { role: "user", content: "read a.txt" },
-      {
-        role: "assistant",
-        content: "",
-        toolCalls: [{ id: "c1", name: "read", arguments: '{"path":"a.txt"}' }],
-      },
-      { role: "tool", toolCallId: "c1", toolName: "read", content: "hello" },
-    ];
-    const out = rewriteHistoryForTextToolconv(messages, "hermes");
-    expect(out.some((m) => m.role === "tool")).toBe(false);
-    expect(out.some((m) => m.toolCalls !== undefined)).toBe(false);
-    const assistant = out.find((m) => m.role === "assistant");
-    const user = out.filter((m) => m.role === "user");
-    expect(assistant?.content).toContain("<tool_call>");
-    expect(user[user.length - 1]?.content).toContain("<tool_response>");
-    expect(user[user.length - 1]?.content).toContain("hello");
-  });
+const allowed = new Set(["write"]);
+const history = (args: Record<string, unknown>): ChatMsg[] => [
+  { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "write", arguments: JSON.stringify(args) }] },
+  { role: "tool", content: "ok", toolCallId: "c1", toolName: "write" },
+];
 
-  test("prepareInnerTextToolRequest strips native tools from wire", () => {
-    const req = prepareInnerTextToolRequest(
-      {
-        model: "m",
-        system: "base",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [{ name: "read", description: "r", parameters: { type: "object", properties: {} } }],
-        signal: new AbortController().signal,
-      },
-      "hermes",
-      renderHermesToolInstructions,
-    );
-    expect(req.tools).toEqual([]);
-    expect(req.system).toContain("<tools>");
-    expect(req.messages).toEqual([{ role: "user", content: "hi" }]);
-  });
+function assistantText(dialect: ToolFormat, args: Record<string, unknown>): string {
+  const out = rewriteHistoryForTextToolconv(history(args), dialect);
+  return out.filter((m) => m.role === "assistant").map((m) => String(m.content)).join("\n");
+}
+
+const cases: Array<[ToolFormat, (text: string, allowed: ReadonlySet<string>) => unknown]> = [
+  ["deepseek", parseDeepseekToolCalls],
+  ["gemini", parseGeminiToolCalls],
+  ["gemma", parseGemmaToolCalls],
+  ["glm", parseGlmToolCalls],
+  ["harmony", parseHarmonyToolCalls],
+  ["kimi", parseKimiToolCalls],
+  ["minimax", parseMinimaxToolCalls],
+  ["anthropic", parseMinimaxToolCalls],
+];
+
+describe("history rewrite round-trips", () => {
+  for (const [dialect, parse] of cases) {
+    test(dialect + ": its own parser reads the replayed call", () => {
+      const args = { path: "a.txt", content: "hello" };
+      const parsed = parse(assistantText(dialect, args), allowed) as {
+        calls: Array<{ name: string; args: Record<string, unknown> }>;
+        errors: string[];
+      };
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.calls).toHaveLength(1);
+      expect(parsed.calls[0]?.name).toBe("write");
+      expect(parsed.calls[0]?.args).toEqual(args);
+    });
+  }
 });

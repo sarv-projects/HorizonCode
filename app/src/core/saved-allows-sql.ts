@@ -12,6 +12,7 @@ import type { GuardKind } from "../contracts";
 import { withFileLockSync } from "./file-lock";
 import { migrateSessionDb } from "./session-migrate";
 import { sessionDbPath } from "./paths";
+import { assertSqliteReconcileBarrierClear } from "./session";
 import type { SavedAllowRow } from "./saved-allows";
 
 const SAVE_LOCK_SUFFIX = ".saved-allows.lock";
@@ -78,6 +79,7 @@ function enforceCap(db: Database, cap: number): void {
 
 /** Upsert one row and enforce cap inside a file lock + transaction. */
 export function upsertSavedAllowsSql(workspace: string, rows: SavedAllowRow[], cap: number): void {
+  assertSqliteReconcileBarrierClear("saved-allows-sql.upsertSavedAllowsSql");
   const dbPath = sessionDbPath(workspace);
   withFileLockSync(`${dbPath}${SAVE_LOCK_SUFFIX}`, () => {
     const db = openSavedAllowsDb(workspace);
@@ -105,6 +107,7 @@ export function upsertSavedAllowsSql(workspace: string, rows: SavedAllowRow[], c
 /** Import JSON rows when the SQL table is empty (legacy workspaces). */
 export function importJsonIntoSqlIfEmpty(workspace: string, jsonRows: SavedAllowRow[], cap: number): boolean {
   if (jsonRows.length === 0) return false;
+  assertSqliteReconcileBarrierClear("saved-allows-sql.importJsonIntoSqlIfEmpty");
   const dbPath = sessionDbPath(workspace);
   let imported = false;
   withFileLockSync(`${dbPath}${SAVE_LOCK_SUFFIX}`, () => {

@@ -37,28 +37,54 @@ export function assessResultDigestEvidence(
   return { stable: claimedDigest === observedDigest, observedDigest };
 }
 
-/** Two independent sha256 passes on captured stream bytes (docs/28 **314**). */
-export function observeCapturedShellStreamDigest(bytes: Uint8Array | Buffer): {
+/**
+ * Digest one captured stream, and verify it against a SECOND observation when
+ * the caller has one (docs/28 **314**, corrected by D-5/serial 889).
+ *
+ * The previous implementation hashed the same buffer twice and compared the
+ * results, so `observationStable` could never be false: it restated one hash
+ * instead of checking an observation. Now:
+ *
+ *  - one capture yields `digest` and `doubleObserved: false`, an honest
+ *    statement that no second look happened;
+ *  - a second, independently captured buffer is hashed and compared
+ *    (`doubleObserved: true`); a mismatch withholds the digest and reports the
+ *    confirming hash, so a gate can refuse;
+ *  - `shellExecResultDigestStable` requires a digest on both streams, so an
+ *    unstable observation can never be reported as settled.
+ */
+export function observeCapturedShellStreamDigest(
+  bytes: Uint8Array | Buffer,
+  second?: Uint8Array | Buffer,
+): {
   digest?: string;
   observationStable: boolean;
+  doubleObserved: boolean;
   confirmDigest?: string;
 } {
   const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   const primary = sha256BufferHex(buf);
-  const confirm = sha256BufferHex(buf);
-  const observationStable = primary === confirm;
-  return {
-    ...(observationStable ? { digest: primary } : {}),
-    observationStable,
-    ...(observationStable ? {} : { confirmDigest: confirm }),
-  };
+  if (second === undefined) {
+    return { digest: primary, observationStable: true, doubleObserved: false };
+  }
+  const secondBuf = Buffer.isBuffer(second) ? second : Buffer.from(second);
+  const confirm = sha256BufferHex(secondBuf);
+  if (primary === confirm) {
+    return { digest: primary, observationStable: true, doubleObserved: true, confirmDigest: confirm };
+  }
+  return { observationStable: false, doubleObserved: true, confirmDigest: confirm };
 }
 
 export function shellExecResultDigestStable(
   stdout: ReturnType<typeof observeCapturedShellStreamDigest>,
   stderr: ReturnType<typeof observeCapturedShellStreamDigest>,
 ): boolean {
-  return stdout.observationStable && stderr.observationStable;
+  return (
+    stdout.observationStable &&
+    stderr.observationStable &&
+    stdout.digest !== undefined &&
+    stderr.digest !== undefined
+  );
 }
 
 /** Success output for kernel-routed fs mutations (must match `effect-kernel-mutation-route.ts`). */

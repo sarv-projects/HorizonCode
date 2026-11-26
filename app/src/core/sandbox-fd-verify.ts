@@ -61,8 +61,7 @@ export async function verifyFdInWorkspace(
   }
   if (expectedReal !== undefined) {
     const chained = resolveSymlinkChain(requestedPath) ?? requestedPath;
-    const sameDir = path.dirname(openedAs) === path.dirname(expectedReal);
-    if (chained !== expectedReal && openedAs !== expectedReal && !sameDir) {
+    if (chained !== expectedReal && openedAs !== expectedReal) {
       return {
         refusal:
           `HZ_PRECONDITION_FAILED: write refused: ${requestedPath} now resolves to ${openedAs} ` +

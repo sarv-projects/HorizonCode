@@ -4,6 +4,7 @@ import {
   effectHostDoctorPosture,
   effectHostKernelRequirePreflight,
   effectHostKernelRequireRefusal,
+  effectHostNoAmbientFallbackRefusal,
   effectHostPrototypeHonestyDoctorHint,
   effectHostPrototypeHonestyRecommendRequire,
   EFFECT_HOST_KERNEL_REQUIRE_NOTICE,
@@ -11,6 +12,38 @@ import {
 } from "../../src/core/effect-host-posture";
 import { effectHostKernelMode, effectHostKernelMutationEnabled, effectHostKernelRequireMode } from "../../src/core/effect-kernel-mutation-route";
 import { restoreEnv, setEnv, snapshotEnv } from "./helpers";
+
+describe("opt-in no-ambient-fallback gate (P0-1 reduction)", () => {
+  test("refuses unrouted mutations under default/=1 only with the flag set", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "default", HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK: "1" });
+      for (const tool of ["write", "edit", "shell", "apply_patch", "ast_edit", "undo"]) {
+        expect(effectHostNoAmbientFallbackRefusal(tool, false)).toContain("ambient");
+        expect(effectHostNoAmbientFallbackRefusal(tool, true)).toBeUndefined();
+      }
+      expect(effectHostNoAmbientFallbackRefusal("read", false)).toBeUndefined();
+      // Never-routable tools must not slip through the strict default gate.
+      for (const tool of ["code_mode", "preview", "agent", "shell_session", "best_of_n", "mcp__srv__ro"]) {
+        expect(effectHostNoAmbientFallbackRefusal(tool, false)).toContain("ambient");
+      }
+
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "1" });
+      expect(effectHostNoAmbientFallbackRefusal("write", false)).toContain("ambient");
+
+      setEnv({ HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK: undefined });
+      expect(effectHostNoAmbientFallbackRefusal("write", false)).toBeUndefined();
+
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "require", HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK: "1" });
+      expect(effectHostNoAmbientFallbackRefusal("write", false)).toBeUndefined();
+
+      setEnv({ HZ_EFFECT_HOST_KERNEL: undefined });
+      expect(effectHostNoAmbientFallbackRefusal("write", false)).toBeUndefined();
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+});
 
 describe("effectHostRequireSuppressHooks (rulings 651 + 666)", () => {
   test("doctor residual documents hook suppress whenever EffectHost is on", () => {
@@ -40,6 +73,12 @@ describe("effectHostKernelRequirePreflight (ruling 649)", () => {
       setEnv({ HZ_EFFECT_HOST_KERNEL: "require" });
       // undo is kernel-routed (**650**) — preflight must not refuse it early.
       expect(effectHostKernelRequirePreflight("undo", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("read", { path: "a.txt" })).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("git_status", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("git_diff", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("ctx_inspect", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("history_snip_preview", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("verified_open", { path: "a.txt" })).toBeUndefined();
       expect(effectHostKernelRequirePreflight("code_mode", { code: "return 1;" })).toContain("code_mode");
       expect(effectHostKernelRequirePreflight("mcp__x__y", {})).toContain("OwnerLog-admitted");
       expect(
@@ -64,6 +103,20 @@ describe("effectHostKernelRequirePreflight (ruling 649)", () => {
     try {
       setEnv({ HZ_EFFECT_HOST_KERNEL: "0" });
       expect(effectHostKernelRequirePreflight("undo", {})).toBeUndefined();
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+});
+
+describe("doctor fix lines for strict opt-ins", () => {
+  test("--fix effect.host names both strict flags", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "default" });
+      const lines = effectHostDoctorFixLines().join("\n");
+      expect(lines).toContain("HZ_EFFECT_HOST_MCP_READONLY_STRICT=0 does not restore");
+      expect(lines).toContain("HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK=1");
     } finally {
       restoreEnv(snap);
     }

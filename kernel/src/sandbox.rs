@@ -115,9 +115,7 @@ impl SandboxMode {
     ///   danger-full-access -> []
     pub fn wider_modes(self) -> &'static [SandboxMode] {
         match self {
-            SandboxMode::ReadOnly => {
-                &[SandboxMode::WorkspaceWrite, SandboxMode::DangerFullAccess]
-            }
+            SandboxMode::ReadOnly => &[SandboxMode::WorkspaceWrite, SandboxMode::DangerFullAccess],
             SandboxMode::WorkspaceWrite => &[SandboxMode::DangerFullAccess],
             SandboxMode::DangerFullAccess => &[],
         }
@@ -237,7 +235,9 @@ pub fn validate_escalation_args(
     raw_permissions: Option<SandboxMode>,
     raw_justification: Option<&str>,
 ) -> Result<EscalationArgs, EscalationError> {
-    let justification_present = raw_justification.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let justification_present = raw_justification
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
     match (raw_permissions, justification_present) {
         (Some(mode), true) => Ok(EscalationArgs {
             sandbox_permissions: mode,
@@ -468,7 +468,11 @@ pub struct EnforcementReport {
 
 impl EnforcementReport {
     fn to_json(&self) -> Value {
-        let dims: Vec<Value> = self.dimensions.iter().map(DimensionReport::to_json).collect();
+        let dims: Vec<Value> = self
+            .dimensions
+            .iter()
+            .map(DimensionReport::to_json)
+            .collect();
         let mut obj = json!({
             "status": "report",
             "mode": self.mode.as_str(),
@@ -595,7 +599,7 @@ fn detect_landlock_fs() -> bool {
 
 /// Canary: create an empty-ish ruleset and close it. Proves the LSM is active
 /// even when `/sys/kernel/security/lsm` is absent.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn landlock_create_canary() -> bool {
     #[repr(C)]
     struct Attr {
@@ -627,7 +631,36 @@ fn landlock_create_canary() -> bool {
     true
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn landlock_create_canary() -> bool {
+    #[repr(C)]
+    struct Attr {
+        handled_access_fs: u64,
+    }
+    let attr = Attr {
+        handled_access_fs: 1 << 2,
+    };
+    let ret: i64;
+    unsafe {
+        std::arch::asm!(
+            "svc #0",
+            in("x8") SYS_LANDLOCK_CREATE_RULESET,
+            inlateout("x0") &attr as *const _ as i64 => ret,
+            in("x1") std::mem::size_of::<Attr>() as u64,
+            in("x2") 0u64,
+            options(nostack),
+        );
+    }
+    if ret < 0 {
+        return false;
+    }
+    unsafe {
+        libc::close(ret as i32);
+    }
+    true
+}
+
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 fn landlock_create_canary() -> bool {
     false
 }
@@ -645,22 +678,16 @@ fn lsm_list_contains_landlock() -> bool {
 /// rather than creating a ruleset.
 const LANDLOCK_CREATE_RULESET_VERSION: u64 = 1 << 0;
 
-/// The `landlock_create_ruleset` syscall number on x86_64 (444). On any other
-/// architecture we cannot make the raw syscall portably, so we fail closed.
-#[cfg(target_arch = "x86_64")]
+/// The `landlock_create_ruleset` syscall number on x86_64 and aarch64 (444).
+/// On any other architecture we fail closed.
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 const SYS_LANDLOCK_CREATE_RULESET: u64 = 444;
 
 /// `true` when the raw `landlock_create_ruleset` ABI probe returns a usable
 /// version (>= 1). Fail-closed to `false` on `-ENOSYS`/any negative return and
-/// on any non-x86_64 target (we never panic, never assume).
-#[cfg(target_arch = "x86_64")]
+/// on unsupported targets (we never panic, never assume).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn landlock_abi_usable() -> bool {
-    // landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) returns
-    // the supported ABI version (>= 1) or -errno (e.g. -ENOSYS). A raw syscall
-    // via inline asm keeps us dependency-free (no libc), matching the house
-    // "std + raw syscall numbers / /proc inspection" style. SAFETY: the call
-    // has no memory effects (NULL attr, size 0, the VERSION flag is read-only);
-    // it only reads a kernel-reported integer.
     let ret: i64;
     unsafe {
         std::arch::asm!(
@@ -677,9 +704,24 @@ fn landlock_abi_usable() -> bool {
     ret >= 1
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 fn landlock_abi_usable() -> bool {
-    // No portable raw-syscall path off x86_64: fail closed.
+    let ret: i64;
+    unsafe {
+        std::arch::asm!(
+            "svc #0",
+            in("x8") SYS_LANDLOCK_CREATE_RULESET,
+            inlateout("x0") 0i64 => ret,                  // attr = NULL
+            in("x1") 0u64,                                // size = 0
+            in("x2") LANDLOCK_CREATE_RULESET_VERSION,     // flags
+            options(nostack),
+        );
+    }
+    ret >= 1
+}
+
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+fn landlock_abi_usable() -> bool {
     false
 }
 
@@ -716,23 +758,62 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable_file(path: &Path) -> bool {
-    std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+    std::fs::metadata(path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
 }
 
-/// Unprivileged user namespaces: usable when the kernel exposes the knob
-/// `/proc/sys/kernel/unprivileged_userns_clone` as `1`, OR (when that Debian-
-/// specific knob is absent) `max_user_namespaces` is > 0 and the feature is
-/// compiled in (`/proc/sys/user/max_user_namespaces`). Fail-closed: any read
-/// error or a `0` is `false`.
-fn detect_userns() -> bool {
+/// Pure evaluator for userns sysctl knobs (unit-testable on any host).
+pub fn evaluate_userns_sysctls(
+    apparmor_restrict_unpriv_userns: Option<&str>,
+    unprivileged_userns_clone: Option<&str>,
+    max_user_namespaces: Option<&str>,
+) -> bool {
+    // Ubuntu 24.04+ AppArmor restriction blocks unprivileged userns even when
+    // max_user_namespaces > 0 and unprivileged_userns_clone is absent/1.
+    if let Some(v) = apparmor_restrict_unpriv_userns {
+        if v.trim() == "1" {
+            return false;
+        }
+    }
     // The Debian/Ubuntu gate, when present, is authoritative.
-    if let Ok(v) = std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone") {
+    if let Some(v) = unprivileged_userns_clone {
         return v.trim() == "1";
     }
     // Otherwise the feature is on when the kernel permits any user namespaces.
-    match std::fs::read_to_string("/proc/sys/user/max_user_namespaces") {
-        Ok(v) => v.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false),
-        Err(_) => false,
+    match max_user_namespaces {
+        Some(v) => v.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false),
+        None => false,
+    }
+}
+
+/// Unprivileged user namespaces: usable when Ubuntu 24.04 AppArmor does not
+/// restrict unprivileged userns AND `/proc/sys/kernel/unprivileged_userns_clone`
+/// is `1` (or absent with `/proc/sys/user/max_user_namespaces` > 0). Fail-closed
+/// on any read error or `0`.
+fn detect_userns() -> bool {
+    let apparmor =
+        std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").ok();
+    let unpriv_clone = std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone").ok();
+    let max_userns = std::fs::read_to_string("/proc/sys/user/max_user_namespaces").ok();
+    evaluate_userns_sysctls(
+        apparmor.as_deref(),
+        unpriv_clone.as_deref(),
+        max_userns.as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod userns_sysctl_tests {
+    use super::*;
+
+    #[test]
+    fn apparmor_restrict_unprivileged_userns_forces_false() {
+        assert!(!evaluate_userns_sysctls(Some("1\n"), Some("1\n"), Some("65536\n")));
+        assert!(!evaluate_userns_sysctls(Some("1"), None, Some("65536")));
+        assert!(evaluate_userns_sysctls(Some("0\n"), Some("1\n"), Some("65536\n")));
+        assert!(evaluate_userns_sysctls(None, None, Some("65536\n")));
+        assert!(!evaluate_userns_sysctls(None, Some("0"), Some("65536")));
     }
 }
 
@@ -945,7 +1026,10 @@ pub fn run_sandbox_exec_probe(
         command.env("PATH", path);
     }
     command
-        .env("HZ_SANDBOX_FS_ROOT", std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .env(
+            "HZ_SANDBOX_FS_ROOT",
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        )
         .env("HZ_SANDBOX_FS_MODE", "workspace-write")
         .env("HZ_SANDBOX_CHILD_NET", child_net)
         .arg("--")
@@ -1035,7 +1119,11 @@ pub fn run_sandbox_exec_probe(
             exit_code
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "signal".to_string()),
-            if detail.is_empty() { String::new() } else { format!(": {}", detail) }
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", detail)
+            }
         ))
     };
     SandboxExecProbe {
@@ -1348,7 +1436,10 @@ fn unmet_residual(available: bool, what: &str, mechanism: &str) -> String {
             mechanism, what
         )
     } else {
-        format!("{}: unavailable on this host and not applied; {} not confined at the OS layer", mechanism, what)
+        format!(
+            "{}: unavailable on this host and not applied; {} not confined at the OS layer",
+            mechanism, what
+        )
     }
 }
 
@@ -1409,7 +1500,8 @@ fn rlimits_dimension(caps: &Capabilities, applied: &AppliedMechanisms) -> Dimens
             dimension: "resources".to_string(),
             guarantee: Guarantee::BestEffort,
             backend: "rlimits".to_string(),
-            residual: "rlimits bound resources but are not a confinement boundary (best effort)".to_string(),
+            residual: "rlimits bound resources but are not a confinement boundary (best effort)"
+                .to_string(),
             available: true,
         }
     } else {
@@ -1675,7 +1767,10 @@ mod tests {
             assert_eq!(applied.filesystem, capabilities().landlock_fs);
             assert_eq!(applied.process, capabilities().seccomp);
             assert_eq!(applied.resources, capabilities().rlimits);
-            assert_eq!(applied.network, capabilities().netns && probe.child_net == "off");
+            assert_eq!(
+                applied.network,
+                capabilities().netns && probe.child_net == "off"
+            );
         }
     }
 
@@ -1715,7 +1810,10 @@ mod tests {
         assert!(applied.filesystem);
         assert!(applied.process);
         assert!(applied.resources);
-        assert!(!applied.network, "child net on must never claim network enforcement");
+        assert!(
+            !applied.network,
+            "child net on must never claim network enforcement"
+        );
         assert!(applied.network_disabled_reason.is_some());
         // And the composed report is honest about it.
         let report = match enforce(
@@ -1753,15 +1851,28 @@ mod tests {
 
         assert_eq!(resolve_child_net(None, false), ("off".to_string(), false));
         assert_eq!(resolve_child_net(None, true), ("on".to_string(), true));
-        assert_eq!(resolve_child_net(Some("off"), true), ("off".to_string(), false));
-        assert_eq!(resolve_child_net(Some("ON"), false), ("on".to_string(), false));
+        assert_eq!(
+            resolve_child_net(Some("off"), true),
+            ("off".to_string(), false)
+        );
+        assert_eq!(
+            resolve_child_net(Some("ON"), false),
+            ("on".to_string(), false)
+        );
         // A typo requests isolation (same fail-closed reading as the helper), so
         // it can never silently become the WSL `on` default.
-        assert_eq!(resolve_child_net(Some("maybe"), true), ("off".to_string(), false));
-        assert_eq!(resolve_child_net(Some("  "), true), ("on".to_string(), true));
+        assert_eq!(
+            resolve_child_net(Some("maybe"), true),
+            ("off".to_string(), false)
+        );
+        assert_eq!(
+            resolve_child_net(Some("  "), true),
+            ("on".to_string(), true)
+        );
     }
 
     #[test]
+    #[cfg(unix)]
     fn exec_probe_plumbing_reports_success_and_failure_not_silence() {
         use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt;
@@ -1805,20 +1916,34 @@ mod tests {
         let applied = all_applied();
         for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
             match enforce(mode, &caps_none(), &applied, true) {
-                EnforcementOutcome::Unavailable { mode: m, reason, host_capabilities } => {
+                EnforcementOutcome::Unavailable {
+                    mode: m,
+                    reason,
+                    host_capabilities,
+                } => {
                     assert_eq!(m, mode);
                     assert!(reason.contains("SANDBOX_UNAVAILABLE"));
                     assert_eq!(host_capabilities, caps_none());
                 }
-                other => panic!("expected SANDBOX_UNAVAILABLE without Landlock, got {:?}", other),
+                other => panic!(
+                    "expected SANDBOX_UNAVAILABLE without Landlock, got {:?}",
+                    other
+                ),
             }
             match enforce(mode, &caps_all(), &applied, true) {
                 EnforcementOutcome::Report(report) => {
                     assert_eq!(report.backend, "landlock");
-                    let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+                    let fs = report
+                        .dimensions
+                        .iter()
+                        .find(|d| d.dimension == "filesystem")
+                        .unwrap();
                     assert_eq!(fs.guarantee, Guarantee::Enforced);
                 }
-                other => panic!("expected full report when Landlock available+applied, got {:?}", other),
+                other => panic!(
+                    "expected full report when Landlock available+applied, got {:?}",
+                    other
+                ),
             }
         }
     }
@@ -1833,9 +1958,16 @@ mod tests {
         };
         assert_eq!(report.completeness, EnforcementCompleteness::Partial);
         assert_eq!(report.backend, "none");
-        let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+        let fs = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "filesystem")
+            .unwrap();
         assert_eq!(fs.guarantee, Guarantee::Unsupported);
-        assert!(!fs.residual.is_empty(), "FS residual must be non-empty (S2)");
+        assert!(
+            !fs.residual.is_empty(),
+            "FS residual must be non-empty (S2)"
+        );
 
         // With Landlock available+applied: FS-confined mode is a landlock report.
         let report = match enforce(SandboxMode::WorkspaceWrite, &caps_all(), &applied, false) {
@@ -1843,14 +1975,30 @@ mod tests {
             other => panic!("expected a landlock report, got {:?}", other),
         };
         assert_eq!(report.backend, "landlock");
-        let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+        let fs = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "filesystem")
+            .unwrap();
         assert_eq!(fs.guarantee, Guarantee::Enforced);
         assert_eq!(fs.backend, "landlock");
-        let process = report.dimensions.iter().find(|d| d.dimension == "process").unwrap();
+        let process = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "process")
+            .unwrap();
         assert_eq!(process.guarantee, Guarantee::Enforced);
-        let network = report.dimensions.iter().find(|d| d.dimension == "network").unwrap();
+        let network = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "network")
+            .unwrap();
         assert_eq!(network.guarantee, Guarantee::Enforced);
-        let resources = report.dimensions.iter().find(|d| d.dimension == "resources").unwrap();
+        let resources = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "resources")
+            .unwrap();
         assert_eq!(resources.guarantee, Guarantee::BestEffort);
     }
 
@@ -1878,14 +2026,21 @@ mod tests {
 
     #[test]
     fn platform_notes_on_wire_never_claim_macos_enforced() {
-        let report = match enforce(SandboxMode::DangerFullAccess, &caps_none(), &all_applied(), true) {
+        let report = match enforce(
+            SandboxMode::DangerFullAccess,
+            &caps_none(),
+            &all_applied(),
+            true,
+        ) {
             EnforcementOutcome::Report(r) => r,
             other => panic!("expected a report, got {:?}", other),
         };
         let json = EnforcementOutcome::Report(report).to_json();
         let notes = json["platformNotes"].as_array().expect("platformNotes");
         assert!(
-            notes.iter().any(|n| n.as_str().unwrap_or("").contains("Seatbelt")),
+            notes
+                .iter()
+                .any(|n| n.as_str().unwrap_or("").contains("Seatbelt")),
             "{}",
             json
         );
@@ -1926,7 +2081,10 @@ mod tests {
         let unavail = enforce(SandboxMode::ReadOnly, &caps_none(), &applied, true).to_json();
         assert_eq!(unavail["status"], json!("sandbox_unavailable"));
         assert_eq!(unavail["mode"], json!("read-only"));
-        assert!(unavail["reason"].as_str().unwrap().contains("SANDBOX_UNAVAILABLE"));
+        assert!(unavail["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SANDBOX_UNAVAILABLE"));
         assert_eq!(unavail["hostCapabilities"]["landlockFs"], json!(false));
 
         let confined = enforce(SandboxMode::ReadOnly, &caps_all(), &applied, true).to_json();

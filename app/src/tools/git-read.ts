@@ -6,7 +6,7 @@
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
-import { resolvePath, truncate } from "./helpers";
+import { resolveRealTarget, scrubEnv, truncate } from "./helpers";
 
 const MAX_OUTPUT = 30_000;
 const DEFAULT_LOG_COUNT = 20;
@@ -34,18 +34,37 @@ async function guardWorkspaceRead(ctx: ToolContext, root: string): Promise<strin
   return null;
 }
 
+const SAFE_GIT_CONFIG = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "diff.external=",
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "protocol.ext.allow=never",
+];
+
 async function runGit(ctx: ToolContext, gitRoot: string, argv: string[]): Promise<ToolResult> {
+  if (ctx.signal.aborted) return fail("aborted");
   const denied = await guardWorkspaceRead(ctx, gitRoot);
   if (denied !== null) return fail(denied);
-  const cmd = ["git", "-C", gitRoot, ...argv];
+  if (ctx.signal.aborted) return fail("aborted");
+  const cmd = ["git", ...SAFE_GIT_CONFIG, "-C", gitRoot, ...argv];
   let proc: Awaited<ReturnType<typeof spawnOwned>>["proc"];
   try {
     ({ proc } = await spawnOwned(cmd, {
       stateDir: kernelStateDir(ctx.workspace),
       label: `git:${argv[0] ?? "?"}`,
       cwd: gitRoot,
+      env: { ...scrubEnv(), GIT_CONFIG_NOSYSTEM: "1" },
       stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
       longLived: false,
+      sandboxWrap: "auto",
+      sandboxMode: "read-only",
+      kernel: ctx.kernel,
     }));
   } catch (e) {
     return fail(`git failed to start: ${msg(e)}`);
@@ -73,17 +92,35 @@ async function runGit(ctx: ToolContext, gitRoot: string, argv: string[]): Promis
   };
   const pump = Promise.all([readStream(proc.stdout, "out"), readStream(proc.stderr, "err")]);
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
+  let aborted = false;
+  const killProc = (): void => {
     try {
       proc.kill(9);
     } catch {
       /* ignore */
     }
+  };
+  const onAbort = (): void => {
+    aborted = true;
+    killProc();
+  };
+  ctx.signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    killProc();
   }, GIT_TIMEOUT_MS);
-  await Promise.race([proc.exited, pump]).catch(() => {});
-  await pump.catch(() => {});
-  clearTimeout(timer);
+  try {
+    if (ctx.signal.aborted) {
+      aborted = true;
+      killProc();
+    }
+    await Promise.race([proc.exited, pump]).catch(() => {});
+    await pump.catch(() => {});
+  } finally {
+    clearTimeout(timer);
+    ctx.signal.removeEventListener("abort", onAbort);
+  }
+  if (aborted) return fail("aborted");
   const code = proc.exitCode ?? (proc.signalCode ? -1 : timedOut ? -1 : 0);
   if (timedOut) return fail("git timed out");
   if (code !== 0) {
@@ -94,17 +131,15 @@ async function runGit(ctx: ToolContext, gitRoot: string, argv: string[]): Promis
   return { ok: true, output: body };
 }
 
-function insideWorkspace(workspace: string, target: string): boolean {
-  const root = path.resolve(workspace);
-  const abs = path.resolve(target);
-  return abs === root || abs.startsWith(`${root}${path.sep}`);
-}
-
-function optionalRelPath(ctx: ToolContext, raw: unknown, base: string): string | undefined {
-  if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  const abs = resolvePath(base, raw.trim());
-  if (!insideWorkspace(ctx.cwd, abs)) return undefined;
-  return raw.trim();
+function optionalRelPath(
+  ctx: ToolContext,
+  raw: unknown,
+  base: string,
+): { ok: true; rel: string | undefined } | { ok: false; error: string } {
+  if (typeof raw !== "string" || raw.trim() === "") return { ok: true, rel: undefined };
+  const target = resolveRealTarget(base, raw.trim(), ctx.workspace);
+  if (!target.inside) return { ok: false, error: "path must stay inside the workspace" };
+  return { ok: true, rel: raw.trim() };
 }
 
 const sharedGitParams = {
@@ -116,11 +151,11 @@ const sharedGitParams = {
 
 function gitRoot(ctx: ToolContext, args: Record<string, unknown>): string | ToolResult {
   if (typeof args.cwd === "string" && args.cwd.trim() !== "") {
-    const dir = resolvePath(ctx.cwd, args.cwd.trim());
-    if (!insideWorkspace(ctx.cwd, dir)) return fail("cwd must stay inside the workspace");
-    return dir;
+    const target = resolveRealTarget(ctx.cwd, args.cwd.trim(), ctx.workspace);
+    if (!target.inside) return fail("cwd must stay inside the workspace");
+    return target.real;
   }
-  return ctx.cwd;
+  return resolveRealTarget(ctx.cwd, ".", ctx.workspace).real;
 }
 
 export const gitStatusTool: Tool = {
@@ -160,8 +195,9 @@ export const gitDiffTool: Tool = {
     if (typeof dir !== "string") return dir;
     const argv = ["diff", "--no-ext-diff"];
     if (args.staged === true) argv.push("--staged");
-    const rel = optionalRelPath(ctx, args.path, dir);
-    if (rel !== undefined) argv.push("--", rel);
+    const checked = optionalRelPath(ctx, args.path, dir);
+    if (checked.ok === false) return fail(checked.error);
+    if (checked.rel !== undefined) argv.push("--", checked.rel);
     return await runGit(ctx, dir, argv);
   },
 };
@@ -188,8 +224,9 @@ export const gitLogTool: Tool = {
       args.oneline !== false
         ? ["log", "--oneline", "-n", String(n), "--date=short"]
         : ["log", "-n", String(n), "--date=short", "--format=%h %ad %s"];
-    const rel = optionalRelPath(ctx, args.path, dir);
-    if (rel !== undefined) argv.push("--", rel);
+    const checked = optionalRelPath(ctx, args.path, dir);
+    if (checked.ok === false) return fail(checked.error);
+    if (checked.rel !== undefined) argv.push("--", checked.rel);
     return await runGit(ctx, dir, argv);
   },
 };
@@ -211,9 +248,10 @@ export const gitBlameTool: Tool = {
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const dir = gitRoot(ctx, args);
     if (typeof dir !== "string") return dir;
-    const rel = optionalRelPath(ctx, args.path, dir);
-    if (rel === undefined) return fail("path is required and must stay inside the workspace");
-    const argv = ["blame", "--", rel];
+    const checked = optionalRelPath(ctx, args.path, dir);
+    if (checked.ok === false) return fail(checked.error);
+    if (checked.rel === undefined) return fail("path is required and must stay inside the workspace");
+    const argv = ["blame", "--", checked.rel];
     const start = typeof args.startLine === "number" ? Math.floor(args.startLine) : undefined;
     const end = typeof args.endLine === "number" ? Math.floor(args.endLine) : undefined;
     if (start !== undefined && start > 0) {

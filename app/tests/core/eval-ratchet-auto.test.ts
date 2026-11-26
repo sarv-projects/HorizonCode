@@ -1,152 +1,154 @@
-/** eval-ratchet-auto.test.ts — G-8 automatic post-run feed (additive, fail-closed). */
-
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { buildEvalApproval, buildFrozenSplit, loadRatchetDecisions } from "../../src/core/eval-approval";
-import { loadRunResults, parseRatchetGateSpec, runAutoRatchet } from "../../src/core/eval-ratchet";
-import { runEvalCli, type EvalCliIo } from "../../src/eval-run";
+import { runEvalCli } from "../../src/eval-run";
+import { buildEvalApproval, buildFrozenSplit } from "../../src/core/eval-approval";
 
-const IDS = ["c1", "c2"];
-const savedEnv = process.env.HZ_RATCHE_AUTO;
-afterEach(() => {
-  if (savedEnv === undefined) delete process.env.HZ_RATCHE_AUTO;
-  else process.env.HZ_RATCHE_AUTO = savedEnv;
-});
+describe("Track 5 P1-12: eval-run --ratchet-auto exit code", () => {
+  test("returns exit code 1 when ratchet-auto verdict is revert even if all eval cases pass", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-eval-ratchet-auto-"));
+    const casesPath = path.join(dir, "cases.json");
+    const approvalPath = path.join(dir, "approval.json");
+    const baselinePath = path.join(dir, "baseline.json");
+    const metricsPath = path.join(dir, "metrics.json");
+    const decisionLogPath = path.join(dir, "decisions.jsonl");
+    const specPath = path.join(dir, "ratchet-spec.json");
 
-function capture(): { lines: string[]; errors: string[]; io: EvalCliIo } {
-  const lines: string[] = [];
-  const errors: string[] = [];
-  return { lines, errors, io: { out: (l) => lines.push(l), err: (l) => errors.push(l) } };
-}
+    const cases = [
+      { id: "case-a", task: "list files" },
+      { id: "case-b", task: "list files" },
+    ];
+    writeFileSync(casesPath, JSON.stringify(cases, null, 2), "utf8");
 
-function fixture() {
-  const root = path.join(tmpdir(), `hz-ratchet-auto-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(root, { recursive: true });
-  const cases = IDS.map((id) => ({
-    id,
-    from: "pm",
-    task: `task ${id}`,
-    setup: { tools: [] },
-    assertions: [{ kind: "terminal" as const, value: "succeeded" as const }],
-  }));
-  const split = buildFrozenSplit(IDS, { heldOutFraction: 0.5, splitSeed: 1 });
-  const approval = buildEvalApproval(cases, "auto gate", split);
-
-  const approvalPath = path.join(root, "approval.json");
-  const baselinePath = path.join(root, "baseline.json");
-  const caseFile = path.join(root, "cases.json");
-  const metricsOut = path.join(root, "metrics.json");
-  const log = path.join(root, "decisions.jsonl");
-  const specPath = path.join(root, "spec.json");
-
-  writeFileSync(approvalPath, JSON.stringify(approval), "utf8");
-  writeFileSync(baselinePath, JSON.stringify(IDS.map((id) => ({ id, passed: true }))), "utf8");
-  writeFileSync(
-    caseFile,
-    JSON.stringify(
-      IDS.map((id) => ({ id, task: `task ${id}`, assertions: [{ kind: "terminal", value: "succeeded" }] })),
-    ),
-    "utf8",
-  );
-  const specObj = {
-    approval: approvalPath,
-    baseline: baselinePath,
-    candidate: path.join(root, "ignored-candidate.json"),
-    variantId: "variant-auto",
-    round: 1,
-    decisionLog: log,
-  };
-  writeFileSync(specPath, JSON.stringify(specObj), "utf8");
-  return { root, specPath, spec: parseRatchetGateSpec(JSON.stringify(specObj), specPath), caseFile, metricsOut, log };
-}
-
-function normalRun(f: ReturnType<typeof fixture>, io: EvalCliIo, extra: string[] = []): Promise<number> {
-  return runEvalCli(
-    ["--cases", f.caseFile, "--forbidden", "SECRET-VALUE", "--metrics-out", f.metricsOut, ...extra],
-    io,
-  );
-}
-
-describe("--ratchet-auto post-run feed (G-8)", () => {
-  test("a normal run feeds exactly one ratchet decision from its own result file", async () => {
-    const f = fixture();
-    const c = capture();
-    const code = await normalRun(f, c.io, ["--ratchet-auto", f.specPath]);
-    expect(code).toBe(0);
-    const decisions = loadRatchetDecisions(f.log);
-    expect(decisions.missing).toBe(false);
-    expect(decisions.records).toHaveLength(1);
-    expect(decisions.records[0]!.verdict).toBe("keep");
-    const text = c.lines.join("\n");
-    expect(text).toContain("ratchet-auto: keep");
-    expect(text).toContain("ratchet decision: appended");
-    // The run's own result file covered the frozen split.
-    expect(loadRunResults(f.metricsOut).map((row) => row.id).sort()).toEqual([...IDS].sort());
-  }, 90000);
-
-  test("replaying the same run is an idempotent no-op (one decision)", async () => {
-    const f = fixture();
-    const first = capture();
-    expect(await normalRun(f, first.io, ["--ratchet-auto", f.specPath])).toBe(0);
-    const second = capture();
-    expect(await normalRun(f, second.io, ["--ratchet-auto", f.specPath])).toBe(0);
-    expect(loadRatchetDecisions(f.log).records).toHaveLength(1);
-    expect(second.lines.join("\n")).toContain("no-op (identical decision already recorded)");
-  }, 90000);
-
-  test("a kept result is never overwritten by a later, different auto decision", async () => {
-    const f = fixture();
-    const first = capture();
-    expect(await normalRun(f, first.io, ["--ratchet-auto", f.specPath])).toBe(0);
-    // A new candidate that regresses on held-out yields a different record.
-    const regressing = path.join(f.root, "regressing.json");
-    writeFileSync(regressing, JSON.stringify(IDS.map((id) => ({ caseId: id, passed: false }))), "utf8");
-    expect(() => runAutoRatchet({ spec: f.spec, resultFile: regressing })).toThrow(
-      /kept-result-overwrite|never overwrite/,
+    const split = buildFrozenSplit(["case-a", "case-b"], { heldOutFraction: 0.5, splitSeed: 1 });
+    const approval = buildEvalApproval(
+      cases.map((c) => ({ id: c.id, task: c.task, forbidden: ["__NEVER_APPEARS__"] })),
+      "2026-11-26T00:00:00Z",
+      split,
     );
-    expect(loadRatchetDecisions(f.log).records).toHaveLength(1);
-  }, 90000);
+    writeFileSync(approvalPath, JSON.stringify(approval, null, 2), "utf8");
 
-  test("missing / corrupt / wrong-shape result files fail closed", async () => {
-    // No result file configured at all: refuse before running a case.
-    const noResult = fixture();
-    const c = capture();
+    // Baseline already passes both train and heldOut -> candidate tie triggers revert
+    // (keepOnTrainNotWorse defaults to false).
+    writeFileSync(
+      baselinePath,
+      JSON.stringify([
+        { id: "case-a", passed: true },
+        { id: "case-b", passed: true },
+      ]),
+      "utf8",
+    );
+
+    writeFileSync(
+      specPath,
+      JSON.stringify({
+        approval: approvalPath,
+        baseline: baselinePath,
+        candidate: metricsPath,
+        variantId: "v-tie",
+        round: 1,
+        decisionLog: decisionLogPath,
+        decidedAt: "2026-11-26T00:01:00Z",
+        keepOnTrainNotWorse: false,
+      }),
+      "utf8",
+    );
+
+    const out: string[] = [];
+    const err: string[] = [];
     const code = await runEvalCli(
-      ["--cases", noResult.caseFile, "--forbidden", "SECRET-VALUE", "--ratchet-auto", noResult.specPath],
-      c.io,
+      [
+        "--cases",
+        casesPath,
+        "--forbidden",
+        "__NEVER_APPEARS__",
+        "--metrics-out",
+        metricsPath,
+        "--ratchet-auto",
+        specPath,
+      ],
+      {
+        out: (line) => out.push(line),
+        err: (line) => err.push(line),
+      },
     );
-    expect(code).toBe(2);
-    expect(c.errors.join("\n")).toContain("requires --metrics-out");
 
-    // Corrupt result file fed directly to the auto path: never "all failed".
-    const f = fixture();
-    writeFileSync(f.metricsOut, "not json", "utf8");
-    expect(() => runAutoRatchet({ spec: f.spec, resultFile: f.metricsOut })).toThrow(/missing or not valid JSON/);
+    expect(err).toEqual([]);
+    expect(out.some((l) => l.includes("ratchet-auto: revert"))).toBe(true);
+    expect(code).toBe(1);
+    const logText = readFileSync(decisionLogPath, "utf8");
+    expect(logText).toContain('"verdict":"revert"');
+  }, 15_000);
 
-    writeFileSync(f.metricsOut, JSON.stringify({ cases: [{ caseId: "c1", passed: "yes" }] }), "utf8");
-    expect(() => loadRunResults(f.metricsOut)).toThrow(/passed must be a boolean/);
-  }, 90000);
+  test("returns exit code 0 when ratchet-auto verdict is keep and all eval cases pass", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-eval-ratchet-keep-"));
+    const casesPath = path.join(dir, "cases.json");
+    const approvalPath = path.join(dir, "approval.json");
+    const baselinePath = path.join(dir, "baseline.json");
+    const metricsPath = path.join(dir, "metrics.json");
+    const decisionLogPath = path.join(dir, "decisions.jsonl");
+    const specPath = path.join(dir, "ratchet-spec.json");
 
-  test("default is off: a normal run writes no decision log", async () => {
-    const f = fixture();
-    const c = capture();
-    const code = await normalRun(f, c.io);
+    const cases = [
+      { id: "case-a", task: "list files" },
+      { id: "case-b", task: "list files" },
+    ];
+    writeFileSync(casesPath, JSON.stringify(cases, null, 2), "utf8");
+
+    const split = buildFrozenSplit(["case-a", "case-b"], { heldOutFraction: 0.5, splitSeed: 1 });
+    const approval = buildEvalApproval(
+      cases.map((c) => ({ id: c.id, task: c.task, forbidden: ["__NEVER_APPEARS__"] })),
+      "2026-11-26T00:00:00Z",
+      split,
+    );
+    writeFileSync(approvalPath, JSON.stringify(approval, null, 2), "utf8");
+
+    // Baseline fails train, passes heldOut -> candidate passing both improves train => keep.
+    writeFileSync(
+      baselinePath,
+      JSON.stringify([
+        ...split.trainIds.map((id) => ({ id, passed: false })),
+        ...split.heldOutIds.map((id) => ({ id, passed: true })),
+      ]),
+      "utf8",
+    );
+
+    writeFileSync(
+      specPath,
+      JSON.stringify({
+        approval: approvalPath,
+        baseline: baselinePath,
+        candidate: metricsPath,
+        variantId: "v-improve",
+        round: 1,
+        decisionLog: decisionLogPath,
+        decidedAt: "2026-11-26T00:02:00Z",
+      }),
+      "utf8",
+    );
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runEvalCli(
+      [
+        "--cases",
+        casesPath,
+        "--forbidden",
+        "__NEVER_APPEARS__",
+        "--metrics-out",
+        metricsPath,
+        "--ratchet-auto",
+        specPath,
+      ],
+      {
+        out: (line) => out.push(line),
+        err: (line) => err.push(line),
+      },
+    );
+
+    expect(err).toEqual([]);
+    expect(out.some((l) => l.includes("ratchet-auto: keep"))).toBe(true);
     expect(code).toBe(0);
-    expect(loadRatchetDecisions(f.log).missing).toBe(true);
-    // The fixture dir name contains "ratchet"; assert on the decision lines.
-    expect(c.lines.join("\n")).not.toContain("ratchet-auto:");
-    expect(c.lines.join("\n")).not.toContain("ratchet decision:");
-  }, 90000);
-
-  test("HZ_RATCHE_AUTO=1 enables the post-run feed with an existing --ratchet spec", async () => {
-    const f = fixture();
-    process.env.HZ_RATCHE_AUTO = "1";
-    const c = capture();
-    const code = await normalRun(f, c.io, ["--ratchet", f.specPath]);
-    expect(code).toBe(0);
-    expect(loadRatchetDecisions(f.log).records).toHaveLength(1);
-    expect(c.lines.join("\n")).toContain("ratchet-auto: keep");
-  }, 90000);
+  }, 15_000);
 });

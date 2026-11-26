@@ -62,7 +62,12 @@ function openStore(workspace: string): SessionStore {
 
 /** A real live process we can point the lease at, plus its true identity. */
 function liveForeignOwner(): { child: Subprocess; identity: OwnerIdentity } {
-  const child = spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore" });
+  // `sleep` is not available on Windows. Spawn the current Bun runtime with a
+  // pending timer instead: same "alive for ~60s" semantics on every host.
+  const child = spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
   children.push(child);
   const ticks = readProcessStartTicks(child.pid);
   return {
@@ -208,7 +213,7 @@ describe("session-owner: exclusive acquisition", () => {
     expect(readSessionOwner(store, session.id)?.pid).toBe(process.pid);
   });
 
-  test("a different boot id proves the owner is stale even when the pid is alive", () => {
+  test.skipIf(process.platform !== "linux")("a different boot id proves the owner is stale even when the pid is alive", () => {
     const workspace = tempDir("hz-owner-stale-boot-");
     const store = openStore(workspace);
     const session = store.createSession("stale-boot");
@@ -257,7 +262,9 @@ describe("session-owner: exclusive acquisition", () => {
     expect(isOwnerLive(record({ host: "some-other-machine" }))).toBe(true);
     expect(isOwnerLive(record({ pid: 0 }))).toBe(true);
     expect(isOwnerLive(record({ pid: 999_999_999 }))).toBe(false);
-    expect(isOwnerLive(record({ bootId: "different-boot" }))).toBe(false);
+    if (readBootId() !== null) {
+      expect(isOwnerLive(record({ bootId: "different-boot" }))).toBe(false);
+    }
     if (process.platform === "linux") {
       const ticks = readProcessStartTicks(process.pid) ?? 0;
       expect(isOwnerLive(record({ startTicks: ticks + 1 }))).toBe(false);

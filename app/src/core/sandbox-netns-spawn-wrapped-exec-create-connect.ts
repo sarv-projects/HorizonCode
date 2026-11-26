@@ -65,9 +65,11 @@ export function execCreateVethInterfaceNames(suffix: string = String(process.pid
   host: string;
   peer: string;
 } {
+  const clean = String(suffix).replace(/[^a-zA-Z0-9]/g, "");
+  const tag = (clean.length > 8 ? clean.slice(-8) : clean) || "0";
   return {
-    host: `hz-wrap-exec332-h-${suffix}`,
-    peer: `hz-wrap-exec332-p-${suffix}`,
+    host: `hzw-h-${tag}`.slice(0, 14),
+    peer: `hzw-p-${tag}`.slice(0, 14),
   };
 }
 

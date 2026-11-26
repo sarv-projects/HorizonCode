@@ -58,6 +58,12 @@ export const ENV_KEYS = [
   // snapshot previously leaked require mode into later rewind/tool suites.
   "HZ_EFFECT_HOST_KERNEL",
   "HZ_EFFECT_HOST_EDIT_REPAIR",
+  "HZ_EFFECT_HOST_MCP_READONLY_STRICT",
+  "HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK",
+  "HZ_R172_REQUIRE_KEYED",
+  "HZ_ENVIRONMENT_REFRESH_EVERY",
+  "HZ_GOAL_EVALUATOR_MODEL",
+  "HZ_GOAL_VERIFY_CMD",
   "HZ_EFFECT_RECONCILE_BLOCK",
   "HZ_EFFECT_R170_BUN",
   "HZ_EFFECT_R170_BUN_TIMEOUT_MS",
@@ -301,3 +307,4 @@ export function replyResult<T>(replies: KernelReply[], id: number): T {
   if (reply.error) throw new Error(`kernel error for request ${id}: ${reply.error.message ?? "unknown"}`);
   return reply.result as T;
 }
+

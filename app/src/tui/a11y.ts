@@ -6,14 +6,23 @@ import type { StatusInfo } from "./live";
 import { formatDuration, formatTokenHint } from "./live";
 import type { UnknownEffectPayload } from "./unknown-chip";
 
+export const REDUCED_MOTION_GLYPHS = {
+  live: "\u25cf LIVE",
+  wait: "\u23f8 WAIT",
+  done: "\u2713 DONE",
+} as const;
+
 export function reduceMotion(env: Record<string, string | undefined> = process.env): boolean {
   if (env.HZ_REDUCE_MOTION === "1" || env.HZ_REDUCE_MOTION === "true") return true;
+  if (env.REDUCED_MOTION === "1" || env.REDUCED_MOTION === "true") return true;
+  if (typeof env.NO_COLOR === "string" && env.NO_COLOR !== "") return true;
   return false;
 }
 
-/** Spinner interval when animations are reduced (docs/13 D11). */
+/** Spinner interval when animations are reduced (4x throttle for REDUCED_MOTION/NO_COLOR, 1000ms for HZ_REDUCE_MOTION). */
 export function spinnerIntervalMs(env: Record<string, string | undefined> = process.env): number {
-  return reduceMotion(env) ? 1000 : 100;
+  if (env.HZ_REDUCE_MOTION === "1" || env.HZ_REDUCE_MOTION === "true") return 1000;
+  return reduceMotion(env) ? 400 : 100;
 }
 
 /** Plain status path for assistive tech or tests (docs/13 D11 reduced). */

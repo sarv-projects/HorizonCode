@@ -12,8 +12,18 @@ import os from "node:os";
 import { harnessAutomationSection } from "../pre-commit-hooks";
 import { BASE_PROMPT_SECTIONS, CHILD_PROMPT_SECTIONS, type PromptSection } from "./sections";
 import { detectShell, insideGitRepo, renderEnvironment, type EnvironmentInfo } from "./environment";
+import { diffEnvironment, renderEnvironmentDelta } from "./environment-delta";
 
 export { BASE_PROMPT_SECTIONS, CHILD_PROMPT_SECTIONS, renderEnvironment, insideGitRepo, detectShell };
+export {
+  diffEnvironment,
+  environmentFacts,
+  environmentRefreshDue,
+  hasEnvironmentDelta,
+  renderEnvironmentDelta,
+  ENVIRONMENT_FIELD_ORDER,
+} from "./environment-delta";
+export type { EnvironmentDelta, EnvironmentFieldChange } from "./environment-delta";
 export type { PromptSection, EnvironmentInfo };
 
 export type PromptEnvironmentOverrides = Partial<Omit<EnvironmentInfo, "workspace" | "today">>;
@@ -27,7 +37,7 @@ export function staticPrompt(): string {
   return join(BASE_PROMPT_SECTIONS);
 }
 
-function environmentFor(workspace: string, today: Date, over: PromptEnvironmentOverrides | undefined): EnvironmentInfo {
+export function makeEnvironmentInfo(workspace: string, today: Date, over: PromptEnvironmentOverrides | undefined): EnvironmentInfo {
   return {
     workspace,
     today,
@@ -45,10 +55,14 @@ export function buildSystemPrompt(
   today: Date = new Date(),
   over?: PromptEnvironmentOverrides,
   memory = "",
+  /** First turn of a session: omit to render the full byte-stable block. */
+  baseline?: EnvironmentInfo,
 ): string {
   const harness = harnessAutomationSection(workspace);
   const harnessBlock = harness !== "" ? `\n\n${harness}` : "";
-  return `${staticPrompt()}${memory}${harnessBlock}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
+  const current = makeEnvironmentInfo(workspace, today, over);
+  const environment = baseline === undefined ? renderEnvironment(current) : renderEnvironmentDelta(diffEnvironment(baseline, current));
+  return `${staticPrompt()}${memory}${harnessBlock}\n\n${environment}`;
 }
 
 /** The subagent body without the environment (kept as the exported constant). */
@@ -57,5 +71,5 @@ export function staticChildPrompt(): string {
 }
 
 export function buildChildPrompt(workspace: string, today: Date = new Date(), over?: PromptEnvironmentOverrides): string {
-  return `${staticChildPrompt()}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
+  return `${staticChildPrompt()}\n\n${renderEnvironment(makeEnvironmentInfo(workspace, today, over))}`;
 }

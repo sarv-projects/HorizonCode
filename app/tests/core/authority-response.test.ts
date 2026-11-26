@@ -293,6 +293,9 @@ describe("every tool passes an admission", () => {
       git_log: {},
       git_blame: { file: "a.txt" },
       shell_bg: { op: "kill", pid: 1234 },
+      ctx_inspect: { topic: "tokens" },
+      history_snip_preview: { text: "a\nb\nc\nd", keepFirst: 1, keepLast: 1 },
+      code_mode_vm: { words: [3, 42, 67], consts: [] },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {

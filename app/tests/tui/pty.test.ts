@@ -155,7 +155,7 @@ if (!SCRIPT) {
       expect(await waitForPrompt(proc)).toBe(true);
 
       proc.write("/models\n");
-      expect(await waitFor(proc, /models for/)).toBe(true);
+      expect(await waitFor(proc, /models for/, { count: 2 })).toBe(true);
       expect(await waitForPrompt(proc)).toBe(true);
 
       proc.write("/files\n");

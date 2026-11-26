@@ -159,7 +159,10 @@ export function startServer(handler: CannedHandler): CannedServer {
   });
   return {
     port: server.port,
-    baseUrl: `http://localhost:${server.port}`,
+    // Bind target is IPv4 (Bun.serve port 0); use the literal loopback address
+    // so a full-suite run cannot route through IPv6/proxy resolution and leave
+    // `requests` empty under load.
+    baseUrl: `http://127.0.0.1:${server.port}`,
     requests,
     stop: () => {
       try {

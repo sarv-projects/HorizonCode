@@ -7,8 +7,9 @@
  * so step/stack reuse it; `close` disposes. A real adapter still owns the debuggee process.
  */
 
-import type { ApprovalRequest, Tool, ToolContext, ToolResult } from "../contracts";
+import type { ApprovalRequest, GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { DapClient, dapSpawnAction, type DapStackFrame, type DapVariable } from "../core/dap/client";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { resolveAdapter, selectAdapterForProgram } from "../core/dap/config";
 import {
   disposeLiveDapSession,
@@ -20,9 +21,34 @@ import {
 import { attachSession, launchSession, stepSession, type DapStepCommand } from "../core/dap/session";
 import { connectDapTcp, waitForDapListenEndpoint } from "../core/dap/transport";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { scrubEnv } from "./helpers";
 
 const STEP_OPS = new Set<DapStepCommand>(["continue", "next", "stepIn", "stepOut"]);
 const ALL_OPS = new Set(["stack", "variables", "launch", "attach", "close", "continue", "next", "stepIn", "stepOut"]);
+const STDERR_RING_MAX = 16 * 1024;
+
+/** Drain adapter stderr continuously into a bounded ring buffer to prevent >64 KiB pipe deadlock. */
+function drainStderrRing(stream: ReadableStream<Uint8Array> | undefined): { tail(): string } {
+  let ring = "";
+  if (stream !== undefined) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    void (async () => {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value !== undefined) {
+            ring = (ring + decoder.decode(value, { stream: true })).slice(-STDERR_RING_MAX);
+          }
+        }
+      } catch {
+        /* stream closed */
+      }
+    })();
+  }
+  return { tail: () => ring.trim() };
+}
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
@@ -71,12 +97,28 @@ async function admitAdapterSpawn(ctx: ToolContext, command: string, argvTail: st
   return undefined;
 }
 
+async function admitShellExec(ctx: ToolContext, target: string): Promise<string | undefined> {
+  const action: GuardAction = { kind: "shell.exec", target };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return decision.reason ?? "shell.exec denied by policy";
+  }
+  if (decision.decision === "ask") {
+    const req: ApprovalRequest = { title: "Debug execution", detail: target, kind: action.kind };
+    const approved = await ctx.approve(req, action);
+    if (!approved) return "DECLINED by the user";
+  }
+  return undefined;
+}
+
 async function startAdapter(
   ctx: ToolContext,
   command: string,
   argvTail: string[],
   connectMode: "stdio" | "socket" | "tcp" = "stdio",
 ): Promise<{ live: LiveDapSession } | { error: string }> {
+  const denied = await admitAdapterSpawn(ctx, command, argvTail);
+  if (denied !== undefined) return { error: denied };
   await disposeLiveDapSession(ctx.workspace, ctx.sessionId);
   const stateDir = kernelStateDir(ctx.workspace);
   let proc: OwnedProc;
@@ -84,14 +126,19 @@ async function startAdapter(
     ({ proc } = await spawnOwned([command, ...argvTail], {
       stateDir,
       cwd: ctx.cwd,
+      env: scrubEnv(),
       label: "debug:adapter",
       stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
       longLived: true,
+      sandboxWrap: "auto",
+      sandboxMode: ctx.sandboxMode ?? "workspace-write",
+      kernel: ctx.kernel,
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { error: `could not start adapter: ${message}` };
   }
+  drainStderrRing(proc.stderr);
 
   if (connectMode === "tcp" || connectMode === "socket") {
     try {
@@ -164,20 +211,27 @@ async function ephemeralAdapter(
   argvTail: string[],
   run: (client: DapClient) => Promise<ToolResult>,
 ): Promise<ToolResult> {
+  const denied = await admitAdapterSpawn(ctx, command, argvTail);
+  if (denied !== undefined) return fail(denied);
   const stateDir = kernelStateDir(ctx.workspace);
   let proc: OwnedProc;
   try {
     ({ proc } = await spawnOwned([command, ...argvTail], {
       stateDir,
       cwd: ctx.cwd,
+      env: scrubEnv(),
       label: "debug:adapter",
       stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
       longLived: false,
+      sandboxWrap: "auto",
+      sandboxMode: ctx.sandboxMode ?? "workspace-write",
+      kernel: ctx.kernel,
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return fail(`could not start adapter: ${message}`);
   }
+  drainStderrRing(proc.stderr);
   const client = new DapClient({
     write: (frame) => stdinWrite(proc, frame),
     requestTimeoutMs: 10_000,
@@ -254,6 +308,48 @@ export const debugTool: Tool = {
       return { ok: true, output: closed ? "DAP session closed" : "no live DAP session" };
     }
 
+    const liveExisting = getLiveDapSession(ctx.workspace, ctx.sessionId);
+
+    // Step on a live session: reuse adapter without requiring command/adapter again.
+    if (STEP_OPS.has(op as DapStepCommand) && liveExisting) {
+      try {
+        const program =
+          (typeof args.program === "string" ? args.program.trim() : "") || liveExisting.program || "(live)";
+        const shellDenied = await admitShellExec(ctx, program);
+        if (shellDenied !== undefined) return fail(shellDenied);
+        const stepped = await stepSession(liveExisting.client, op as DapStepCommand);
+        const frameLine = stepped.frames.length > 0 ? `\n${formatStack(stepped.frames)}` : "";
+        return {
+          ok: true,
+          output:
+            `DAP ${op} ok; status=${stepped.status}` +
+            (stepped.stopReason ? ` stopReason=${stepped.stopReason}` : "") +
+            `\nprogram (admitted as shell.exec): ${program}; live session reused${frameLine}`,
+        };
+      } catch (err) {
+        tunnelPermissionError(err);
+        const message = err instanceof Error ? err.message : String(err);
+        return fail(`dap query failed: ${message}`);
+      }
+    }
+
+    // stack/variables prefer a live session when present (no command/adapter required).
+    if ((op === "stack" || op === "variables") && liveExisting) {
+      try {
+        if (op === "stack") {
+          return { ok: true, output: formatStack(await liveExisting.client.stack()) };
+        }
+        const frames = await liveExisting.client.stack();
+        const top = frames[0];
+        if (top === undefined) return { ok: true, output: "no stack frames (cannot read variables)" };
+        return { ok: true, output: formatVariables(await liveExisting.client.locals(top.id)) };
+      } catch (err) {
+        tunnelPermissionError(err);
+        const message = err instanceof Error ? err.message : String(err);
+        return fail(`dap query failed: ${message}`);
+      }
+    }
+
     const needsProgram = op === "launch" || STEP_OPS.has(op as DapStepCommand);
     const isAttach = op === "attach";
     if (needsProgram) {
@@ -302,50 +398,16 @@ export const debugTool: Tool = {
       }
     }
 
-    const liveExisting = getLiveDapSession(ctx.workspace, ctx.sessionId);
-
-    // Step on a live session: reuse adapter (still admit program as shell.exec at loop level).
-    if (STEP_OPS.has(op as DapStepCommand) && liveExisting) {
-      try {
-        const program =
-          (typeof args.program === "string" ? args.program.trim() : "") || liveExisting.program || "(live)";
-        const stepped = await stepSession(liveExisting.client, op as DapStepCommand);
-        const frameLine = stepped.frames.length > 0 ? `\n${formatStack(stepped.frames)}` : "";
-        return {
-          ok: true,
-          output:
-            `DAP ${op} ok; status=${stepped.status}` +
-            (stepped.stopReason ? ` stopReason=${stepped.stopReason}` : "") +
-            `\nprogram (admitted as shell.exec): ${program}; live session reused${frameLine}`,
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return fail(`dap query failed: ${message}`);
-      }
-    }
-
-    // stack/variables prefer a live session when present.
-    if ((op === "stack" || op === "variables") && liveExisting) {
-      try {
-        if (op === "stack") {
-          return { ok: true, output: formatStack(await liveExisting.client.stack()) };
-        }
-        const frames = await liveExisting.client.stack();
-        const top = frames[0];
-        if (top === undefined) return { ok: true, output: "no stack frames (cannot read variables)" };
-        return { ok: true, output: formatVariables(await liveExisting.client.locals(top.id)) };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return fail(`dap query failed: ${message}`);
-      }
-    }
-
-    if (needsProgram || isAttach) {
-      const denied = await admitAdapterSpawn(ctx, command, argvTail);
-      if (denied !== undefined) return fail(denied);
-    }
-
     if (isAttach || op === "launch" || STEP_OPS.has(op as DapStepCommand)) {
+      const program = typeof args.program === "string" ? args.program.trim() : "";
+      const shellTarget = isAttach
+        ? attachPid !== undefined
+          ? `attach:pid=${attachPid}`
+          : `attach:${attachHost ?? "127.0.0.1"}:${attachPort}`
+        : program;
+      const shellDenied = await admitShellExec(ctx, shellTarget);
+      if (shellDenied !== undefined) return fail(shellDenied);
+
       const started = await startAdapter(ctx, command, argvTail, connectMode);
       if ("error" in started) return fail(started.error);
       const { live } = started;
@@ -367,7 +429,6 @@ export const debugTool: Tool = {
               `\ntarget (admitted as shell.exec): ${attached.target}; session kept live${frameLine}`,
           };
         }
-        const program = typeof args.program === "string" ? args.program.trim() : "";
         const argv = program.split(/\s+/).filter((p) => p !== "");
         const bin = argv[0] ?? program;
         const launched = await launchSession(live.client, {
@@ -396,6 +457,7 @@ export const debugTool: Tool = {
             `\nprogram (admitted as shell.exec): ${program}; session kept live${frameLine}`,
         };
       } catch (err) {
+        tunnelPermissionError(err);
         await disposeLiveDapSession(ctx.workspace, ctx.sessionId);
         const message = err instanceof Error ? err.message : String(err);
         return fail(`dap query failed: ${message}`);

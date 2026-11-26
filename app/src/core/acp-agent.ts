@@ -80,6 +80,8 @@ export type AcpAgentOptions = {
   agentInfo?: { name: string; title: string; version: string };
   /** Product stdio bridge writes JSON-RPC notifications to stdout. */
   onNotification?: (notification: AcpSessionUpdateNotification) => void;
+  sessionLoader?: (sessionId: string) => Promise<AcpSession | undefined> | AcpSession | undefined;
+  toolDispatcher?: (sessionId: string, toolName: string, args: Record<string, unknown>) => Promise<unknown>;
 };
 
 export const ACP_AGENT_CAPABILITIES_HONEST = {
@@ -94,10 +96,13 @@ export const ACP_AGENT_CAPABILITIES_HONEST = {
 export class AcpAgent {
   private initialized = false;
   private readonly sessions = new Map<string, AcpSession>();
+  private readonly sessionMcpServers = new Map<string, unknown[]>();
   private readonly inflightPrompts = new Map<string, AbortController>();
   private readonly promptHandler: AcpPromptHandler;
   private readonly info: { name: string; title: string; version: string };
   private readonly onNotification?: (notification: AcpSessionUpdateNotification) => void;
+  private readonly sessionLoader?: (sessionId: string) => Promise<AcpSession | undefined> | AcpSession | undefined;
+  private readonly toolDispatcher?: (sessionId: string, toolName: string, args: Record<string, unknown>) => Promise<unknown>;
 
   constructor(opts: AcpAgentOptions = {}) {
     this.promptHandler =
@@ -112,6 +117,8 @@ export class AcpAgent {
       version: ACP_AGENT_VERSION,
     };
     this.onNotification = opts.onNotification;
+    this.sessionLoader = opts.sessionLoader;
+    this.toolDispatcher = opts.toolDispatcher;
   }
 
   private emitAgentMessageChunk(sessionId: string, messageId: string, text: string): boolean {
@@ -177,6 +184,15 @@ export class AcpAgent {
     switch (method) {
       case "session/new":
         return this.sessionNew(id, params);
+      case "session/load":
+        return await this.sessionLoad(id, params);
+      case "session/setMcpServers":
+        return this.sessionSetMcpServers(id, params);
+      case "session/getMcpServers":
+        return this.sessionGetMcpServers(id, params);
+      case "session/invokeTool":
+      case "tools/call":
+        return await this.sessionInvokeTool(id, params);
       case "session/list":
         return this.sessionList(id);
       case "session/close":
@@ -239,6 +255,125 @@ export class AcpAgent {
     };
     this.sessions.set(sessionId, session);
     return { jsonrpc: "2.0", id, result: { sessionId } };
+  }
+
+  private async sessionLoad(id: AcpJsonRpcId, params: unknown): Promise<AcpResponse> {
+    if (!isRecord(params) || typeof params.sessionId !== "string") {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_INVALID_PARAMS, message: "session/load requires sessionId" },
+      };
+    }
+    const existing = this.sessions.get(params.sessionId);
+    if (existing) {
+      return { jsonrpc: "2.0", id, result: { session: existing } };
+    }
+    if (this.sessionLoader) {
+      try {
+        const loaded = await this.sessionLoader(params.sessionId);
+        if (loaded) {
+          this.sessions.set(params.sessionId, loaded);
+          return { jsonrpc: "2.0", id, result: { session: loaded } };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { jsonrpc: "2.0", id, error: { code: ERR_INTERNAL, message } };
+      }
+    }
+    if (typeof params.cwd === "string" && params.cwd.trim() !== "") {
+      const session: AcpSession = {
+        sessionId: params.sessionId,
+        cwd: params.cwd.trim(),
+        createdAt: new Date().toISOString(),
+      };
+      this.sessions.set(params.sessionId, session);
+      return { jsonrpc: "2.0", id, result: { session } };
+    }
+    return {
+      jsonrpc: "2.0",
+      id,
+      error: { code: ERR_SESSION_NOT_FOUND, message: `unknown session ${params.sessionId}` },
+    };
+  }
+
+  private sessionGetMcpServers(id: AcpJsonRpcId, params: unknown): AcpResponse {
+    if (!isRecord(params) || typeof params.sessionId !== "string") {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_INVALID_PARAMS, message: "session/getMcpServers requires sessionId" },
+      };
+    }
+    if (!this.sessions.has(params.sessionId)) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_SESSION_NOT_FOUND, message: `unknown session ${params.sessionId}` },
+      };
+    }
+    const servers = this.sessionMcpServers.get(params.sessionId) ?? [];
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: { servers },
+    };
+  }
+
+  private async sessionInvokeTool(id: AcpJsonRpcId, params: unknown): Promise<AcpResponse> {
+    if (!isRecord(params) || typeof params.sessionId !== "string" || typeof params.name !== "string") {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_INVALID_PARAMS, message: "session/invokeTool requires sessionId and name" },
+      };
+    }
+    if (!this.sessions.has(params.sessionId)) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_SESSION_NOT_FOUND, message: `unknown session ${params.sessionId}` },
+      };
+    }
+    if (!this.toolDispatcher) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_INTERNAL, message: "tool execution not configured on this agent" },
+      };
+    }
+    const args = isRecord(params.args) ? params.args : {};
+    try {
+      const res = await this.toolDispatcher(params.sessionId, params.name, args);
+      return { jsonrpc: "2.0", id, result: res };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { jsonrpc: "2.0", id, error: { code: ERR_INTERNAL, message: msg } };
+    }
+  }
+
+  private sessionSetMcpServers(id: AcpJsonRpcId, params: unknown): AcpResponse {
+    if (!isRecord(params) || typeof params.sessionId !== "string") {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_INVALID_PARAMS, message: "session/setMcpServers requires sessionId" },
+      };
+    }
+    if (!this.sessions.has(params.sessionId)) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: ERR_SESSION_NOT_FOUND, message: `unknown session ${params.sessionId}` },
+      };
+    }
+    const servers = Array.isArray(params.servers) ? params.servers : [];
+    this.sessionMcpServers.set(params.sessionId, servers);
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: { ok: true, serverCount: servers.length },
+    };
   }
 
   private sessionList(id: AcpJsonRpcId): AcpResponse {

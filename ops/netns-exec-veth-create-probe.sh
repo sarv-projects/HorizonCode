@@ -17,7 +17,11 @@ fi
 
 ip link del "$HOST" 2>/dev/null || true
 ip link del "$PEER" 2>/dev/null || true
-trap 'ip link del "'"$HOST"'" 2>/dev/null || true; ip link del "'"$PEER"'" 2>/dev/null || true' EXIT
+cleanup() {
+  ip link del "$HOST" 2>/dev/null || true
+  ip link del "$PEER" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 PLUMB_ENV=()
 [[ -n "$PEER_ADDR" ]] && PLUMB_ENV+=(HZ_SANDBOX_VETH_PEER_ADDR="$PEER_ADDR")
@@ -30,7 +34,7 @@ if ! env \
   HZ_SANDBOX_VETH_HOST="$HOST" \
   HZ_SANDBOX_VETH_PEER="$PEER" \
   "${PLUMB_ENV[@]}" \
-  "$SBX_BIN" -- python3 -c "import subprocess; subprocess.check_call(['ip','link','show', '$HOST'])" 2>/tmp/hz-veth-create-probe.err; then
+  "$SBX_BIN" -- python3 -c 'import os, subprocess; subprocess.check_call(["ip", "link", "show", os.environ["HZ_SANDBOX_VETH_HOST"]])' 2>/tmp/hz-veth-create-probe.err; then
   echo "in-wrapper veth create failed (expected on some hosts without userns CAP_NET_ADMIN):" >&2
   cat /tmp/hz-veth-create-probe.err >&2 || true
   exit 0

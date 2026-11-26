@@ -16,6 +16,7 @@
 import type { Tool, ToolContext, ToolResult } from "../contracts";
 import { deferredSearchCandidates, discoverDeferredTools, getTool } from "./index";
 import { metricContract } from "../core/metrics";
+import { renderToolLoadoutDelta } from "../core/tool-loadout-delta";
 
 /** Split a string into lowercased alphanumeric tokens. */
 function tokenize(text: string): string[] {
@@ -64,6 +65,28 @@ export function toolSearchPublication(specs: readonly { name: string }[]): strin
   ];
 }
 
+export type ToolSearchDetail = "name" | "summary" | "schema";
+
+function parseDetailLevel(value: unknown): ToolSearchDetail {
+  if (value === "name" || value === "summary" || value === "schema") return value;
+  return "schema";
+}
+
+function summarizeDescription(description: string): string {
+  const lines = description
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        l !== "" &&
+        !l.startsWith("=== BEGIN UNTRUSTED MCP DATA ===") &&
+        !l.startsWith("=== END UNTRUSTED MCP DATA ===") &&
+        !l.startsWith("source: mcp tool "),
+    );
+  const flat = lines.join(" ").replace(/\s+/g, " ").trim();
+  return flat.length > 160 ? `${flat.slice(0, 157)}...` : flat;
+}
+
 export const toolSearchTool: Tool = {
   name: "tool_search",
   description:
@@ -87,6 +110,7 @@ export const toolSearchTool: Tool = {
     try {
       const query = typeof args.query === "string" ? args.query.trim() : "";
       if (query === "") return { ok: false, output: "", error: "query is required" };
+      const detail = parseDetailLevel(args.detail);
 
       const queryTokens = tokenize(query);
       if (queryTokens.length === 0) {
@@ -107,18 +131,28 @@ export const toolSearchTool: Tool = {
         return { ok: true, output: `No deferred tools matched "${query}".` };
       }
 
-      // Unlock the matched tools for the rest of this session.
-      discoverDeferredTools(ctx.sessionId, matched);
+      // Unlock the matched tools for the rest of this session. A prefix-safe
+      // system delta announces the loadout change (Group B) — the frozen prompt
+      // prefix itself is never rewritten.
+      const loadoutDelta = discoverDeferredTools(ctx.sessionId, matched);
+      const loadoutNotice = renderToolLoadoutDelta(loadoutDelta);
 
-      // Return the full specs so the model can call them immediately.
+      // Return the matched specs at the requested detail level ("name" | "summary" | "schema").
       const specs = matched
         .map((name) => getTool(name))
         .filter((t): t is Tool => t !== undefined)
         .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
 
+      const formattedSpecs = specs.map((s) => {
+        if (detail === "name") return `- ${s.name}`;
+        if (detail === "summary") return `- ${s.name}: ${summarizeDescription(s.description)}`;
+        return `\n${s.name}: ${s.description}\nparameters: ${JSON.stringify(s.parameters)}`;
+      });
+
       const lines = [
         `Unlocked ${specs.length} tool(s): ${specs.map((s) => s.name).join(", ")}. You can call them now.`,
-        ...specs.map((s) => `\n${s.name}: ${s.description}\nparameters: ${JSON.stringify(s.parameters)}`),
+        ...(loadoutNotice === undefined ? [] : [`\n${loadoutNotice}`]),
+        ...formattedSpecs,
       ];
       return { ok: true, output: lines.join("\n") };
     } catch (e) {

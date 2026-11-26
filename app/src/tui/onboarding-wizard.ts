@@ -11,6 +11,7 @@
  */
 
 import * as readline from "node:readline";
+import { Writable } from "node:stream";
 import { saveUserEnvVar, type ProviderName } from "../core/config";
 import { bold, dim, cyan, green, yellow, red } from "./style";
 
@@ -85,9 +86,57 @@ export const WIZARD_PROVIDERS: readonly WizardProviderOption[] = [
  */
 function askQuestion(rl: readline.Interface, promptText: string): Promise<string> {
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (val: string): void => {
+      if (settled) return;
+      settled = true;
+      rl.off("close", onCancel);
+      rl.off("SIGINT", onCancel);
+      resolve(val);
+    };
+    const onCancel = (): void => done("");
+    rl.once("close", onCancel);
+    rl.once("SIGINT", onCancel);
     rl.question(promptText, (answer) => {
-      resolve(answer.trim());
+      done(answer.trim());
     });
+  });
+}
+
+/**
+ * Asks for a secret (e.g. API key) without echoing plaintext to TTY scrollback
+ * or retaining the secret in readline history.
+ */
+function askSecret(
+  rl: readline.Interface,
+  stdout: NodeJS.WritableStream,
+  promptText: string,
+  isTty: boolean,
+  setMuted: (muted: boolean) => void,
+): Promise<string> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (answer: string) => {
+      if (settled) return;
+      settled = true;
+      rl.off("close", onCancel);
+      rl.off("SIGINT", onCancel);
+      setMuted(false);
+      const history = (rl as unknown as { history?: string[] }).history;
+      if (Array.isArray(history)) history.length = 0;
+      if (isTty) stdout.write("\n");
+      resolve(answer.trim());
+    };
+    const onCancel = (): void => finish("");
+    rl.once("close", onCancel);
+    rl.once("SIGINT", onCancel);
+    if (isTty) {
+      stdout.write(promptText);
+      setMuted(true);
+      rl.question("", finish);
+    } else {
+      rl.question(promptText, finish);
+    }
   });
 }
 
@@ -105,6 +154,7 @@ export async function runAuthWizard(opts: {
 }> {
   const stdin = opts.stdin ?? process.stdin;
   const stdout = opts.stdout ?? process.stdout;
+  const isTty = Boolean((stdout as unknown as { isTTY?: boolean }).isTTY);
 
   const write = (text: string) => stdout.write(text);
 
@@ -116,10 +166,21 @@ export async function runAuthWizard(opts: {
   });
   write(`  ${bold(`[0]`)} ${dim("Skip for now (offline mock / manual config)")}\n\n`);
 
+  let muteOutput = false;
+  const rlOutput = new Writable({
+    write(chunk, encoding, callback) {
+      if (!muteOutput) {
+        stdout.write(chunk, encoding as BufferEncoding);
+      }
+      callback();
+    },
+  });
+
   const rl = readline.createInterface({
     input: stdin,
-    output: stdout,
-    terminal: Boolean((stdout as unknown as { isTTY?: boolean }).isTTY),
+    output: rlOutput,
+    terminal: isTty,
+    historySize: 0,
   });
 
   try {
@@ -146,7 +207,15 @@ export async function runAuthWizard(opts: {
       }
     }
 
-    const key = await askQuestion(rl, bold(`❯ Enter your ${selected.name} API key (${selected.envVar}): `));
+    const key = await askSecret(
+      rl,
+      stdout,
+      bold(`❯ Enter your ${selected.name} API key (${selected.envVar}): `),
+      isTty,
+      (muted) => {
+        muteOutput = muted;
+      },
+    );
     if (!key) {
       write(yellow("  No key entered. Setup cancelled.\n\n"));
       return { configured: false };
@@ -183,6 +252,7 @@ export async function runAuthWizard(opts: {
       return { configured: false };
     }
   } finally {
+    muteOutput = false;
     rl.close();
   }
 }

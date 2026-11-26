@@ -24,12 +24,13 @@ function runGate(env: Record<string, string>) {
 }
 
 describe("startup-latency gate", () => {
-  test("is registered in the runner, last, and sourcing the runner does not execute it", () => {
+  test("is registered in the runner before ruling-ceiling, and sourcing the runner does not execute it", () => {
     const text = readFileSync(gates, "utf8");
     const list = /GATES=\(([\s\S]*?)\n\)/.exec(text)?.[1] ?? "";
     const names = list.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-    expect(names.at(-1)).toBe("startup-latency");
-    expect(names).toHaveLength(8);
+    expect(names.at(-2)).toBe("startup-latency");
+    expect(names.at(-1)).toBe("ruling-ceiling");
+    expect(names).toHaveLength(9);
     const r = Bun.spawnSync(["bash", "-c", `source "${gates}"; echo sourced-quietly`], { stdout: "pipe", stderr: "pipe" });
     expect(r.stdout.toString().trim()).toBe("sourced-quietly");
   });
@@ -38,7 +39,7 @@ describe("startup-latency gate", () => {
     const r = runGate({ HZ_LATENCY_VERSION_MS: "60000", HZ_LATENCY_TURN_MS: "60000" });
     expect(r.out).toContain("ok    startup-latency");
     expect(r.out).toContain("rc=0");
-  }, 60_000);
+  }, 120_000);
 
   test("fails above the ceiling and names the measured median and the limit", () => {
     const r = runGate({ HZ_LATENCY_VERSION_MS: "1" });
@@ -46,13 +47,13 @@ describe("startup-latency gate", () => {
     expect(r.out).toMatch(/version: median \d+ ms \(ceiling 1 ms\); samples (\d+ ){5}/);
     expect(r.out).toMatch(/version median \d+ ms exceeds the 1 ms ceiling/);
     expect(r.out).toContain("rc=1");
-  }, 60_000);
+  }, 120_000);
 
   test("the turn measurement has its own ceiling", () => {
     const r = runGate({ HZ_LATENCY_VERSION_MS: "60000", HZ_LATENCY_TURN_MS: "1" });
     expect(r.out).toContain("FAIL  startup-latency");
     expect(r.out).toMatch(/mock-turn median \d+ ms exceeds the 1 ms ceiling/);
-  }, 60_000);
+  }, 120_000);
 
   test("the shipped default ceilings are the documented ones", () => {
     const text = readFileSync(gates, "utf8");

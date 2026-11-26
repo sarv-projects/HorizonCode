@@ -4,7 +4,7 @@
 
 import type { Tool, ToolContext, ToolResult } from "../contracts";
 import { parseMemoryBankId, PROJECT_BANK, type MemoryBankId } from "../core/memory/banks";
-import { memorySearchHits, sharedMemorySearch } from "../core/memory/store";
+import { memorySearchHits, memorySearchRanked, sharedMemorySearch } from "../core/memory/store";
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
@@ -60,6 +60,10 @@ export const memorySearchTool: Tool = {
         type: "boolean",
         description: "When true, rerank BM25 hits with lexical MMR-lite (default true for shared_recall / all).",
       },
+      rank: {
+        type: "boolean",
+        description: "When true, fuse RRF k=60 + store-day decay + lexical supersession (opt-in, non-embedding).",
+      },
     },
     required: ["query"],
   },
@@ -83,9 +87,22 @@ export const memorySearchTool: Tool = {
 
     const sharedScope = banksArg === "shared_recall" || scopeRaw === "shared_recall" || scopeRaw === "all";
 
+    const rankOpt = args.rank === true;
     let hits;
     if (sharedScope) {
       hits = sharedMemorySearch(ctx.workspace, query, limit ?? 8);
+    } else if (rankOpt) {
+      // ADDITIVE (rulings 799–802): opt-in non-embedding ranking fusion over
+      // the selected banks; default path (BM25/MMR-lite) is byte-identical.
+      const banks = Array.isArray(banksArg)
+        ? banksArg
+        : scopeRaw === "user" || scopeRaw === "shared"
+          ? (() => {
+              const b = parseMemoryBankId(scopeRaw);
+              return b === undefined ? [PROJECT_BANK] : [b];
+            })()
+          : [PROJECT_BANK];
+      hits = memorySearchRanked(ctx.workspace, query, { banks, limit, rank: true });
     } else if (Array.isArray(banksArg)) {
       const diversify =
         diversifyExplicit ?? (banksArg.length > 1 ? true : false);

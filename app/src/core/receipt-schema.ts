@@ -15,6 +15,7 @@ const V2_BINDINGS = [
   "effectId",
   "postimageDigest",
   "postimagePath",
+  "postimageRows",
   "childEffectIds",
   "parentReceiptId",
 ] as const;
@@ -25,6 +26,7 @@ const V2_ALLOWED = new Set<string>([
 export function issueReceiptSchemaVersion(input: ReceiptInput): 1 | 2 {
   if (input.schemaVersion === 2 || input.effectId !== undefined ||
       input.postimageDigest !== undefined || input.postimagePath !== undefined ||
+      input.postimageRows !== undefined ||
       input.childEffectIds !== undefined || input.parentReceiptId !== undefined) return 2;
   return 1;
 }
@@ -58,6 +60,23 @@ export function receiptSchemaVersion(record: Record<string, unknown>): 1 | 2 {
       (typeof record.parentReceiptId !== "string" || record.parentReceiptId.length === 0)) {
     throw new Error("HZ_PRECONDITION_FAILED: receipt v2 parentReceiptId invalid");
   }
+  if (record.postimageRows !== undefined) {
+    const rows = record.postimageRows;
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 64) {
+      throw new Error("HZ_PRECONDITION_FAILED: receipt v2 postimageRows invalid");
+    }
+    for (const row of rows) {
+      if (row === null || typeof row !== "object") {
+        throw new Error("HZ_PRECONDITION_FAILED: receipt v2 postimageRows invalid");
+      }
+      const typed = row as { path?: unknown; digest?: unknown; state?: unknown };
+      if (typeof typed.path !== "string" || typed.path.length === 0 ||
+          typeof typed.digest !== "string" || typed.digest.length === 0 ||
+          typed.state !== "present") {
+        throw new Error("HZ_PRECONDITION_FAILED: receipt v2 postimageRows invalid");
+      }
+    }
+  }
   return 2;
 }
 
@@ -89,6 +108,7 @@ export function createReceiptForHash(input: ReceiptInput, base: Omit<Receipt, "h
     ...(input.effectId !== undefined ? { effectId: input.effectId } : {}),
     ...(input.postimageDigest !== undefined ? { postimageDigest: input.postimageDigest } : {}),
     ...(input.postimagePath !== undefined ? { postimagePath: input.postimagePath } : {}),
+    ...(input.postimageRows !== undefined ? { postimageRows: input.postimageRows.map((row) => ({ ...row })) } : {}),
     ...(input.childEffectIds !== undefined ? { childEffectIds: [...input.childEffectIds] } : {}),
     ...(input.parentReceiptId !== undefined ? { parentReceiptId: input.parentReceiptId } : {}),
   };

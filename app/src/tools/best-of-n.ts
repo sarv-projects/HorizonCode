@@ -6,6 +6,7 @@
  */
 
 import type { Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import {
   bestOfNParallelFromEnv,
   formatBestOfNRaceOutput,
@@ -107,6 +108,7 @@ export const bestOfNTool: Tool = {
         ...(childEffectIds.length > 0 ? { childEffectIds } : {}),
       };
     } catch (e) {
+      tunnelPermissionError(e);
       return { ok: false, output: "", error: e instanceof Error ? e.message : String(e) };
     }
   },

@@ -12,12 +12,14 @@
 import * as readline from "node:readline";
 import { BUILTIN_SLASH_REGISTRY, type SlashCommandRow } from "../core/slash-registry";
 import { bold, cyan, dim, green } from "./style";
+import { renderPaletteExtras, type PaletteExtras } from "./palette-extras";
 
 export async function runInteractiveCommandPalette(
   customNames: readonly string[] = [],
   opts: {
     stdin?: NodeJS.ReadableStream;
     stdout?: NodeJS.WritableStream;
+    extras?: PaletteExtras;
   } = {}
 ): Promise<string | null> {
   const stdin = opts.stdin ?? process.stdin;
@@ -32,6 +34,9 @@ export async function runInteractiveCommandPalette(
   }
 
   write("\n" + bold(cyan("◆ HorizonCode Command Palette")) + " · Select or search a command\n\n");
+
+  const extrasBlock = opts.extras === undefined ? "" : renderPaletteExtras(opts.extras);
+  if (extrasBlock !== "") write(dim(extrasBlock) + "\n\n");
 
   const displayLimit = Math.min(15, rows.length);
   for (let i = 0; i < displayLimit; i += 1) {
@@ -53,7 +58,20 @@ export async function runInteractiveCommandPalette(
   });
 
   const question = (prompt: string): Promise<string> =>
-    new Promise((resolve) => rl.question(prompt, (ans) => resolve(ans.trim())));
+    new Promise((resolve) => {
+      let settled = false;
+      const done = (val: string): void => {
+        if (settled) return;
+        settled = true;
+        rl.off("close", onCancel);
+        rl.off("SIGINT", onCancel);
+        resolve(val);
+      };
+      const onCancel = (): void => done("");
+      rl.once("close", onCancel);
+      rl.once("SIGINT", onCancel);
+      rl.question(prompt, (ans) => done(ans.trim()));
+    });
 
   try {
     const input = await question(bold("❯ Select command [1-15, or type command name, 0 to cancel]: "));

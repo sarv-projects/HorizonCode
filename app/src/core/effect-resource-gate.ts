@@ -24,7 +24,14 @@ const GATE_TOOLS = new Set([
   "rename",
   "fs.rename",
   "fs.batch",
+  "shell",
+  "bash",
   "shell.exec",
+  // P0-3 (ruling 922): subprocess-capable tools can touch arbitrary paths.
+  "shell_session",
+  "preview",
+  "code_mode",
+  "agent",
 ]);
 
 /** SQLite / session-store mutators — fail-closed under R170 gates (ruling **690**). */
@@ -100,11 +107,31 @@ export function mcpMutationResourceTargets(
   return undefined;
 }
 
+/**
+ * P0-3 (ruling 911): the durable todo store (handoffs.db) is SQLite, so the todo
+ * tools are SQLite mutators exactly while HZ_TODO_DURABLE is on. When the store
+ * is off they are session-state only and are not gated as SQLite writers.
+ */
+function isSqliteMutationTool(tool: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (SQLITE_MUTATION_TOOLS.has(tool)) return true;
+  if (tool === "todo" || tool === "todo_write") {
+    const raw = env.HZ_TODO_DURABLE?.trim().toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  }
+  return false;
+}
+
 /** True for built-in file mutators, SQLite mutators, and non-read-only MCP tools (rulings 683, 690). */
 export function isR170MutatingTool(tool: string): boolean {
   if (GATE_TOOLS.has(tool)) return true;
-  if (SQLITE_MUTATION_TOOLS.has(tool)) return true;
+  if (isSqliteMutationTool(tool)) return true;
   return isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool);
+}
+
+function isR170MutatingCall(tool: string, args: Record<string, unknown>): boolean {
+  // Match shell_bg.execute, which trims operation strings before dispatch.
+  if (tool === "shell_bg") return typeof args.op === "string" && args.op.trim() === "kill";
+  return isR170MutatingTool(tool);
 }
 
 /** All workspace paths a mutation might touch, not merely the final receipt
@@ -115,11 +142,24 @@ export function mutationResourceTargets(
   args: Record<string, unknown>,
   workspace: string,
 ): string[] | undefined {
+  // A background process kill may affect an unknown resource; do not infer
+  // disjointness from its PID or caller-supplied path fields.
+  if (tool === "shell_bg" && typeof args.op === "string" && args.op.trim() === "kill") return undefined;
   // A shell command may write ANY path regardless of cwd or explicit path
   // hints; treating a declared cwd as exhaustive evidence is unsafe.
-  if (tool === "shell" || tool === "bash" || tool === "shell.exec") return undefined;
+  if (
+    tool === "shell" ||
+    tool === "bash" ||
+    tool === "shell.exec" ||
+    tool === "shell_session" ||
+    tool === "preview" ||
+    tool === "code_mode" ||
+    tool === "agent"
+  ) {
+    return undefined;
+  }
   // SQLite mutators touch session DB paths we do not project here — fail closed.
-  if (SQLITE_MUTATION_TOOLS.has(tool)) return undefined;
+  if (isSqliteMutationTool(tool)) return undefined;
   if (isMcpToolName(tool)) {
     if (mcpToolClaimsReadOnly(tool)) return [];
     return mcpMutationResourceTargets(args, workspace);
@@ -309,7 +349,7 @@ export function r170ResourceGateRefusal(
   frozenKeys: Set<string>,
   host?: EffectHost,
 ): string | undefined {
-  if (!isR170MutatingTool(tool) || frozenKeys.size === 0) return undefined;
+  if (!isR170MutatingCall(tool, args) || frozenKeys.size === 0) return undefined;
   const targets = mutationResourceTargets(tool, args, workspace);
   if (!targets) {
     return `HZ_PRECONDITION_FAILED: blocked_by_unknown: refusing ${tool} — ` +

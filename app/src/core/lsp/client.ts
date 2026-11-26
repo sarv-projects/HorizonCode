@@ -37,6 +37,7 @@ import type { ApprovalRequest, GuardAction, GuardDecision } from "../../contract
 import { scrubEnv } from "../../tools/helpers";
 import { canonicalJson, sha256Hex } from "../canon";
 import type { LspServerConfig } from "../config";
+import { guardEffectivelyAllows } from "../guard-g1-wire";
 import { spawnOwned, type OwnedProc } from "../owned-spawn";
 import { encodeMessage, LspFramer } from "./framing";
 import type { Diagnostic, PublishDiagnosticsParams } from "./types";
@@ -204,7 +205,7 @@ export class LspClient {
     if (decision.decision === "deny") {
       return this.degrade("denied", `DENIED by policy (${decision.reason ?? action.kind})`);
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       let approved = false;
       try {
         approved = await this.hooks.approve(

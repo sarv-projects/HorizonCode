@@ -5,12 +5,11 @@
 # by it. `bash ops/install-ci.sh` copies this file to .github/workflows/ci.yml;
 # commit and push that with an identity that has the workflow scope.
 #
-# The job installs the two toolchains and then hands the whole verification to
-# ops/gates.sh — the same entry point a developer runs locally, so a green run
-# here and a green run there are the same set of checks (and the same honesty
-# about the twelve docs/24 §3.5 rows that are still design-only: see
-# ops/gate-catalogue.md). No secrets and no network beyond the installs: the
-# e2e gates pin the provider to `mock` under a throwaway HOME.
+# The `gates` job installs the two toolchains and hands verification to
+# ops/gates.sh — the same entry point a developer runs locally. The
+# `cross-platform` matrix verifies Rust kernel tests/builds, Bun typecheck,
+# and targeted CLI/eval/ops tests on macOS and Windows. No secrets and no
+# network beyond the toolchain/dev-type installs.
 
 name: ci
 
@@ -46,30 +45,52 @@ jobs:
       - name: Install bun
         uses: oven-sh/setup-bun@v2
 
-      # Build the kernel first: kernel-selftest runs the release binary, and a
-      # cold cache needs the dependency graph fetched and compiled anyway.
-      # --locked keeps the committed Cargo.lock authoritative.
-      - name: Build the kernel (release)
+      # app/ has no RUNTIME dependencies; install dev type definitions only.
+      - name: Install the app's dev type definitions
+        working-directory: app
+        run: bun install --frozen-lockfile
+
+      # ops/gates.sh runs cargo test --locked, cargo build --release --locked,
+      # kernel selftest, bun run typecheck, bun test, e2e smokes, latency, and
+      # doc consistency in fail-fast order.
+      - name: Run the gate suite
+        run: bash ops/gates.sh
+
+  cross-platform:
+    name: build-and-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Test Rust kernel
+        working-directory: kernel
+        run: cargo test --locked
+
+      - name: Build Rust kernel (release)
         working-directory: kernel
         run: cargo build --release --locked
 
-      # app/ has no RUNTIME dependencies, but tsconfig.json lists the "bun" and
-      # "node" type libraries, which come from devDependencies (@types/bun,
-      # @types/node, typescript). A clean runner does not have them, so the
-      # typecheck would fail with TS2688 without this install. It is dev type
-      # definitions only: nothing the app executes is installed. Plain
-      # `bun install` (not --frozen-lockfile) because bun.lock was written by a
-      # newer bun than some runners carry; any lockfile rewrite stays on the
-      # runner and is never committed.
       - name: Install the app's dev type definitions
         working-directory: app
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      # Typecheck first as an explicit, fast-failing step (the ts-typecheck gate
-      # runs it too) so a type error is named on its own line before the full
-      # gate suite starts.
       - name: Typecheck the app
-        run: cd app && bun run typecheck
+        working-directory: app
+        run: bun run typecheck
 
-      - name: Run the gate suite
-        run: bash ops/gates.sh
+      - name: Run targeted CLI, eval, and ops tests
+        working-directory: app
+        shell: bash
+        run: bun test --timeout 30000 tests/core/cli-*.test.ts tests/core/eval-*.test.ts tests/ops/

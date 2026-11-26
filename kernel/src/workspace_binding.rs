@@ -44,10 +44,11 @@ impl WorkspaceBinding {
                 resolved.display()
             ));
         }
+        let (device, inode) = capture_identity(&resolved, &meta)?;
         Ok(Self {
             root: resolved,
-            device: meta_device(&meta),
-            inode: meta_inode(&meta),
+            device,
+            inode,
         })
     }
 
@@ -93,23 +94,48 @@ impl WorkspaceBinding {
 }
 
 #[cfg(unix)]
-fn meta_device(meta: &fs::Metadata) -> u64 {
-    meta.dev()
+fn capture_identity(_resolved: &Path, meta: &fs::Metadata) -> Result<(u64, u64), String> {
+    Ok((meta.dev(), meta.ino()))
 }
 
-#[cfg(unix)]
-fn meta_inode(meta: &fs::Metadata) -> u64 {
-    meta.ino()
+#[cfg(windows)]
+fn capture_identity(resolved: &Path, _meta: &fs::Metadata) -> Result<(u64, u64), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_READ_ATTRIBUTES,
+    };
+
+    let dir_handle = fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(resolved)
+        .map_err(|e| {
+            format!(
+                "HZ_PRECONDITION_FAILED: workspace binding could not open directory {}: {e}",
+                resolved.display()
+            )
+        })?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok =
+        unsafe { GetFileInformationByHandle(dir_handle.as_raw_handle() as HANDLE, &mut info) };
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(format!(
+            "HZ_PRECONDITION_FAILED: workspace binding could not query directory identity for {}: {err}",
+            resolved.display()
+        ));
+    }
+    let device = info.dwVolumeSerialNumber as u64;
+    let inode = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+    Ok((device, inode))
 }
 
-#[cfg(not(unix))]
-fn meta_device(_meta: &fs::Metadata) -> u64 {
-    0
-}
-
-#[cfg(not(unix))]
-fn meta_inode(_meta: &fs::Metadata) -> u64 {
-    0
+#[cfg(not(any(unix, windows)))]
+fn capture_identity(_resolved: &Path, _meta: &fs::Metadata) -> Result<(u64, u64), String> {
+    Err("HZ_PRECONDITION_FAILED: workspace binding identity unsupported on this OS".into())
 }
 
 #[cfg(test)]
@@ -152,7 +178,10 @@ mod tests {
         fs::rename(&decoy, &bound_path).unwrap();
         assert!(!binding.matches_path(&bound_path).unwrap());
         let err = binding.check_path(&bound_path).unwrap_err();
-        assert!(err.contains("device,inode") || err.contains("identity"), "{err}");
+        assert!(
+            err.contains("device,inode") || err.contains("identity"),
+            "{err}"
+        );
         let _ = fs::remove_dir_all(&parent);
     }
 }

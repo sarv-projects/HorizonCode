@@ -5,6 +5,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
@@ -17,9 +18,20 @@ export interface StoredOAuthToken {
   refreshToken?: string;
   expiresAt?: string;
   obtainedAt: string;
+  /** V-19: stable provider/account identity when the IdP supplies one. */
+  accountId?: string;
+  /** Stable opaque identity derived from provider + accountId, not bearer tokens. */
+  credentialPinHash?: string;
 }
 
 const SCHEMA_VERSION = 1;
+
+export function oauthCredentialPinHash(provider: string, accountId: string): string | undefined {
+  const normalizedProvider = provider.trim();
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedProvider || !normalizedAccountId) return undefined;
+  return createHash("sha256").update(JSON.stringify([normalizedProvider, normalizedAccountId]), "utf8").digest("hex");
+}
 
 export function oauthCredentialsDbPath(home: string = homedir()): string {
   return path.join(userConfigDir(home), "credentials.db");
@@ -72,6 +84,7 @@ function rowToToken(row: {
   refresh_token: string | null;
   expires_at: string | null;
   obtained_at: string;
+  payload?: string | null;
 }): StoredOAuthToken {
   const tok: StoredOAuthToken = {
     provider: row.provider,
@@ -80,6 +93,19 @@ function rowToToken(row: {
   };
   if (row.refresh_token) tok.refreshToken = row.refresh_token;
   if (row.expires_at) tok.expiresAt = row.expires_at;
+  // V-19: account identity rides the existing canonical payload — no schema
+  // migration for a field the IdPs may not supply.
+  if (typeof row.payload === "string" && row.payload !== "") {
+    try {
+      const payload = JSON.parse(row.payload) as { accountId?: unknown };
+      if (typeof payload.accountId === "string" && payload.accountId !== "") {
+        tok.accountId = payload.accountId;
+        tok.credentialPinHash = oauthCredentialPinHash(row.provider, payload.accountId);
+      }
+    } catch {
+      /* legacy payload — no account identity */
+    }
+  }
   return tok;
 }
 
@@ -117,6 +143,8 @@ export function migrateLegacyOAuthJsonFiles(home: string): number {
             refreshToken: parsed.refreshToken,
             expiresAt: parsed.expiresAt,
             obtainedAt: parsed.obtainedAt || now,
+            accountId: parsed.accountId,
+            credentialPinHash: parsed.accountId ? oauthCredentialPinHash(parsed.provider || provider, parsed.accountId) : undefined,
           });
           insert.run(
             parsed.provider || provider,
@@ -147,7 +175,7 @@ export function readOAuthTokenDb(provider: string, home: string): StoredOAuthTok
     try {
       const row = db
         .query(
-          `SELECT provider, access_token, refresh_token, expires_at, obtained_at
+          `SELECT provider, access_token, refresh_token, expires_at, obtained_at, payload
            FROM oauth_token WHERE provider=?`,
         )
         .get(provider) as
@@ -157,6 +185,7 @@ export function readOAuthTokenDb(provider: string, home: string): StoredOAuthTok
             refresh_token: string | null;
             expires_at: string | null;
             obtained_at: string;
+            payload: string | null;
           }
         | null;
       if (row === null) return undefined;
@@ -178,6 +207,8 @@ export function writeOAuthTokenDb(token: StoredOAuthToken, home: string): void {
         refreshToken: token.refreshToken,
         expiresAt: token.expiresAt,
         obtainedAt: token.obtainedAt,
+        accountId: token.accountId,
+        credentialPinHash: token.accountId ? oauthCredentialPinHash(token.provider, token.accountId) : undefined,
       });
       db.prepare(
         `INSERT INTO oauth_token(

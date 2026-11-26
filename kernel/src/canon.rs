@@ -19,14 +19,7 @@ use sha2::{Digest, Sha256};
 /// Envelope fields that feed the event hash, always present (order irrelevant here:
 /// canonicalization sorts the keys).
 pub const ENVELOPE_FIELDS: [&str; 8] = [
-    "id",
-    "seq",
-    "ts",
-    "stream",
-    "type",
-    "actor",
-    "payload",
-    "prevHash",
+    "id", "seq", "ts", "stream", "type", "actor", "payload", "prevHash",
 ];
 
 /// Receipt fields that feed the receipt hash, always present.
@@ -193,7 +186,9 @@ pub fn anchor_digest(preimage: &Value, key: Option<&[u8]>) -> String {
 
 /// Hash of a `sha256` hex string shape check (64 lowercase hex chars).
 pub fn is_hash(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The exact object that is canonicalized to hash an envelope.
@@ -289,7 +284,10 @@ mod tests {
         // a key longer than the 64-byte block is hashed first (RFC 2104 K0 rule)
         let long_key = vec![0xaa_u8; 131];
         assert_eq!(
-            hmac_sha256_hex(&long_key, b"Test Using Larger Than Block-Size Key - Hash Key First"),
+            hmac_sha256_hex(
+                &long_key,
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            ),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
         );
     }
@@ -314,6 +312,12 @@ mod tests {
         // ...and keyed mode replaces the digest, never the chain hash itself
         let keyed = anchor_digest(&envelope_preimage(&envelope), Some(b"k"));
         assert_ne!(keyed, hash_envelope(&envelope));
-        assert_eq!(keyed, hmac_sha256_hex(b"k", canonical_json(&envelope_preimage(&envelope)).as_bytes()));
+        assert_eq!(
+            keyed,
+            hmac_sha256_hex(
+                b"k",
+                canonical_json(&envelope_preimage(&envelope)).as_bytes()
+            )
+        );
     }
 }

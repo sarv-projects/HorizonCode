@@ -3,6 +3,7 @@
  */
 
 import { homedir } from "node:os";
+import { extractOAuthAccountId } from "./account-identity";
 import type { ProviderOAuthEndpoints, ProviderRegistryEntry } from "../config";
 import { startOAuthCallbackListener } from "./callback-server";
 import { createPkcePair, newOAuthState } from "./pkce";
@@ -68,10 +69,13 @@ export async function runPkceLogin(
     obtainedAt: new Date().toISOString(),
   };
   if (typeof tok.refresh_token === "string") stored.refreshToken = tok.refresh_token;
+  const accountId = extractOAuthAccountId(tok.access_token);
+  if (accountId) stored.accountId = accountId;
   if (typeof tok.expires_in === "number" && Number.isFinite(tok.expires_in)) {
     stored.expiresAt = new Date(Date.now() + tok.expires_in * 1000).toISOString();
   }
-  await writeOAuthToken(stored, home);
+  const refused = await writeOAuthToken(stored, home);
+  if (refused !== undefined) throw new Error(refused);
   process.stderr.write(`Stored oauth token for ${entry.id} (${credentialsDbPath(home)})\n`);
 }
 

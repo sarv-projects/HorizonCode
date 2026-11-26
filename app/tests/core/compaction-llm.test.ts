@@ -94,6 +94,22 @@ describe("tryLlmSemanticCompaction", () => {
     );
     expect(summary).toBeUndefined();
   });
+
+  test("a tripped breaker refuses further attempts without calling the provider", async () => {
+    const { CompactionBreaker } = await import("../../src/core/compaction-breaker");
+    const breaker = new CompactionBreaker({ threshold: 1 });
+    breaker.recordFailure("prior failure"); // trip it
+    const elided = [chat("user", "x"), chat("assistant", "y")];
+    const summary = await tryLlmSemanticCompaction(
+      { provider: seqProvider("- summary"), model: "gpt-4o", signal: new AbortController().signal },
+      elided,
+      10,
+      8,
+      {},
+      breaker,
+    );
+    expect(summary).toBeUndefined(); // breaker refused; provider never consulted
+  });
 });
 
 describe("summariseElidedOrLlm", () => {

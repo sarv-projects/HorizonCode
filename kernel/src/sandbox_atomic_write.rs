@@ -55,9 +55,9 @@ pub fn write_bytes_atomic_in_sandbox(
     payload: &[u8],
 ) -> Result<(), String> {
     let target = sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, target, None)?;
-    let parent = target
-        .parent()
-        .ok_or_else(|| "HZ_PRECONDITION_FAILED: atomic write target has no parent directory".to_string())?;
+    let parent = target.parent().ok_or_else(|| {
+        "HZ_PRECONDITION_FAILED: atomic write target has no parent directory".to_string()
+    })?;
     sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, parent, None)?;
     if let Some(parent_resolved) = guard::lexical_resolve(parent) {
         if !guard::path_contained_in(sandbox_root, &parent_resolved) {
@@ -128,22 +128,18 @@ pub fn delete_file_in_sandbox(sandbox_root: &Path, target: &Path) -> Result<(), 
     }
     if !target.is_file() {
         return Err(
-            "HZ_PRECONDITION_FAILED: effect.execute fs.delete requires an existing file".to_string(),
+            "HZ_PRECONDITION_FAILED: effect.execute fs.delete requires an existing file"
+                .to_string(),
         );
     }
-    fs::remove_file(target).map_err(|e| {
-        format!("HZ_PRECONDITION_FAILED: effect.execute fs.delete failed: {e}")
-    })?;
+    fs::remove_file(target)
+        .map_err(|e| format!("HZ_PRECONDITION_FAILED: effect.execute fs.delete failed: {e}"))?;
     jsonl_append::sync_jsonl_parent_dir_best_effort(target);
     Ok(())
 }
 
 /// Atomically rename `from` → `to` when both resolve inside `sandbox_root` (existing file only).
-pub fn rename_file_in_sandbox(
-    sandbox_root: &Path,
-    from: &Path,
-    to: &Path,
-) -> Result<(), String> {
+pub fn rename_file_in_sandbox(sandbox_root: &Path, from: &Path, to: &Path) -> Result<(), String> {
     if !guard::path_contained_in(sandbox_root, from) {
         return Err(
             "HZ_PRECONDITION_FAILED: fs.rename source must resolve inside sandboxRoot".to_string(),
@@ -151,7 +147,8 @@ pub fn rename_file_in_sandbox(
     }
     if !guard::path_contained_in(sandbox_root, to) {
         return Err(
-            "HZ_PRECONDITION_FAILED: fs.rename destination must resolve inside sandboxRoot".to_string(),
+            "HZ_PRECONDITION_FAILED: fs.rename destination must resolve inside sandboxRoot"
+                .to_string(),
         );
     }
     let parent = to.parent().ok_or_else(|| {
@@ -183,9 +180,8 @@ pub fn rename_file_in_sandbox(
                 .to_string(),
         );
     }
-    fs::rename(from, to).map_err(|e| {
-        format!("HZ_PRECONDITION_FAILED: effect.execute fs.rename failed: {e}")
-    })?;
+    fs::rename(from, to)
+        .map_err(|e| format!("HZ_PRECONDITION_FAILED: effect.execute fs.rename failed: {e}"))?;
     jsonl_append::sync_jsonl_parent_dir_best_effort(to);
     Ok(())
 }
@@ -215,10 +211,7 @@ mod tests {
     #[test]
     fn atomic_write_refuses_escape_via_temp() {
         let sandbox = fresh_sandbox("esc");
-        let outside = std::env::temp_dir().join(format!(
-            "hz-atomic-out-{}",
-            std::process::id()
-        ));
+        let outside = std::env::temp_dir().join(format!("hz-atomic-out-{}", std::process::id()));
         let target = sandbox.join("in.txt");
         fs::write(&target, b"x").unwrap();
         // Craft a fake target path outside root that still passes initial resolve — use parent escape.
@@ -292,8 +285,7 @@ mod tests {
         let secret = outside.join("secret.txt");
         fs::write(&secret, b"secret").unwrap();
         symlink(&secret, &candidate).unwrap();
-        let err =
-            write_bytes_atomic_in_sandbox(&sandbox, &candidate, b"pwned").unwrap_err();
+        let err = write_bytes_atomic_in_sandbox(&sandbox, &candidate, b"pwned").unwrap_err();
         assert!(
             err.contains("resolution moved") || err.contains("outside sandboxRoot"),
             "{err}"

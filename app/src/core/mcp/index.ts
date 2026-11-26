@@ -36,6 +36,7 @@ import type { ApprovalRequest, GuardAction, GuardDecision } from "../../contract
 import { canonicalJson, sha256Hex } from "../canon";
 import { parseMcpServer, type McpConfig, type McpServerConfig } from "../config";
 import { effectHostMcpAmbientSpawnRefusal } from "../effect-host-posture";
+import { guardEffectivelyAllows } from "../guard-g1-wire";
 import { kernelStateDir } from "../owned-spawn";
 import { McpClient, type McpClientOptions } from "./client";
 import { clearMcpTools, registerMcpTools } from "./registry";
@@ -60,6 +61,8 @@ export interface McpManagerOptions {
   maxInFlight?: number;
   maxReconnects?: number;
   reconnectBaseMs?: number;
+  /** Configured server/tool destinations allowed to receive detokenized outbound PII args. */
+  piiDetokenizeAllowlist?: readonly string[];
   /** Builds the client; tests substitute a fake transport here. */
   clientFactory?: (opts: McpClientOptions) => McpClient;
 }
@@ -162,7 +165,7 @@ export class McpManager {
       hooks.onNotice(`mcp: server ${server.id} not started — ${record.reason}`);
       return;
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       let approved = false;
       try {
         approved = await hooks.approve(
@@ -198,7 +201,14 @@ export class McpManager {
         maxReconnects: this.opts.maxReconnects,
         reconnectBaseMs: this.opts.reconnectBaseMs,
         onTools: (_serverId, tools) => {
-          registerMcpTools(server.id, tools, client);
+          registerMcpTools(
+            server.id,
+            tools,
+            client,
+            this.opts.piiDetokenizeAllowlist
+              ? { piiDetokenizeAllowlist: this.opts.piiDetokenizeAllowlist }
+              : undefined,
+          );
           record.tools = tools.length;
           if (tools.length === 0 && record.state === "connected") {
             // The list came back empty without a death: the server says it has
@@ -330,4 +340,29 @@ export {
   parseMcpListNextCursor,
   MCP_LIST_MAX_PAGES,
 } from "./registry";
-export type { ListAllMcpListOptions, ListAllMcpToolsOptions } from "./registry";
+export type { ListAllMcpListOptions, ListAllMcpToolsOptions, RegisterMcpToolsOptions } from "./registry";
+export {
+  PiiVault,
+  getSessionPiiVault,
+  clearSessionPiiVault,
+  PII_VAULT_ENV,
+  MCP_PII_DETOKENIZE_ALLOW_ENV,
+} from "../pii-vault";
+export {
+  McpStatelessHttpClient,
+  buildStatelessMcpHeaders,
+  parseMcpCacheMetadata,
+  sortMcpToolCatalog,
+  MCP_STATELESS_PROTOCOL_VERSION,
+  MCP_HEADER_METHOD,
+  MCP_HEADER_NAME,
+  MCP_HEADER_PROTOCOL_VERSION,
+} from "./stateless-http";
+export type {
+  McpCacheScope,
+  McpToolCacheMeta,
+  StatelessMcpHeadersOptions,
+  McpStatelessHttpClientOptions,
+  StatelessListToolsResult,
+  StatelessCallToolResult,
+} from "./stateless-http";

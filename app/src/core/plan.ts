@@ -128,6 +128,9 @@ export function replaceStagedAfter(sessionId: string, rel: string, after: string
 
 export function discardStaged(sessionId: string, rel?: string): number {
   const record = PLANS.get(sessionId);
+  if (rel === undefined) {
+    STRUCTURED_PLANS.delete(sessionId);
+  }
   if (record === undefined) return 0;
   if (rel === undefined) {
     const removed = record.changes.length;
@@ -562,4 +565,44 @@ export function partialAfterFromHunks(before: string | null, after: string, pick
   const body = out.join("\n");
   if (after.endsWith("\n") && !body.endsWith("\n")) return `${body}\n`;
   return body;
+}
+
+/* --------------------- structured subtasks (V-11) --------------------- */
+
+import {
+  parseSubtasks,
+  renderPlanSummary,
+  stepScopedContext,
+  type Subtask,
+} from "./structured-plan";
+
+export { parseSubtasks, renderPlanSummary, stepScopedContext, type Subtask };
+
+const STRUCTURED_PLANS = new Map<string, Subtask[]>();
+
+/** Parse and store structured `### Tasks` subtasks for a plan session. */
+export function setStructuredPlan(sessionId: string, replyContent: string): readonly Subtask[] {
+  const subtasks = parseSubtasks(replyContent);
+  STRUCTURED_PLANS.set(sessionId, subtasks);
+  return [...subtasks];
+}
+
+/** Retrieve structured subtasks stored for a plan session. */
+export function structuredPlanSubtasks(sessionId: string): readonly Subtask[] {
+  return [...(STRUCTURED_PLANS.get(sessionId) ?? [])];
+}
+
+/** Render a concise summary of the session's structured subtasks. */
+export function structuredPlanSummary(sessionId: string): string {
+  return renderPlanSummary(STRUCTURED_PLANS.get(sessionId) ?? []);
+}
+
+/** Build step-scoped file context for one structured subtask by 0-based index. */
+export function structuredPlanStepContext(
+  sessionId: string,
+  stepIndex: number,
+  fileContents: ReadonlyMap<string, string>,
+): string | undefined {
+  const task = STRUCTURED_PLANS.get(sessionId)?.[stepIndex];
+  return task !== undefined ? stepScopedContext(task, fileContents) : undefined;
 }

@@ -40,7 +40,7 @@
 
 | Area | Status | Handoff / register |
 |---|---|---|
-| Speculation | **UNWIRED** (**65**) | HANDOFF §3 |
+| Speculation | **PARTIAL (opt-in wired)** (**670**, **730**, **879**; default-off) | HANDOFF §5.9 |
 | DAP / toolconv | **PARTIAL** | HANDOFF §3 |
 | Wave C grants / bash AST | **PARTIAL** | HANDOFF §3 |
 | §8 #11–#15 | **PARTIAL** (#252 poll closed) | `30-steal-list.md` §8 |
@@ -70,7 +70,7 @@
 
 | Item | Notes |
 |---|---|
-| `ops/gates.sh` 8/8 | Re-run for freshness — HANDOFF §8 |
+| `ops/gates.sh` 9/9 | Green 2026-11-25 in WSL (Rust 350/350, TS 720+ test files); see `FULL-BACKLOG-2026-11-13.md` §Z for 2026-11-26 fresh-eyes release blockers |
 | `sandbox_exec.rs` | Host-class WSL/Landlock — HANDOFF §0 |
 | Live cache/provider benches | API keys — B-4 partial |
 
@@ -101,7 +101,7 @@ See **§5** of [`HANDOFF-BACKLOG-2026-11-13.md`](HANDOFF-BACKLOG-2026-11-13.md) 
 | B-4 cache | **PARTIAL** | Live API cache-hit |
 | B-5 prefix | **PARTIAL — TESTED** | rulings **470**, **482** `syncMessages` + main-loop `ProviderHistorySync`; StablePrefix / `auto` gate open |
 | C-7/C-8/C-9 | **PARTIAL** | steer / tail re-exec / interjection |
-| E-1–E-3, **E-5** | **PARTIAL / queued** | Git slices + new watch candidate |
+| E-1–E-3, **E-5** | **E-1–E-3 SHIPPED / E-5 OPEN** | E-1 default-on (**513**), E-2 (**497**), E-3 (**498**); E-5 watch OPEN |
 | little-coder TAKE pack | **OPEN** | `research/steal-little-coder-aider.md` |
 
 ---
@@ -111,7 +111,7 @@ See **§5** of [`HANDOFF-BACKLOG-2026-11-13.md`](HANDOFF-BACKLOG-2026-11-13.md) 
 | # | Status | Notes |
 |---|---|---|
 | 2 Egress / MITM | **PARTIAL — TESTED** | Production default still open |
-| 7 Doom-loop / speculation | **PARTIAL** / **UNWIRED** **65** |
+| 7 Doom-loop / speculation | **PARTIAL** (speculation opt-in wired **670**/**730**/**879**; default-off) |
 | 17–18 Foreign / collab | **SKIP** | Until spine |
 | 1–16 | **PARTIAL** mix | See `docs/30` |
 
@@ -128,10 +128,10 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 | Doc | Role |
 |---|---|
 | **`docs/AGENT-DOC-NAVIGATION.md`** | **Router** — mandatory read order, authority chain, `repo_take/` when/where, P0 code paths, post-slice checklist |
-| `docs/HANDOFF-BACKLOG-2026-11-13.md` | Execution queue, P0 done bars, verification §8, impl order §10 |
+| `docs/FULL-BACKLOG-2026-11-13.md` | Consolidated execution queue, §Z release audit, P0 done bars |
 | `docs/GOAL-PROGRESS.md` | Goal NOT COMPLETE; wave table; P0 residual prose |
 | `docs/33-handoff.md` | Commands, env, invariants, §5 deferred backlog narrative |
-| `docs/28-implementation-status.md` | Status ladder; §3 rulings (**510**); header counts historical |
+| `docs/28-implementation-status.md` | Status ladder; §3 rulings (**970**); header counts historical |
 | `docs/30-steal-list.md` | §7 register + §8 waves; §0.1.1 E-5/LC queue |
 | `docs/MASTER-BACKLOG-ALL.md` | **This file** — wave residual matrix |
 | `CURRENT_RUN.md` (repo root) | Historical snapshot + pointers to router |
@@ -141,11 +141,10 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 | `docs/research/steal-little-coder-aider.md` | TAKE/SKIP matrix before LC/aider code |
 | `docs/00-index.md` | Design corpus TOC |
 | `docs/13-tui.md` | TUI / Grok / R170 spec |
-| `docs/06-effects.md` | EffectHost design |
 | `docs/11-authority-safety.md` | Egress / MITM threat model |
 
-**After each shipped slice:** ruling in `28` §3 → GOAL-PROGRESS → MASTER footer if needed → HANDOFF §1 only if a P0 **done bar** fully met (see router §7.6).
+**After each shipped slice:** ruling in `28` §3 → GOAL-PROGRESS → MASTER footer if needed → FULL-BACKLOG §Z only if a P0 **done bar** fully met (see router §7.6).
 
 ---
 
-*Last refreshed: 2026-11-20. Live rulings through **739** in [`28-implementation-status.md`](28-implementation-status.md); stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md). This matrix body last bulk-refreshed 2026-11-16 (@ `ddc8ef8` era) — prefer FULL-BACKLOG / GOAL / `28` §3 over stale row text here. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*
+*Last refreshed: 2026-11-26. Live rulings through **970** in [`28-implementation-status.md`](28-implementation-status.md); stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md). This matrix body last bulk-refreshed 2026-11-16 (@ `ddc8ef8` era) — prefer FULL-BACKLOG / GOAL / `28` §3 over stale row text here. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*

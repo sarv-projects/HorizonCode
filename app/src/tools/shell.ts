@@ -2,6 +2,7 @@
 
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { kernelStateDir } from "../core/owned-spawn";
 import { getExecutionCapability } from "../core/execution-capability";
 import { sha256Hex } from "../core/canon";
@@ -17,9 +18,10 @@ import {
   shellAutoBackgroundNotice,
 } from "../core/shell-auto-background";
 import { shellCompoundRefusal } from "../core/shell-split";
-import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
+import { invisibleUnicodeError, resolvePath, resolveRealTarget, scrubEnv, truncate } from "./helpers";
 import { formatExecOutputForModel } from "./exec-output-format";
 import { readTool } from "./read";
+import { minimiseOutput, type MinimizerFilter } from "../core/output-minimizer";
 
 const MAX_OUTPUT = 30_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -468,7 +470,21 @@ const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
  * characters are never touched — this is the control set, no more: CJK text and
  * emoji pass through byte-for-byte.
  */
-const INVISIBLE_REORDER = /[\u200B-\u200D\u202A-\u202E\u2066-\u2069]/g;
+const INVISIBLE_REORDER = /[\u061C\u200B-\u200D\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
+
+let registeredMinimizerFilters: MinimizerFilter[] = [];
+
+export function registerShellMinimizerFilters(filters: readonly MinimizerFilter[]): void {
+  registeredMinimizerFilters = [...filters];
+}
+
+export function clearShellMinimizerFilters(): void {
+  registeredMinimizerFilters = [];
+}
+
+export function getRegisteredShellMinimizerFilters(): readonly MinimizerFilter[] {
+  return registeredMinimizerFilters;
+}
 
 /**
  * NF-074(c): the shell-output minimiser, on by default. Strips ANSI/OSC
@@ -482,8 +498,16 @@ const INVISIBLE_REORDER = /[\u200B-\u200D\u202A-\u202E\u2066-\u2069]/g;
  * characters (bidi embeddings/overrides, isolates, zero-widths) are stripped
  * with the other controls; Unicode script characters are kept.
  */
-export function minimiseShellOutput(raw: string): { text: string; changed: boolean } {
-  const input = typeof raw === "string" ? raw : "";
+export function minimiseShellOutput(
+  raw: string,
+  command?: string,
+  filters?: readonly MinimizerFilter[],
+): { text: string; changed: boolean } {
+  let input = typeof raw === "string" ? raw : "";
+  const activeFilters = filters ?? registeredMinimizerFilters;
+  if (command !== undefined && command !== "" && activeFilters.length > 0) {
+    input = minimiseOutput(command, input, activeFilters);
+  }
   const lines = input
     .replace(ANSI_OSC, "")
     .replace(ANSI_CSI, "")
@@ -504,7 +528,7 @@ export function minimiseShellOutput(raw: string): { text: string; changed: boole
     })
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
-  return { text, changed: text !== input };
+  return { text, changed: text !== raw };
 }
 
 function fail(error: string): ToolResult {
@@ -591,7 +615,12 @@ export const shellTool: Tool = {
       if (splitRefusal !== undefined) return fail(splitRefusal);
       if (ctx.signal.aborted) return fail("aborted");
 
-      const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
+      const cwdTarget =
+        typeof args.cwd === "string" && args.cwd !== ""
+          ? resolveRealTarget(ctx.cwd, args.cwd, ctx.workspace)
+          : undefined;
+      const dir = cwdTarget !== undefined ? cwdTarget.real : ctx.cwd;
+      const customCwd = cwdTarget !== undefined && dir !== ctx.cwd;
       const timeoutMs = Math.min(numberOr(args.timeoutMs, DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS);
 
       // NF-074(d): interception and the interactive blocklist run before Guard.
@@ -614,13 +643,31 @@ export const shellTool: Tool = {
         return { ok: false, output: notice, error: readResult.error ?? "read failed" };
       }
 
-      const action: GuardAction = { kind: "shell.exec", target: command };
+      if (cwdTarget !== undefined && !cwdTarget.inside) {
+        const readAction: GuardAction = { kind: "fs.read", target: dir };
+        const readDecision = await ctx.guard(readAction);
+        if (readDecision.decision === "deny") {
+          return fail(`denied by policy${readDecision.reason ? `: ${readDecision.reason}` : ""}`);
+        }
+        if (readDecision.decision === "ask") {
+          const readApproved = await ctx.approve(
+            { title: "Access working directory outside workspace", detail: dir, kind: "fs.read" },
+            readAction,
+          );
+          if (!readApproved) return fail("declined by user");
+        }
+      }
+
+      const action: GuardAction = customCwd
+        ? { kind: "shell.exec", target: command, detail: { cwd: dir } }
+        : { kind: "shell.exec", target: command };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
       if (decision.decision === "ask") {
-        const approved = await ctx.approve({ title: "Run shell command", detail: command, kind: "shell.exec" }, action);
+        const detail = customCwd ? `${command} (cwd: ${dir})` : command;
+        const approved = await ctx.approve({ title: "Run shell command", detail, kind: "shell.exec" }, action);
         if (!approved) return fail("declined by user");
       }
       if (ctx.signal.aborted) return fail("aborted");
@@ -650,6 +697,7 @@ export const shellTool: Tool = {
           })
         ).proc;
       } catch (e) {
+        tunnelPermissionError(e);
         return fail(`failed to start command: ${msg(e)}`);
       }
 
@@ -740,9 +788,13 @@ export const shellTool: Tool = {
         () => {},
         () => {},
       );
+      let onAbortExitCap: (() => void) | undefined;
       const abortExitCap = new Promise<void>((resolve) => {
         if (ctx.signal.aborted) resolve();
-        else ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+        else {
+          onAbortExitCap = () => resolve();
+          ctx.signal.addEventListener("abort", onAbortExitCap, { once: true });
+        }
       }).then(async () => {
         if (!(await settlesWithin(proc.exited, KILL_GRACE_MS + 500))) {
           hardKill();
@@ -768,7 +820,7 @@ export const shellTool: Tool = {
             initialOutput: out,
             startedAtMs: startedAt,
           });
-          const minimised = minimiseShellOutput(out);
+          const minimised = minimiseShellOutput(out, command);
           const truncatedBody = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "");
           let body = truncatedBody + shellAutoBackgroundNotice(proc.pid, elapsed);
           // C-7 / 490: record the live background process so a steer arriving
@@ -823,9 +875,10 @@ export const shellTool: Tool = {
         clearTimeout(timer);
         if (graceTimer !== undefined) clearTimeout(graceTimer);
         ctx.signal.removeEventListener("abort", onAbort);
+        if (onAbortExitCap !== undefined) ctx.signal.removeEventListener("abort", onAbortExitCap);
       }
 
-      const minimised = minimiseShellOutput(out);
+      const minimised = minimiseShellOutput(out, command);
       const flag = minimised.changed
         ? `\n[output minimised: ${Buffer.byteLength(out, "utf8")} \u2192 ${Buffer.byteLength(minimised.text, "utf8")} bytes]`
         : "";
@@ -896,6 +949,7 @@ export const shellTool: Tool = {
         },
       };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

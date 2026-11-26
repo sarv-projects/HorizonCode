@@ -35,6 +35,8 @@ export interface HitTestCache {
 export interface FullscreenHitRectOptions {
   /** When >0, bottom transcript rows become a distinct scrollback pane target (ruling 284). */
   insetPaneRows?: number;
+  /** When true, row 1 is occupied by the persistent UNKNOWN/R170 latch banner. */
+  hasBanner?: boolean;
   /** Grok R6/R11 reduced: full-frame hit target while a modal overlay owns the loop. */
   modalOverlay?: "completion";
 }
@@ -72,12 +74,13 @@ export function buildFullscreenHitRects(
   ];
   if (paneRows > 0 && "insetPaneStart" in layout) {
     const inset = layout as FullscreenInsetPaneLayout;
+    const bannerOffset = opts.hasBanner === true && inset.mainTranscriptRows >= 2 ? 1 : 0;
     rects.push({
       region: "transcript",
       x: 0,
-      y: layout.transcriptStart,
+      y: layout.transcriptStart + bannerOffset,
       w,
-      h: inset.mainTranscriptRows,
+      h: Math.max(1, inset.mainTranscriptRows - bannerOffset),
       layoutVersion,
       action: "scroll",
     });
@@ -91,12 +94,13 @@ export function buildFullscreenHitRects(
       action: "scroll",
     });
   } else {
+    const bannerOffset = opts.hasBanner === true && h >= 4 && layout.transcriptRows >= 2 ? 1 : 0;
     rects.push({
       region: "transcript",
       x: 0,
-      y: layout.transcriptStart,
+      y: layout.transcriptStart + bannerOffset,
       w,
-      h: layout.transcriptRows,
+      h: Math.max(1, layout.transcriptRows - bannerOffset),
       layoutVersion,
       action: "scroll",
     });

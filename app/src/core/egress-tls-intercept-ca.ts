@@ -7,6 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -60,17 +61,41 @@ export type HermeticLeafCertMaterial = {
   keyPem: string;
 };
 
+const RFC1035_LABEL_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
+function validateTlsServername(servername: string): { cn: string; san: string } {
+  if (typeof servername !== "string" || servername.length === 0 || servername.length > 253) {
+    throw new Error(`HZ_PRECONDITION_FAILED: invalid TLS servername ${JSON.stringify(servername)}`);
+  }
+  if (/[\s\0\r\n/,=\\]/.test(servername)) {
+    throw new Error(`HZ_PRECONDITION_FAILED: invalid TLS servername ${JSON.stringify(servername)}`);
+  }
+  const unbracketed =
+    servername.startsWith("[") && servername.endsWith("]") ? servername.slice(1, -1) : servername;
+  if (isIP(unbracketed) !== 0) {
+    return { cn: unbracketed, san: `IP:${unbracketed}` };
+  }
+  const labels = servername.split(".");
+  if (!labels.every((label) => RFC1035_LABEL_RE.test(label))) {
+    throw new Error(`HZ_PRECONDITION_FAILED: invalid RFC 1035 TLS servername ${JSON.stringify(servername)}`);
+  }
+  return { cn: servername, san: `DNS:${servername}` };
+}
+
 /** Mint a short-lived leaf cert for `servername` signed by the hermetic intercept CA (openssl when present). */
 export function mintHermeticLeafCert(
   caCertPath: string,
   caKeyPath: string,
   servername: string,
 ): HermeticLeafCertMaterial {
+  const { cn, san } = validateTlsServername(servername);
   const dir = mkdtempSync(path.join(tmpdir(), "hz-leaf-"));
   const csrPath = path.join(dir, "leaf.csr");
   const keyPath = path.join(dir, "leaf.key.pem");
   const certPath = path.join(dir, "leaf.cert.pem");
+  const extPath = path.join(dir, "leaf.ext");
   try {
+    writeFileSync(extPath, `subjectAltName=${san}\n`, "utf8");
     execFileSync(
       "openssl",
       [
@@ -84,7 +109,9 @@ export function mintHermeticLeafCert(
         "-out",
         csrPath,
         "-subj",
-        `/CN=${servername}`,
+        `/CN=${cn}`,
+        "-addext",
+        `subjectAltName=${san}`,
       ],
       { stdio: "pipe" },
     );
@@ -100,6 +127,8 @@ export function mintHermeticLeafCert(
         "-CAkey",
         caKeyPath,
         "-CAcreateserial",
+        "-extfile",
+        extPath,
         "-out",
         certPath,
         "-days",
@@ -108,11 +137,9 @@ export function mintHermeticLeafCert(
       { stdio: "pipe" },
     );
     return { certPem: readFileSync(certPath, "utf8"), keyPem: readFileSync(keyPath, "utf8") };
-  } catch {
-    return {
-      certPem: readFileSync(caCertPath, "utf8"),
-      keyPem: readFileSync(caKeyPath, "utf8"),
-    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`HZ_TLS_MINT_FAILED: failed to mint leaf certificate for ${cn}: ${msg}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

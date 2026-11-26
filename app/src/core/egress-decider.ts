@@ -30,6 +30,41 @@ type OriginRule = {
   decision: EgressBaseDecision;
 };
 
+function stripTrailingDots(host: string): string {
+  return host.replace(/\.+$/, "");
+}
+
+function splitAuthorityHostPort(authority: string): { host: string; port?: number } | undefined {
+  if (authority === "") return undefined;
+  if (authority.startsWith("[")) {
+    const close = authority.indexOf("]");
+    if (close <= 1) return undefined;
+    const host = authority.slice(1, close).toLowerCase();
+    const rest = authority.slice(close + 1);
+    if (rest === "") return { host };
+    if (!rest.startsWith(":")) return undefined;
+    const tail = rest.slice(1);
+    if (!/^\d+$/.test(tail)) return undefined;
+    const n = Number(tail);
+    if (!Number.isInteger(n) || n < 0 || n > 65535) return undefined;
+    return { host, port: n };
+  }
+  const colon = authority.lastIndexOf(":");
+  if (colon >= 0) {
+    // Unbracketed IPv6 literal (multiple colons) has no port suffix here.
+    if (authority.indexOf(":") !== colon) {
+      return { host: authority.toLowerCase() };
+    }
+    const tail = authority.slice(colon + 1);
+    if (tail !== "" && /^\d+$/.test(tail)) {
+      const n = Number(tail);
+      if (!Number.isInteger(n) || n < 0 || n > 65535) return undefined;
+      return { host: authority.slice(0, colon).toLowerCase(), port: n };
+    }
+  }
+  return { host: authority.toLowerCase() };
+}
+
 export function normalizeNetworkRuleHost(input: string): string | undefined {
   let s = input.trim();
   const schemeIdx = s.indexOf("://");
@@ -40,13 +75,12 @@ export function normalizeNetworkRuleHost(input: string): string | undefined {
   }
   const at = s.lastIndexOf("@");
   if (at >= 0) s = s.slice(at + 1);
-  const colon = s.lastIndexOf(":");
-  if (colon >= 0) {
-    const tail = s.slice(colon + 1);
-    if (tail !== "" && /^\d+$/.test(tail)) s = s.slice(0, colon);
-  }
   if (s === "" || s.includes("*") || /\s/.test(s)) return undefined;
-  return s.toLowerCase();
+  const parsed = splitAuthorityHostPort(s);
+  if (!parsed) return undefined;
+  const host = stripTrailingDots(parsed.host);
+  if (host === "" || host.includes("*") || /\s/.test(host)) return undefined;
+  return host;
 }
 
 function defaultPort(scheme: string): number | undefined {
@@ -72,21 +106,11 @@ export function parseOrigin(url: string): EgressOrigin | undefined {
     const at = rest.lastIndexOf("@");
     return at >= 0 ? rest.slice(at + 1) : rest;
   })();
-  if (authority === "") return undefined;
-  let hostRaw = authority;
-  let port = defaultPort(scheme);
-  const colon = authority.lastIndexOf(":");
-  if (colon >= 0) {
-    const tail = authority.slice(colon + 1);
-    if (tail !== "" && /^\d+$/.test(tail)) {
-      const n = Number(tail);
-      if (!Number.isInteger(n) || n < 0 || n > 65535) return undefined;
-      hostRaw = authority.slice(0, colon);
-      port = n;
-    }
-  }
+  const split = splitAuthorityHostPort(authority);
+  if (!split) return undefined;
+  const port = split.port ?? defaultPort(scheme);
   if (port === undefined) return undefined;
-  const host = hostRaw.toLowerCase();
+  const host = stripTrailingDots(split.host);
   if (host === "" || host.includes("*")) return undefined;
   return { scheme, host, port };
 }
@@ -95,6 +119,14 @@ export function parseOrigin(url: string): EgressOrigin | undefined {
 export function originFromConnectAuthority(authority: string): EgressOrigin | undefined {
   const trimmed = authority.trim();
   if (trimmed === "" || /\s/.test(trimmed)) return undefined;
+  if (trimmed.startsWith("[")) {
+    const close = trimmed.indexOf("]");
+    if (close <= 1) return undefined;
+    const rest = trimmed.slice(close + 1);
+    if (rest === "") return parseOrigin(`https://${trimmed}:443`);
+    if (!/^:\d+$/.test(rest)) return undefined;
+    return parseOrigin(`https://${trimmed}`);
+  }
   const colon = trimmed.lastIndexOf(":");
   if (colon < 0) return parseOrigin(`https://${trimmed}:443`);
   const hostPart = trimmed.slice(0, colon);
@@ -141,6 +173,12 @@ export function parseEgressPolicyDoc(doc: EgressPolicyDoc | EgressOriginRule[]):
   return { rules, disallowedWebFetchDomains: denylist, observe };
 }
 
+const FAIL_CLOSED_EGRESS_POLICY: EgressPolicy = {
+  rules: [],
+  disallowedWebFetchDomains: [],
+  observe: false,
+};
+
 export function loadEgressPolicy(stateDir: string): EgressPolicy | undefined {
   const file = path.join(stateDir, "egress.json");
   if (!existsSync(file)) return undefined;
@@ -148,13 +186,21 @@ export function loadEgressPolicy(stateDir: string): EgressPolicy | undefined {
   try {
     parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
   } catch {
-    return undefined;
+    return { ...FAIL_CLOSED_EGRESS_POLICY, rules: [], disallowedWebFetchDomains: [] };
   }
-  if (Array.isArray(parsed)) return parseEgressPolicyDoc(parsed);
+  if (Array.isArray(parsed)) {
+    return parseEgressPolicyDoc(parsed) ?? { ...FAIL_CLOSED_EGRESS_POLICY, rules: [], disallowedWebFetchDomains: [] };
+  }
   if (parsed && typeof parsed === "object" && "rules" in parsed) {
-    return parseEgressPolicyDoc(parsed as EgressPolicyDoc);
+    return (
+      parseEgressPolicyDoc(parsed as EgressPolicyDoc) ?? {
+        ...FAIL_CLOSED_EGRESS_POLICY,
+        rules: [],
+        disallowedWebFetchDomains: [],
+      }
+    );
   }
-  return undefined;
+  return { ...FAIL_CLOSED_EGRESS_POLICY, rules: [], disallowedWebFetchDomains: [] };
 }
 
 function ruleMatches(rule: OriginRule, origin: EgressOrigin): boolean {
@@ -164,20 +210,28 @@ function ruleMatches(rule: OriginRule, origin: EgressOrigin): boolean {
   return true;
 }
 
+function hostMatchesDomain(host: string, domain: string): boolean {
+  const h = stripTrailingDots(host.toLowerCase());
+  const d = stripTrailingDots(domain.toLowerCase());
+  return h === d || h.endsWith(`.${d}`);
+}
+
 function decideEnforce(policy: EgressPolicy, origin: EgressOrigin): EgressDecision {
-  if (policy.disallowedWebFetchDomains.includes(origin.host)) {
+  const normalizedHost = stripTrailingDots(origin.host.toLowerCase());
+  const normalizedOrigin = normalizedHost === origin.host ? origin : { ...origin, host: normalizedHost };
+  if (policy.disallowedWebFetchDomains.some((d) => hostMatchesDomain(normalizedOrigin.host, d))) {
     return { kind: "deny", source: "web_fetch_denylist" };
   }
   let sawAllow = false;
   let sawAsk = false;
   for (const rule of policy.rules) {
-    if (!ruleMatches(rule, origin)) continue;
+    if (!ruleMatches(rule, normalizedOrigin)) continue;
     if (rule.decision === "deny") return { kind: "deny", source: "deny_row" };
     if (rule.decision === "allow") sawAllow = true;
     if (rule.decision === "ask") sawAsk = true;
   }
-  if (sawAllow) return { kind: "allow" };
   if (sawAsk) return { kind: "ask" };
+  if (sawAllow) return { kind: "allow" };
   return { kind: "deny", source: "deny_row" };
 }
 

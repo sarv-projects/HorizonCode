@@ -1,9 +1,11 @@
 /**
  * cache-breakpoints.ts — reduced Anthropic cache-control planner (docs/30 B-4 / §7).
  *
- * Pure planner: up to BREAKPOINT_CAP ephemeral markers on content blocks. Off
- * unless `HZ_ANTHROPIC_CACHE_BREAKPOINTS=1` (applied on Anthropic wire via
- * `anthropic-cache-wire.ts`; keep-alive stub via `HZ_ANTHROPIC_CACHE_KEEPALIVE_MS`).
+ * Pure planner: up to BREAKPOINT_CAP ephemeral markers on content blocks. ON by
+ * default with an explicit opt-out, matching the wire (docs/28 ruling 542):
+ * `HZ_ANTHROPIC_CACHE_BREAKPOINTS=0` disables, `=1` forces on, unset means on.
+ * The env semantics live here so the planner and the wire can never disagree
+ * (D-11); `anthropic-cache-wire.ts` consumes this same helper.
  * Optional `useCacheablePrefix` consults `cacheableMessagesPrefix` (ruling **276**).
  * Residual: live cache-hit measure still needs API keys (B-4).
  */
@@ -13,6 +15,19 @@ import { textFromChatContent } from "../chat-content";
 import { cacheableMessagesCutIndex } from "./cacheable-messages-prefix";
 
 export const BREAKPOINT_CAP = 4;
+
+/**
+ * D-11: the ONE env reading for Anthropic cache breakpoints. Unset/empty means
+ * ON (product default, ruling 542); 0/false/off/no disables; 1/true/yes/on
+ * forces on; any other value is treated as unset (ON) rather than as a silent
+ * third state.
+ */
+export function cacheBreakpointsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.HZ_ANTHROPIC_CACHE_BREAKPOINTS?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return true;
+  if (raw === "0" || raw === "false" || raw === "off" || raw === "no") return false;
+  return true;
+}
 
 export type CacheRoute = "anthropic" | "openai" | "gemini" | "other";
 
@@ -47,7 +62,7 @@ export function planCacheBreakpoints(
     stablePrefixLength?: number;
   },
 ): PlannedBreakpoint[] {
-  const enabled = opts?.enabled ?? process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS === "1";
+  const enabled = opts?.enabled ?? cacheBreakpointsEnabled();
   if (!enabled) return [];
   const route = opts?.route ?? "anthropic";
   if (routeSkipsExplicitCache(route)) return [];

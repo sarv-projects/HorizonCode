@@ -159,6 +159,38 @@ describe("effect-resource-gate (R170 reduced)", () => {
     clearMcpTools();
   });
 
+
+// P0-3 (ruling 922): a frozen UNKNOWN resource must block subprocess tools too.
+// Shell/shell_session/preview/code_mode/agent can touch arbitrary paths, so an
+// unprovable target is exactly the fail-closed case.
+describe("R170 gate covers subprocess tools under a frozen UNKNOWN", () => {
+  test("refuses shell, shell_session, preview, code_mode and agent", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    host.begin(effectId, "write", "call-1");
+    host.recordAllow(effectId);
+    host.recordObserve(effectId, {
+      receiptId: "r1",
+      receiptSeq: 1,
+      resourceKey: path.resolve(workspace, "frozen.txt"),
+    });
+    const frozen = frozenUnknownResourceKeys(host);
+    expect(frozen.size).toBe(1);
+    for (const tool of ["shell", "shell_session", "preview", "code_mode", "agent"]) {
+      const refusal = r170ResourceGateRefusal(tool, { command: "echo hi" }, workspace, frozen, host);
+      expect(refusal).toContain("blocked_by_unknown");
+    }
+    // Read-only tools remain ungated even while a resource is frozen.
+    expect(r170ResourceGateRefusal("grep", { pattern: "x" }, workspace, frozen, host)).toBeUndefined();
+  });
+
+  test("no frozen keys means no gate refusal", () => {
+    expect(
+      r170ResourceGateRefusal("shell", { command: "echo hi" }, workspace, new Set()),
+    ).toBeUndefined();
+  });
+});
+
   test("allows edit on different path", () => {
     const host = new EffectHost();
     const effectId = createEffectId();

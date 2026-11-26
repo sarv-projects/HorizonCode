@@ -133,10 +133,12 @@ export type AdmissionBatchResult =
  * store; the rows live in the store's database, not in this object.
  */
 export class AdmissionQueue {
+  private readonly store: SessionStore;
   private readonly db: Database;
   private readonly workspace: string;
 
   constructor(store: SessionStore) {
+    this.store = store;
     this.db = store.db;
     this.workspace = store.workspace;
   }
@@ -158,6 +160,7 @@ export class AdmissionQueue {
    * generated) or a new one; the input text is deliberately not an identity.
    */
   admit(sessionId: string, input: string, id: string = newId()): string {
+    this.store.guardWrite("admission.admit");
     requireText(sessionId, "sessionId");
     requireText(id, "id");
     if (typeof input !== "string") throw new Error("admission: input must be a string");
@@ -186,6 +189,7 @@ export class AdmissionQueue {
    * halt. False means nothing was started; it never starts twice.
    */
   begin(id: string): boolean {
+    this.store.guardWrite("admission.begin");
     requireText(id, "id");
     const row = this.byId(id);
     if (!row || row.state !== "queued") return false;
@@ -204,11 +208,20 @@ export class AdmissionQueue {
    * state is exactly what the `unknown` rules forbid. When no evidence is given,
    * earlier evidence (e.g. `interrupted`) is kept rather than wiped.
    */
-  settle(id: string, state: AdmissionSettlement, evidence?: string): boolean {
+  settle(id: string, state: AdmissionSettlement, evidence?: string, sessionId?: string): boolean {
+    this.store.guardWrite("admission.settle");
     requireText(id, "id");
     if (state !== "done" && state !== "failed" && state !== "unknown") {
       throw new Error(`admission: ${String(state)} is not a settlement state`);
     }
+    const row = this.byId(id);
+    if (!row) return false;
+    // D-13(a): settle is scoped to the session that owns the row. Without this,
+    // any caller holding an id could settle another session's admission.
+    if (sessionId !== undefined && row.sessionId !== sessionId) return false;
+    // D-13(a): a queued row never began, so it cannot be reported done. Only
+    // failure/unknown are honest settlements for work that never started.
+    if (state === "done" && row.state === "queued") return false;
     const result = this.db.run(
       "UPDATE admissions SET state = ?, updated_at = ?, evidence = COALESCE(?, evidence) " +
         "WHERE id = ? AND state IN ('queued','running')",
@@ -269,6 +282,7 @@ export class AdmissionQueue {
    * the open path enforces the lease before calling here.
    */
   recoverInterrupted(sessionId: string): string[] {
+    this.store.guardWrite("admission.recoverInterrupted");
     requireText(sessionId, "sessionId");
     const ids = (
       this.db.query("SELECT id FROM admissions WHERE session_id = ? AND state = 'running' ORDER BY rowid ASC").all(sessionId) as Array<{
@@ -299,6 +313,7 @@ export class AdmissionQueue {
    * row, or undefined when nothing changed.
    */
   resolve(id: string, decision: AdmissionResolution): AdmissionRow | undefined {
+    this.store.guardWrite("admission.resolve");
     requireText(id, "id");
     if (decision !== "requeue" && decision !== "drop" && decision !== "cancel") {
       throw new Error(`admission: ${String(decision)} is not a resolution`);
@@ -352,6 +367,7 @@ export class AdmissionQueue {
  * execute these transitions under a universal mandatory barrier.
  */
 admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBatchResult {
+  this.store.guardWrite("admission.admitBatch");
   requireText(sessionId, "sessionId");
   if (!Array.isArray(calls) || calls.length === 0) return { ok: false, reason: "empty-batch" };
   const seen = new Set<string>();
@@ -409,6 +425,7 @@ admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBa
  * Queue-level atomicity with a cross-process lock — NOT full R170 kernel fencing.
  */
 settleBatch(sessionId: string, ids: readonly string[], state: AdmissionSettlement): boolean {
+  this.store.guardWrite("admission.settleBatch");
   requireText(sessionId, "sessionId");
   if (state !== "done" && state !== "failed" && state !== "unknown") {
     throw new Error(`admission: ${String(state)} is not a settlement state`);

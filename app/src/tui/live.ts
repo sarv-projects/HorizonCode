@@ -13,12 +13,17 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { blend, bold, colorEnabled, paint, colorLevel, cyan, dim, pulse, rgbFg, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow, type RGB } from "./style";
-import { runStatusLineScript, type StatusLineScript, type StatusLineSpawnContext } from "./status-line";
+import { blend, bold, colorEnabled, paint, colorLevel, cyan, dim, pulse, rgbFg, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow, type RGB } from "./style";
+import {
+  buildStatusLinePayload,
+  runStatusLineScript,
+  type StatusLineScript,
+  type StatusLineSpawnContext,
+} from "./status-line";
 import { formatUnknownStatusChip } from "./unknown-chip";
 import type { EffectReconcileBlockLatchView } from "../core/effect-reconcile-block";
 import { formatReconcileBlockStatusChip } from "./reconcile-block-chip";
-import { formatBusyStatusAnnouncement, formatIdleStatusAnnouncement, reduceMotion, screenReaderMode, spinnerIntervalMs } from "./a11y";
+import { formatBusyStatusAnnouncement, formatIdleStatusAnnouncement, reduceMotion, REDUCED_MOTION_GLYPHS, screenReaderMode, spinnerIntervalMs } from "./a11y";
 import type { CacheWarmthDecision } from "../core/providers/cache-warmth";
 
 /* ------------------------------ capability ------------------------------ */
@@ -68,6 +73,13 @@ export function formatTokens(n: number): string {
   if (v < 10_000) return `${(v / 1000).toFixed(1)}k`;
   if (v < 1_000_000) return `${Math.round(v / 1000)}k`;
   return `${(v / 1_000_000).toFixed(1)}M`;
+}
+
+/** Fixed-width tokens/sec formatting (e.g. `  42.3 t/s`, 10 columns) to avoid jitter. */
+export function formatTokensPerSec(tokensPerSec: number): string {
+  const v = Number.isFinite(tokensPerSec) && tokensPerSec >= 0 ? tokensPerSec : 0;
+  const num = v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(1);
+  return `${num.padStart(6, " ")} t/s`;
 }
 
 /** Local `HH:MM`. */
@@ -136,10 +148,11 @@ function argSummary(args: unknown): string {
 /** What the spinner says while a tool runs ("Reading math.js"); "Thinking" when none. */
 export function toolVerb(name: string | undefined, args?: unknown): string {
   if (!name) return "Thinking";
-  const arg = argSummary(args).replace(/\s+/g, " ");
+  const safeName = sanitizeText(name);
+  const arg = sanitizeText(argSummary(args)).replace(/\s+/g, " ");
   const file = arg ? path.basename(arg) || arg : "";
   const withFile = (verb: string): string => (file ? `${verb} ${truncate(file, 40)}` : verb);
-  switch (name) {
+  switch (safeName) {
     case "read":
       return withFile("Reading");
     case "write":
@@ -163,8 +176,18 @@ export function toolVerb(name: string | undefined, args?: unknown): string {
       return "Asking language server";
     case "todo":
       return "Updating todos";
+    case "code_mode": {
+      const rec = args !== null && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+      const posture =
+        typeof rec?.sandbox === "string" && rec.sandbox.trim() !== ""
+          ? sanitizeText(rec.sandbox.trim())
+          : typeof rec?.posture === "string" && rec.posture.trim() !== ""
+            ? sanitizeText(rec.posture.trim())
+            : "sandbox";
+      return `Running code_mode (${truncate(posture, 24)})`;
+    }
     default:
-      return `Running ${name}`;
+      return `Running ${safeName}`;
   }
 }
 
@@ -215,12 +238,15 @@ export interface FooterInput {
  * truncated label and clock, <24 the spinner alone. Only the label is ever cut.
  */
 export function footerLine(input: FooterInput): string {
-  if (screenReaderMode() || reduceMotion()) return formatBusyStatusAnnouncement(input);
+  if (screenReaderMode()) return formatBusyStatusAnnouncement(input);
+  const reduced = reduceMotion();
   const unicode = input.unicode ?? true;
   const w = Math.max(1, Math.floor(input.width));
   // The ladder is in terminal columns; `width` already leaves the last one free.
   const cols = w + 1;
-  const glyph = pulseGlyph(spinnerFrame(input.tick, unicode), input.pulseTick ?? 0);
+  const glyph = reduced
+    ? REDUCED_MOTION_GLYPHS.live
+    : pulseGlyph(spinnerFrame(input.tick, unicode), input.pulseTick ?? 0);
   if (cols < 24) return glyph;
   const base = input.verb && input.verb !== "" ? input.verb : "Thinking";
   const label = (text: string): string => text + (input.more && input.more > 0 ? ` + ${input.more} more` : "") + (text.endsWith("\u2026") ? "" : "\u2026");
@@ -278,6 +304,28 @@ export interface StatusInfo {
   unknownReceiptId?: string;
   /** `HZ_EFFECT_RECONCILE_BLOCK` latch for this session (ruling **304**). */
   reconcileBlock?: EffectReconcileBlockLatchView;
+  /** EffectHost kernel routing mode (Track A4). */
+  effectHostMode?: "off" | "opt-in" | "default" | "require";
+  /** Egress/netns/TLS confinement posture — never claim enforced unless enforced === true. */
+  egressPosture?: {
+    netns: boolean;
+    tlsMode: "off" | "peek" | "intercept" | "terminate";
+    enforced: boolean;
+  };
+  /** PII-vault masking posture when active. */
+  piiVault?: {
+    active: boolean;
+    tokenCount: number;
+  };
+  /** Human-principal signing posture for status-line JSON payload. */
+  principalMode?: "ed25519" | "parent" | "unsigned";
+  principalKeyFingerprint?: string;
+  /** Prompt-cache health metrics forwarded to status-line JSON payload. */
+  promptCache?: {
+    warm: boolean;
+    hitRatio: number;
+    lastMissCause?: string;
+  };
   /**
    * Optional cache-warmth state. Supplied by the caller (computed with
    * `core/providers/cache-warmth.ts`); never computed here. The segment is
@@ -365,7 +413,8 @@ export function formatIdleStatusLine(info: StatusInfo, width: number, opts: Idle
 
 export function composeStatusBar(info: StatusInfo, width: number): string {
   const limit = Math.max(10, Math.floor(width));
-  const mode = info.badge !== "" ? bold(yellow(info.badge)) : dim("default");
+  const safeBadge = sanitizeText(info.badge);
+  const mode = safeBadge !== "" ? bold(yellow(safeBadge)) : dim("default");
   const usageHint = formatTokenHint(info.contextUsed, info.contextWindow);
   const unknown =
     info.unknownCount !== undefined && info.unknownCount > 0
@@ -373,22 +422,65 @@ export function composeStatusBar(info: StatusInfo, width: number): string {
       : "";
   const reconcileBlock =
     info.reconcileBlock !== undefined ? formatReconcileBlockStatusChip(info.reconcileBlock) : "";
+  const effectHost =
+    info.effectHostMode !== undefined
+      ? info.effectHostMode === "require"
+        ? paint("ok", `eh:${info.effectHostMode}`)
+        : dim(`eh:${info.effectHostMode}`)
+      : "";
+  const egress = (() => {
+    const ep = info.egressPosture;
+    if (ep === undefined) return "";
+    // Honesty invariant: NEVER emit egress:netns+tls unless enforced === true && netns === true && tlsMode !== "off".
+    if (ep.enforced === true && ep.netns === true && ep.tlsMode !== "off") {
+      return paint("ok", "egress:netns+tls");
+    }
+    if (ep.enforced === true && ep.netns === true) {
+      return paint("ok", "egress:netns");
+    }
+    if (ep.enforced === true && ep.tlsMode !== "off") {
+      return paint("ok", `egress:tls(${sanitizeText(ep.tlsMode)})`);
+    }
+    return dim("egress:advisory");
+  })();
+  const pii =
+    info.piiVault !== undefined && info.piiVault.active && info.piiVault.tokenCount > 0
+      ? paint("warn", `pii:${Math.floor(info.piiVault.tokenCount)} masked`)
+      : "";
   const warmth =
     info.cacheWarmth !== undefined && cacheWarmthDisplayEnabled() ? dim(formatCacheWarmthStatus(info.cacheWarmth)) : "";
+  const safeBranch = info.branch ? sanitizeText(info.branch) : "";
   const parts: Record<string, string> = {
     mode,
     unknown,
     reconcileBlock,
+    effectHost,
+    egress,
+    pii,
     warmth,
-    model: info.model,
-    provider: dim(info.provider),
+    model: sanitizeText(info.model),
+    provider: dim(sanitizeText(info.provider)),
     ctx: info.contextPercent === undefined ? "" : dim("\u25d1 ") + `${Math.max(0, Math.min(999, Math.round(info.contextPercent)))}%`,
     usage: usageHint !== "" ? dim(usageHint) : "",
-    path: dim(info.path),
-    branch: info.branch ? dim("\u2442 ") + info.branch : "",
+    path: dim(sanitizeText(info.path)),
+    branch: safeBranch ? dim("\u2442 ") + safeBranch : "",
   };
-  const dropOrder = ["path", "provider", "branch", "usage", "ctx", "warmth"];
-  const order = ["mode", "unknown", "reconcileBlock", "warmth", "model", "provider", "ctx", "usage", "path", "branch"];
+  const dropOrder = ["path", "provider", "branch", "usage", "ctx", "warmth", "egress", "effectHost", "pii"];
+  const order = [
+    "mode",
+    "unknown",
+    "reconcileBlock",
+    "effectHost",
+    "egress",
+    "pii",
+    "warmth",
+    "model",
+    "provider",
+    "ctx",
+    "usage",
+    "path",
+    "branch",
+  ];
   const dropped = new Set<string>();
   const build = (): string =>
     order
@@ -452,13 +544,15 @@ const RESET = "\u001b[0m";
  */
 export function userBlock(text: string, width: number, time: string, color = colorEnabled()): string[] {
   const w = Math.max(20, Math.floor(width));
-  const body = wrapText(text, w - 4);
+  const safeText = sanitizeText(text);
+  const safeTime = sanitizeText(time);
+  const body = wrapText(safeText, w - 4);
   if (!color) return body.map((l, i) => (i === 0 ? "\u276f " : "  ") + l);
   const fill = (inner: string): string => BLOCK_BG + inner + " ".repeat(Math.max(0, w - visibleWidth(inner))) + RESET;
   const lines = [fill("")];
   body.forEach((l, i) => {
     const lead = i === 0 ? " \u276f " : "   ";
-    const stamp = i === 0 ? time : "";
+    const stamp = i === 0 ? safeTime : "";
     const gap = Math.max(1, w - visibleWidth(lead + l) - visibleWidth(stamp) - 1);
     const inner =
       lead + l + (stamp ? " ".repeat(gap) + "\u001b[2m" + stamp + "\u001b[22m" + " " : "");
@@ -561,7 +655,7 @@ export function createLive(opts: LiveOptions): Live {
   const now = opts.now ?? Date.now;
   const unicode = unicodeLocale();
   const sync = opts.sync ?? syncEnabled();
-  const frameMs = reduceMotion() ? 1000 : FRAME_MS;
+  const frameMs = reduceMotion() ? FRAME_MS * 4 : FRAME_MS;
   const spinMs = spinnerIntervalMs();
   let drawnLines = 0;
   let cursorHidden = false;
@@ -581,7 +675,7 @@ export function createLive(opts: LiveOptions): Live {
   const restoreCursor = (): void => {
     if (!cursorHidden) return;
     cursorHidden = false;
-    opts.write(CURSOR_SHOW);
+    opts.write((sync ? SYNC_END : "") + CURSOR_SHOW);
   };
 
   const erase = (): void => {
@@ -616,7 +710,11 @@ export function createLive(opts: LiveOptions): Live {
     );
     const frame = lines.join("\n");
     if (frame === lastFrame && drawnLines === lines.length) return;
-    const body = (drawnLines > 0 ? eraseRegion(drawnLines) : "\r\u001b[2K") + (cursorHidden ? "" : CURSOR_HIDE) + frame;
+    const body = (
+      (drawnLines > 0 ? eraseRegion(drawnLines) : "\r\u001b[2K") +
+      (cursorHidden ? "" : CURSOR_HIDE) +
+      frame
+    ).replace(/\u001b\[2J/g, "");
     cursorHidden = true;
     drawnLines = lines.length;
     lastFrame = frame;
@@ -640,7 +738,7 @@ export function createLive(opts: LiveOptions): Live {
     if (cursorHidden) {
       cursorHidden = false;
       try {
-        process.stdout.write(CURSOR_SHOW);
+        process.stdout.write(SYNC_END + CURSOR_SHOW);
       } catch {
         /* terminal went away */
       }
@@ -665,7 +763,21 @@ export function createLive(opts: LiveOptions): Live {
 
   const scriptLines = (info: StatusInfo): string[] => {
     if (!opts.statusScript) return [];
-    return runStatusLineScript(opts.statusScript, { ...info }, JSON.stringify(info), opts.statusSpawn);
+    const payload = buildStatusLinePayload({
+      ...info,
+      ...(info.promptCache !== undefined
+        ? {
+            prompt_cache: {
+              warm: info.promptCache.warm,
+              hit_ratio: info.promptCache.hitRatio,
+              ...(info.promptCache.lastMissCause !== undefined
+                ? { last_miss_cause: info.promptCache.lastMissCause }
+                : {}),
+            },
+          }
+        : {}),
+    });
+    return runStatusLineScript(opts.statusScript, payload, JSON.stringify(payload), opts.statusSpawn);
   };
 
   return {

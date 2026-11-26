@@ -36,6 +36,25 @@ describe("PKCE", () => {
     expect(parsed.oauth?.clientId).toBe("cid");
   });
 
+
+
+  // V-15: tool-id rules are data in the user provider registry.
+  test("parseProviderEntry accepts and validates tool-id rules", () => {
+    const parsed = parseProviderEntry(
+      { id: "vendor", baseUrl: "https://api.example/v1", toolIdMaxLength: 9, toolIdPrefix: "c" },
+      0,
+    );
+    expect(typeof parsed).not.toBe("string");
+    if (typeof parsed === "string") return;
+    expect(parsed.toolIdMaxLength).toBe(9);
+    expect(parsed.toolIdPrefix).toBe("c");
+    expect(
+      parseProviderEntry({ id: "vendor", baseUrl: "https://api.example/v1", toolIdMaxLength: 2 }, 0),
+    ).toContain("toolIdMaxLength");
+    expect(
+      parseProviderEntry({ id: "vendor", baseUrl: "https://api.example/v1", toolIdPrefix: "a b" }, 0),
+    ).toContain("toolIdPrefix");
+  });
   test("callback listener accepts matching state", async () => {
     const state = "st";
     const listener = startOAuthCallbackListener({ state, path: "/cb", timeoutMs: 5000 });

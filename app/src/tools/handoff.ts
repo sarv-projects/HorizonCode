@@ -17,6 +17,7 @@ import {
   mergeDurableBranchOpenTodos,
 } from "../core/durable-todos";
 import { importSnapshottedTodosGuarded, openTodos } from "./todo";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 
 async function admitHandoffDbWrite(ctx: ToolContext, title: string): Promise<string | undefined> {
   const target = handoffDbPath(ctx.workspace);
@@ -138,13 +139,18 @@ export const handoffCreateTool: Tool = {
         : baseContext.trim() === ""
           ? hookBlock
           : `${baseContext.trim()}\n\n${hookBlock}`;
-    const result = createHandoff(ctx.workspace, { ...normalized, context }, {
-      branch: branchOverride,
-      continues_from,
-      auto_continue: continues_from === undefined,
-      todos_snapshot,
-      session_id: ctx.sessionId,
-    });
+    const result = await withBunMutationDiskCriticalSection(
+      ctx.workspace,
+      handoffDbPath(ctx.workspace),
+      async () =>
+        createHandoff(ctx.workspace, { ...normalized, context }, {
+          branch: branchOverride,
+          continues_from,
+          auto_continue: continues_from === undefined,
+          todos_snapshot,
+          session_id: ctx.sessionId,
+        }),
+    );
     const hookAuditLines = hookBlock === "" ? 0 : hookBlock.split("\n").filter((l) => l.startsWith("- ")).length;
     return { ok: true, output: formatCreate(result, todos_snapshot.length, hookAuditLines) };
   },

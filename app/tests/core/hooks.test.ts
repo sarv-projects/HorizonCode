@@ -67,8 +67,13 @@ function writeHooks(file: string, doc: unknown): void {
   writeFileSync(file, typeof doc === "string" ? doc : JSON.stringify(doc, null, 2), "utf8");
 }
 
+const BASH_EXE =
+  process.platform === "win32" && existsSync("C:\\Program Files\\Git\\bin\\bash.exe")
+    ? "C:\\Program Files\\Git\\bin\\bash.exe"
+    : "bash";
+
 const bashHook = (script: string, extra: Partial<HookDef> = {}): HookDef => ({
-  command: "bash",
+  command: BASH_EXE,
   args: [path.join(FIXTURES, script)],
   ...extra,
 });
@@ -81,7 +86,7 @@ const jsHook = (script: string, extra: Partial<HookDef> = {}): HookDef => ({
 
 /** Appends its label to a workspace-relative log, then allows (order proof). */
 const markerHook = (log: string, label: string, match?: HookMatch): HookDef => ({
-  command: "bash",
+  command: BASH_EXE,
   args: [path.join(FIXTURES, "marker.sh"), log, label],
   ...(match === undefined ? {} : { match }),
 });
@@ -305,7 +310,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
     expect(await runPreToolHooks(config, ctx)).toEqual({ decision: "allow" });
     expect(ctx.notices).toEqual([]);
     expect(ctx.events).toEqual([
-      { type: "hook.decision", payload: { tool: "read", hook: "bash (preTool[0])", decision: "allow" } },
+      { type: "hook.decision", payload: { tool: "read", hook: `${BASH_EXE} (preTool[0])`, decision: "allow" } },
     ]);
 
     const entries = (await readSpawnLedger(kernelStateDir(ws))).entries;

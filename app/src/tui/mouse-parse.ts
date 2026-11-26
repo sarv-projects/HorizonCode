@@ -27,16 +27,11 @@ export interface MouseFeedResult {
   plain: string;
 }
 
-function parseSgrParams(body: string): MouseEvent | undefined {
-  const parts = body.split(";");
-  if (parts.length < 3) return undefined;
-  const cb = Number(parts[0]);
-  const col = Number(parts[1]);
-  const row = Number(parts[2]);
+function parseSgrParams(cb: number, col: number, row: number, term: string): MouseEvent | undefined {
   if (!Number.isFinite(cb) || !Number.isFinite(col) || !Number.isFinite(row)) return undefined;
   const wheel = cb >= 64 && cb <= 67;
-  const release = !wheel && cb === 3;
-  const drag = !wheel && cb >= 32 && cb <= 43;
+  const release = !wheel && (term === "m" || cb === 3);
+  const drag = !wheel && !release && cb >= 32 && cb <= 43;
   let button = (cb & 0b11) as MouseButton;
   if (wheel) button = (cb - 64) as MouseButton;
   return {
@@ -71,6 +66,9 @@ function parseX10(seq: string): MouseEvent | undefined {
   };
 }
 
+const SGR_MOUSE_RE = /^\u001b\[<(\d+);(\d+);(\d+)([Mm])/;
+const SGR_PREFIX_RE = /^\u001b\[<[\d;]*$/;
+
 /**
  * Feed a chunk of stdin bytes. Incomplete escape sequences stay in `carry` until
  * completed or proven non-mouse.
@@ -83,12 +81,14 @@ export function feedMouseBytes(chunk: string, carry = ""): { result: MouseFeedRe
   while (i < buf.length) {
     const rest = buf.slice(i);
     if (rest.startsWith("\u001b[<")) {
-      const end = rest.indexOf("m", 3);
-      if (end === -1) break;
-      const ev = parseSgrParams(rest.slice(3, end));
-      if (ev) events.push(ev);
-      i += end + 1;
-      continue;
+      const m = SGR_MOUSE_RE.exec(rest);
+      if (m) {
+        const ev = parseSgrParams(Number(m[1]), Number(m[2]), Number(m[3]), m[4] as string);
+        if (ev) events.push(ev);
+        i += m[0].length;
+        continue;
+      }
+      if (SGR_PREFIX_RE.test(rest) && rest.length < 24) break;
     }
     if (rest.startsWith("\u001b[M")) {
       if (rest.length < 6) break;
@@ -97,7 +97,7 @@ export function feedMouseBytes(chunk: string, carry = ""): { result: MouseFeedRe
       i += 6;
       continue;
     }
-    if (rest.startsWith("\u001b") && rest.length < 8) break;
+    if (rest === "\u001b" || rest === "\u001b[") break;
     plain += rest[0];
     i += 1;
   }

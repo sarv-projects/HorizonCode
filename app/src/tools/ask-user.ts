@@ -46,6 +46,27 @@ function optionLabels(options: AskUserOption[]): string[] {
   return options.map((o) => o.label);
 }
 
+function parseMultiSelectAnswer(answer: string, options: AskUserOption[]): string[] | undefined {
+  const parts = answer.split(/[,;\n]+/).map((p) => p.trim()).filter((p) => p !== "");
+  if (parts.length === 0) return undefined;
+  const labels: string[] = [];
+  for (const part of parts) {
+    const num = Number.parseInt(part, 10);
+    if (Number.isFinite(num) && num >= 1 && num <= options.length) {
+      const match = options[num - 1]!.label;
+      if (!labels.includes(match)) labels.push(match);
+      continue;
+    }
+    const lower = part.toLowerCase();
+    const match = options.find((o) => o.label.toLowerCase() === lower);
+    if (match !== undefined) {
+      if (!labels.includes(match.label)) labels.push(match.label);
+      continue;
+    }
+  }
+  return labels.length > 0 ? labels : undefined;
+}
+
 function formatApprovalDetail(req: AskUserRequest): string {
   const lines = [req.question];
   if (req.context !== undefined && req.context.trim() !== "") {
@@ -98,6 +119,14 @@ export const askUserTool: Tool = {
         type: "string",
         description: "Default answer when the user accepts without picking (optional).",
       },
+      multi_select: {
+        type: "boolean",
+        description: "Allow user to pick multiple options (e.g. comma-separated).",
+      },
+      timeout_ms: {
+        type: "integer",
+        description: "Timeout in milliseconds before falling back to default or failing (≤ 300000).",
+      },
     },
     required: ["question"],
   },
@@ -128,16 +157,79 @@ export const askUserTool: Tool = {
       return fail("default must be one of the listed options");
     }
 
-    const req: AskUserRequest = { question, options, context, defaultOption };
+    const multiSelect = args.multi_select === true || args.multiSelect === true;
+    let timeoutMs: number | undefined;
+    if (args.timeout_ms !== undefined || args.timeoutMs !== undefined) {
+      const raw = args.timeout_ms ?? args.timeoutMs;
+      if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+        timeoutMs = Math.min(300_000, Math.floor(raw));
+      }
+    }
+
+    const req: AskUserRequest = { question, options, context, defaultOption, multiSelect, timeoutMs };
 
     if (ctx.askUser !== undefined) {
+      if (ctx.signal.aborted) {
+        return fail("ask_user failed: aborted");
+      }
+      const controller = new AbortController();
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const onParentAbort = (): void => {
+        controller.abort(ctx.signal.reason ?? new Error("aborted"));
+      };
+      ctx.signal.addEventListener("abort", onParentAbort, { once: true });
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort(new Error(`timed out after ${timeoutMs}ms waiting for user input`));
+        }, timeoutMs);
+      }
       try {
-        const answer = (await ctx.askUser(req)).trim();
-        if (answer === "") return fail("no answer from user");
+        const invokeAskUser = ctx.askUser as (request: AskUserRequest, signal?: AbortSignal) => Promise<string>;
+        const waiterPromise = invokeAskUser(req, controller.signal);
+        const abortPromise = new Promise<never>((_, reject) => {
+          if (controller.signal.aborted) {
+            reject(
+              controller.signal.reason instanceof Error
+                ? controller.signal.reason
+                : new Error(timedOut ? `timed out after ${timeoutMs}ms waiting for user input` : "aborted"),
+            );
+            return;
+          }
+          controller.signal.addEventListener(
+            "abort",
+            () => {
+              reject(
+                controller.signal.reason instanceof Error
+                  ? controller.signal.reason
+                  : new Error(timedOut ? `timed out after ${timeoutMs}ms waiting for user input` : "aborted"),
+              );
+            },
+            { once: true },
+          );
+        });
+        // Prevent unhandled rejection if waiter rejects after timeout/abort wins the race.
+        void waiterPromise.catch(() => undefined);
+        const answer = (await Promise.race([waiterPromise, abortPromise])).trim();
+        if (answer === "") {
+          if (defaultOption !== undefined && timeoutMs !== undefined) return { ok: true, output: defaultOption };
+          return fail("no answer from user");
+        }
+        if (multiSelect && options !== undefined) {
+          const multi = parseMultiSelectAnswer(answer, options);
+          if (multi !== undefined) return { ok: true, output: multi.join(", ") };
+        }
         return { ok: true, output: answer };
       } catch (err) {
+        if (timedOut && !ctx.signal.aborted && defaultOption !== undefined) {
+          return { ok: true, output: defaultOption };
+        }
         const message = err instanceof Error ? err.message : String(err);
         return fail(`ask_user failed: ${message}`);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        ctx.signal.removeEventListener("abort", onParentAbort);
       }
     }
 

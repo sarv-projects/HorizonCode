@@ -15,6 +15,16 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  applyLoopbackNoProxy,
+  flushStreamsAndExit,
+  installSignalAndExitHandlers,
+  watchStdinClose,
+} from "./core/cli-hygiene";
+
+// Keep loopback requests off any proxy before any runtime or HTTP client initializes.
+applyLoopbackNoProxy();
+
 import type { ProviderFailureCode, RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import type { PermissionMode } from "./core/permission-mode";
@@ -35,6 +45,7 @@ import { createRuntime } from "./core/index";
 import {
   defaultH2HTasks,
   h2hLiveEnabled,
+  h2hPublication,
   runHeadToHeadBench,
   writeH2HReport,
 } from "./core/head-to-head-bench";
@@ -87,6 +98,7 @@ import {
   decodeReviewForkWorkerJob,
   runReviewForkWorker,
 } from "./core/review";
+import { scrubEnv } from "./tools/helpers";
 import { admitSpendLedgerWrite, SpendLedger } from "./core/spend-ledger";
 import { makeProvider } from "./core/providers";
 import { buildShowPromptsRequest, renderShowPrompts, showPromptsPublication } from "./core/show-prompts";
@@ -126,6 +138,7 @@ import {
   modelsRefreshPublication,
   writeCatalogCache,
 } from "./core/catalog/catalog";
+import { triggerBootCatalogRefresh } from "./core/catalog/catalog-poll";
 import { KernelClient } from "./core/kernel";
 import {
   effectReconcileExitCode,
@@ -150,8 +163,22 @@ import {
   sessionVerifyExitCode,
   sessionVerifyPublication,
 } from "./core/session-verify-cli";
+import { loadTaskBoard } from "./core/task-board";
 
-const VERSION = "0.1.0";
+function loadPackageVersion(): string {
+  try {
+    const pkgPath = new URL("../package.json", import.meta.url);
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim() !== "") {
+      return parsed.version.trim();
+    }
+  } catch {
+    /* fallback to default */
+  }
+  return "0.1.0";
+}
+
+export const VERSION = loadPackageVersion();
 
 const HELP = [
   "hzcode \u2014 chat with a coding assistant in your terminal",
@@ -174,6 +201,7 @@ const HELP = [
   "  hzcode receipt show <id>            read-only receipt inspector + local chain verify (R172 reduced)",
   "  --worktree <name>    create a git worktree beside the repo and start there (not OS sandbox)",
   "  --workspace <path>   folder to work in (default: the current folder)",
+  "  --provider <name>    provider override (e.g. openai, anthropic, gemini, ollama, mock)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --restore [path]     resume the conversation from a Markdown transcript (default: <state>/transcripts/<session>.md)",
   "  --list-models [sub]  list known model ids (optional substring filter)",
@@ -192,8 +220,9 @@ const HELP = [
   "  --tui-mode <m>       scrollback (default) | fullscreen | fullscreen-experimental",
 ].join("\n");
 
-interface CliOptions {
+export interface CliOptions {
   workspace: string;
+  provider?: string;
   model?: string;
   continueSession: boolean;
   mock: boolean;
@@ -225,13 +254,14 @@ interface CliOptions {
 
 function cliConfig(workspace: string, opts: CliOptions): ReturnType<typeof loadConfig> {
   const env: Record<string, string | undefined> = { ...process.env };
+  if (opts.provider !== undefined) env.HZ_PROVIDER = opts.provider;
   if (opts.mock) env.HZ_PROVIDER = "mock";
   if (opts.model !== undefined) env.HZ_MODEL = opts.model;
   const home = typeof env.HOME === "string" && env.HOME !== "" ? env.HOME : os.homedir();
   return augmentConfigWithTrustedWorkspace(loadConfig(env, defaultConfigPath(home), workspace), workspace, env, home, () => {});
 }
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     workspace: process.cwd(),
     continueSession: false,
@@ -384,8 +414,9 @@ function parseArgs(argv: string[]): CliOptions {
         }
         const key = value.trim().toLowerCase();
         if (key === "scrollback" || key === "default" || key === "minimal") opts.tuiScreenMode = "scrollback";
+        else if (key === "fullscreen-experimental" || key === "fullscreen_experimental") opts.tuiScreenMode = "fullscreen-experimental";
         else if (key === "fullscreen" || key === "full" || key === "alt") opts.tuiScreenMode = "fullscreen";
-        else opts.errors.push("--tui-mode needs scrollback or fullscreen");
+        else opts.errors.push("--tui-mode needs scrollback, fullscreen, or fullscreen-experimental");
         break;
       }
       case "--worktree": {
@@ -398,6 +429,12 @@ function parseArgs(argv: string[]): CliOptions {
         const value = nextValue();
         if (value === undefined || value === "") opts.errors.push("--workspace needs a folder");
         else opts.workspace = value;
+        break;
+      }
+      case "--provider": {
+        const value = nextValue();
+        if (value === undefined || value.trim() === "") opts.errors.push("--provider needs a name");
+        else opts.provider = value.trim();
         break;
       }
       case "--model": {
@@ -459,16 +496,20 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
     model: opts.model,
   });
 
-  let terminated = false;
-  const onSigterm = (): void => {
-    terminated = true;
-    void Promise.resolve(server.stop()).catch(() => {
-      /* closing on the way out */
-    });
-    const timer = setTimeout(() => process.exit(143), 300);
-    if (typeof (timer as { unref?: () => void }).unref === "function") (timer as { unref: () => void }).unref();
-  };
-  process.once("SIGTERM", onSigterm);
+  const signals = installSignalAndExitHandlers({
+    onShutdown: async () => {
+      await server.stop().catch(() => undefined);
+    },
+  });
+  // Parent death in stdio server mode triggers clean shutdown; resume=false
+  // because liveStdin() reads fd 0 inside its worker thread.
+  const stopStdinWatch = watchStdinClose(
+    () => {
+      void server.stop().catch(() => undefined);
+    },
+    process.stdin,
+    { resume: false },
+  );
 
   process.stderr.write(`hzcode serve: NDJSON JSON-RPC on stdio (workspace ${workspace})\n`);
   try {
@@ -478,96 +519,225 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
     await server.stop().catch(() => undefined);
     return 1;
   } finally {
-    process.removeListener("SIGTERM", onSigterm);
+    stopStdinWatch();
+    signals.dispose();
   }
   await server.stop().catch(() => undefined);
-  return terminated ? 143 : 0;
+  return signals.resolveExitCode(0);
+}
+
+/** Validate that an ACP session `cwd` stays inside the configured `--workspace`. */
+export function isAcpCwdContained(
+  workspaceRoot: string,
+  candidateCwd: string,
+): { ok: true; resolved: string } | { ok: false; reason: string } {
+  const rootResolved = path.resolve(workspaceRoot);
+  const rootReal = fs.existsSync(rootResolved) ? fs.realpathSync(rootResolved) : rootResolved;
+  const candResolved = path.resolve(candidateCwd);
+  let candReal = candResolved;
+  if (fs.existsSync(candResolved)) {
+    candReal = fs.realpathSync(candResolved);
+  } else {
+    let cur = path.dirname(candResolved);
+    const tail: string[] = [path.basename(candResolved)];
+    while (cur !== path.dirname(cur) && !fs.existsSync(cur)) {
+      tail.unshift(path.basename(cur));
+      cur = path.dirname(cur);
+    }
+    if (fs.existsSync(cur)) {
+      candReal = path.join(fs.realpathSync(cur), ...tail);
+    }
+  }
+  const rel = path.relative(rootReal, candReal);
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+    return { ok: true, resolved: candReal };
+  }
+  return { ok: false, reason: `ACP cwd escapes workspace (${rootResolved})` };
 }
 
 /**
  * `hzcode acp` — Agent Client Protocol v2 agent on stdio (ruling 642).
- * IDE hosts attach without a custom fork. Prompts run through createRuntime.
+ * IDE hosts attach without a custom fork. Prompts reuse a persistent runtime per session.
  */
+const MAX_ACP_SESSIONS = 64;
+const MAX_ACP_LINE_BYTES = 16 * 1024 * 1024;
+
 async function runAcp(opts: CliOptions, workspace: string): Promise<number> {
+  if (opts.provider !== undefined && opts.provider.trim() !== "") {
+    process.env.HZ_PROVIDER = opts.provider.trim();
+  }
+  const runtimes = new Map<string, Runtime>();
+  const closeAllRuntimes = async (): Promise<void> => {
+    const entries = [...runtimes.values()];
+    runtimes.clear();
+    await Promise.all(entries.map((rt) => rt.close().catch(() => undefined)));
+  };
+
   const agent = new AcpAgent({
     onNotification: (notification) => {
       process.stdout.write(`${JSON.stringify(notification)}\n`);
     },
-    promptHandler: async ({ prompt, cwd, onAgentMessageChunk }) => {
-      const runtime = await createRuntime({
-        workspace: cwd || workspace,
-        mock: opts.mock === true,
-        model: opts.model,
-        allowUntrusted: true,
-      });
-      try {
-        const notices: string[] = [];
-        const out = await runtime.send(prompt, {
-          onEvent(ev) {
-            if (ev.type === "notice") notices.push(ev.message);
-            if (ev.type === "assistant.delta") {
-              onAgentMessageChunk?.(ev.text);
-            }
-          },
-        });
-        const text = out.text.trim() !== "" ? out.text : notices.join("\n") || "(empty ACP turn)";
-        return { stopReason: out.aborted ? "cancelled" : "end_turn", text };
-      } finally {
-        await runtime.close().catch(() => undefined);
+    promptHandler: async ({ sessionId, prompt, cwd, onAgentMessageChunk }) => {
+      const targetCwd = cwd && cwd.trim() !== "" ? cwd : workspace;
+      const check = isAcpCwdContained(workspace, targetCwd);
+      if (check.ok === false) {
+        throw new Error("reason" in check ? check.reason : "ACP cwd escapes workspace");
       }
+      let runtime = runtimes.get(sessionId);
+      if (runtime === undefined) {
+        if (runtimes.size >= MAX_ACP_SESSIONS) {
+          const oldestKey = runtimes.keys().next().value;
+          if (oldestKey !== undefined) {
+            const oldestRt = runtimes.get(oldestKey);
+            runtimes.delete(oldestKey);
+            void oldestRt?.close().catch(() => undefined);
+          }
+        }
+        runtime = await createRuntime({
+          workspace: check.resolved,
+          mock: opts.mock === true,
+          model: opts.model,
+          allowUntrusted: opts.allowUntrusted === true,
+        });
+        runtimes.set(sessionId, runtime);
+      }
+      const notices: string[] = [];
+      const out = await runtime.send(prompt, {
+        onEvent(ev) {
+          if (ev.type === "notice") notices.push(ev.message);
+          if (ev.type === "assistant.delta") {
+            onAgentMessageChunk?.(ev.text);
+          }
+        },
+      });
+      const text = out.text.trim() !== "" ? out.text : notices.join("\n") || "(empty ACP turn)";
+      return { stopReason: out.aborted ? "cancelled" : "end_turn", text };
     },
   });
 
   process.stderr.write(`hzcode acp: ACP v2 agent on stdio (workspace ${workspace})\n`);
   const input = liveStdin();
-  for await (const chunk of input) {
-    const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-    for (const line of text.split(/\n/)) {
-      let raw: unknown | null;
-      try {
-        raw = parseAcpLine(line);
-      } catch (err) {
+  const iterator = input[Symbol.asyncIterator]();
+  const stopInput = (): void => {
+    void iterator.return?.().catch(() => undefined);
+  };
+  const signals = installSignalAndExitHandlers({
+    onShutdown: async () => {
+      stopInput();
+      await closeAllRuntimes();
+    },
+  });
+  const stopStdinWatch = watchStdinClose(stopInput, process.stdin, { resume: false });
+  const processAcpLine = async (line: string): Promise<void> => {
+    let raw: unknown | null;
+    try {
+      raw = parseAcpLine(line);
+    } catch (err) {
+      process.stdout.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: `parse error: ${errorMessage(err)}` },
+        })}\n`,
+      );
+      return;
+    }
+    if (raw === null) return;
+    const response = await agent.handleMessage(raw);
+    if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
+  };
+  let buffer = "";
+  let droppingOversizeLine = false;
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+      const chunk = next.value;
+      const textChunk = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      if (droppingOversizeLine) {
+        const nlPos = textChunk.indexOf("\n");
+        if (nlPos === -1) continue;
+        droppingOversizeLine = false;
+        buffer = textChunk.slice(nlPos + 1);
+      } else {
+        buffer += textChunk;
+      }
+      let nl = buffer.indexOf("\n");
+      while (nl !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        await processAcpLine(line);
+        nl = buffer.indexOf("\n");
+      }
+      if (Buffer.byteLength(buffer, "utf8") > MAX_ACP_LINE_BYTES) {
+        buffer = "";
+        droppingOversizeLine = true;
         process.stdout.write(
           `${JSON.stringify({
             jsonrpc: "2.0",
             id: null,
-            error: { code: -32700, message: `parse error: ${errorMessage(err)}` },
+            error: { code: -32600, message: `ACP line exceeds maximum size (${MAX_ACP_LINE_BYTES} bytes)` },
           })}\n`,
         );
-        continue;
       }
-      if (raw === null) continue;
-      const response = await agent.handleMessage(raw);
-      if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
     }
+    if (!droppingOversizeLine && buffer.trim() !== "") {
+      await processAcpLine(buffer);
+    }
+  } finally {
+    stopStdinWatch();
+    signals.dispose();
+    await closeAllRuntimes();
   }
-  return 0;
+  return signals.resolveExitCode(0);
 }
 
 /** `hzcode h2h` — reproducible head-to-head bench scaffold (ruling 644). */
-async function runH2hCommand(args: string[]): Promise<number> {
+export async function runH2hCommand(args: string[]): Promise<number> {
   let live = h2hLiveEnabled(process.env);
   let tasks = 25;
   let workspace = process.cwd();
   for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "--live") live = true;
-    else if (a === "--tasks" && args[i + 1]) {
-      tasks = Number(args[++i]);
-      if (!Number.isFinite(tasks)) {
-        process.stderr.write("hzcode h2h: --tasks needs a number\n");
+    const a = String(args[i] ?? "");
+    if (a === "--live") {
+      live = true;
+    } else if (a === "--tasks" || a.startsWith("--tasks=")) {
+      const raw = a.includes("=") ? a.slice("--tasks=".length) : args[i + 1];
+      if (raw === undefined || raw.trim() === "" || (!a.includes("=") && raw.startsWith("-"))) {
+        process.stderr.write("hzcode h2h: --tasks needs a positive integer\n");
         return 2;
       }
-    } else if (a === "--workspace" && args[i + 1]) workspace = path.resolve(args[++i]!);
-    else if (a === "--help" || a === "-h") {
+      if (!a.includes("=")) i += 1;
+      tasks = Number(raw);
+      if (!Number.isInteger(tasks) || tasks < 1) {
+        process.stderr.write("hzcode h2h: --tasks needs a positive integer\n");
+        return 2;
+      }
+    } else if (a === "--workspace" || a.startsWith("--workspace=")) {
+      const raw = a.includes("=") ? a.slice("--workspace=".length) : args[i + 1];
+      if (raw === undefined || raw === "" || (!a.includes("=") && raw.startsWith("-"))) {
+        process.stderr.write("hzcode h2h: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!a.includes("=")) i += 1;
+      workspace = path.resolve(raw);
+    } else if (a === "--help" || a === "-h") {
       process.stdout.write("usage: hzcode h2h [--live] [--tasks N] [--workspace <path>]\n");
       return 0;
+    } else {
+      process.stderr.write(
+        `hzcode h2h: unknown argument ${a}\nusage: hzcode h2h [--live] [--tasks N] [--workspace <path>]\n`,
+      );
+      return 2;
     }
   }
   const report = runHeadToHeadBench({ tasks: defaultH2HTasks(tasks), live });
   try {
     const out = await writeH2HReport(workspace, report);
     process.stdout.write(`${report.summary}\n`);
+    // H-7: publish the h2h counts under the metric contract; the human
+    // summary above stays byte-identical (rulings 505→620 precedent).
+    for (const block of h2hPublication(report)) process.stdout.write(`${block}\n`);
     process.stdout.write(`wrote ${out}\n`);
     return 0;
   } catch (err) {
@@ -577,7 +747,7 @@ async function runH2hCommand(args: string[]): Promise<number> {
 }
 
 /** `hzcode verify-artifact` — build a Verification Artifact (ruling 643). */
-async function runVerifyArtifactCommand(args: string[]): Promise<number> {
+export async function runVerifyArtifactCommand(args: string[]): Promise<number> {
   let goal = "";
   let plan = "";
   let diff = "";
@@ -585,18 +755,46 @@ async function runVerifyArtifactCommand(args: string[]): Promise<number> {
   let browserUrl: string | undefined;
   let workspace = process.cwd();
   for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "--goal" && args[i + 1]) goal = args[++i]!;
-    else if (a === "--plan" && args[i + 1]) plan = args[++i]!;
-    else if (a === "--diff" && args[i + 1]) diff = args[++i]!;
-    else if (a === "--test" && args[i + 1]) testOut = args[++i]!;
-    else if (a === "--browser-url" && args[i + 1]) browserUrl = args[++i]!;
-    else if (a === "--workspace" && args[i + 1]) workspace = path.resolve(args[++i]!);
-    else if (a === "--help" || a === "-h") {
+    const a = String(args[i] ?? "");
+    const takeVal = (flag: string): string | undefined => {
+      if (a.includes("=")) return a.slice(flag.length + 1);
+      const next = args[i + 1];
+      if (next === undefined || String(next).startsWith("-")) return undefined;
+      i += 1;
+      return next;
+    };
+    if (a === "--goal" || a.startsWith("--goal=")) {
+      const v = takeVal("--goal");
+      if (v === undefined) { process.stderr.write("hzcode verify-artifact: --goal needs a value\n"); return 2; }
+      goal = v;
+    } else if (a === "--plan" || a.startsWith("--plan=")) {
+      const v = takeVal("--plan");
+      if (v === undefined) { process.stderr.write("hzcode verify-artifact: --plan needs a value\n"); return 2; }
+      plan = v;
+    } else if (a === "--diff" || a.startsWith("--diff=")) {
+      const v = takeVal("--diff");
+      if (v === undefined) { process.stderr.write("hzcode verify-artifact: --diff needs a value\n"); return 2; }
+      diff = v;
+    } else if (a === "--test" || a.startsWith("--test=")) {
+      const v = takeVal("--test");
+      if (v === undefined) { process.stderr.write("hzcode verify-artifact: --test needs a value\n"); return 2; }
+      testOut = v;
+    } else if (a === "--browser-url" || a.startsWith("--browser-url=")) {
+      const v = takeVal("--browser-url");
+      if (v === undefined) { process.stderr.write("hzcode verify-artifact: --browser-url needs a value\n"); return 2; }
+      browserUrl = v;
+    } else if (a === "--workspace" || a.startsWith("--workspace=")) {
+      const v = takeVal("--workspace");
+      if (v === undefined || v === "") { process.stderr.write("hzcode verify-artifact: --workspace needs a folder\n"); return 2; }
+      workspace = path.resolve(v);
+    } else if (a === "--help" || a === "-h") {
       process.stdout.write(
         "usage: hzcode verify-artifact --goal <text> [--plan ...] [--diff ...] [--test ...] [--browser-url <url>] [--workspace <path>]\n",
       );
       return 0;
+    } else {
+      process.stderr.write(`hzcode verify-artifact: unknown argument ${a}\n`);
+      return 2;
     }
   }
   if (goal.trim() === "") {
@@ -629,6 +827,59 @@ async function runVerifyArtifactCommand(args: string[]): Promise<number> {
     );
     return 1;
   }
+}
+
+/** `hzcode tasks [--json] [--workspace <path>]`: inspect task board and WIP gate status. */
+export function runTasksCommand(args: string[]): number {
+  let json = false;
+  let workspace = process.cwd();
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i] ?? "");
+    if (arg === "--json") {
+      json = true;
+    } else if (arg === "--help" || arg === "-h") {
+      process.stdout.write("usage: hzcode tasks [--json] [--workspace <path>]\n");
+      return 0;
+    } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice("--workspace=".length) : args[i + 1];
+      if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("-"))) {
+        process.stderr.write("hzcode tasks: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = path.resolve(value);
+    } else {
+      process.stderr.write(
+        `hzcode tasks: unknown argument ${arg}\nusage: hzcode tasks [--json] [--workspace <path>]\n`,
+      );
+      return 2;
+    }
+  }
+  const board = loadTaskBoard(workspace);
+  if (json) {
+    process.stdout.write(`${JSON.stringify(board, null, 2)}\n`);
+    return board.ok ? 0 : 1;
+  }
+  if (!board.ok) {
+    process.stderr.write("hzcode tasks: WIP violations found:\n");
+    for (const v of board.violations) process.stderr.write(`  - ${v}\n`);
+    return 1;
+  }
+  if (board.items.length === 0) {
+    process.stdout.write("hzcode tasks: no tasks defined (create .hz/wip.json). Active: 0, WIP=1\n");
+    return 0;
+  }
+  process.stdout.write(`Task Board (WIP=1, Active: ${board.activeCount}):\n`);
+  for (const item of board.items) {
+    const mark =
+      item.status === "passed"
+        ? "[x]"
+        : item.status === "in_progress" || item.status === "active"
+          ? "[*]"
+          : "[ ]";
+    process.stdout.write(`  ${mark} ${item.id}: ${item.name ?? "unnamed"} (${item.status ?? "pending"})\n`);
+  }
+  return 0;
 }
 
 /** `hzcode doctor [--json] [--workspace <path>]`: diagnose only, exit 1 on any FAIL. */
@@ -965,28 +1216,46 @@ async function runConfigCommand(args: string[]): Promise<number> {
   return invalid ? 1 : 0;
 }
 
-/** Re-run this entry with `--workspace` after creating a worktree. */
-function reexecInWorkspace(dest: string, argvTail: string[]): number {
-  const script = process.argv[1] ?? "";
+/** Build Bun argv for `--worktree` re-exec, preserving the `--no-env-file` trust boundary. */
+export function buildReexecArgs(script: string, dest: string, argvTail: string[]): string[] {
   const filtered: string[] = [];
   for (let i = 0; i < argvTail.length; i += 1) {
     const arg = argvTail[i] ?? "";
-    if (arg === "--worktree") {
+    if (arg === "--worktree" || arg === "--workspace") {
       const next = argvTail[i + 1];
       if (next !== undefined && !String(next).startsWith("--")) i += 1;
       continue;
     }
-    if (arg.startsWith("--worktree=")) continue;
+    if (arg.startsWith("--worktree=") || arg.startsWith("--workspace=")) continue;
     filtered.push(arg);
   }
-  const args = [script, "--workspace", dest, ...filtered];
+  return ["--no-env-file", "run", script, "--workspace", dest, ...filtered];
+}
+
+/** Re-run this entry with `--workspace` after creating a worktree. */
+function reexecInWorkspace(dest: string, argvTail: string[]): number {
+  const script = process.argv[1] ?? "";
+  const args = buildReexecArgs(script, dest, argvTail);
   const res = spawnSync(process.execPath, args, { stdio: "inherit", cwd: dest });
   const code = res.status;
   return typeof code === "number" ? code : 1;
 }
 
+const SAFE_GIT_CONFIG = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "protocol.ext.allow=never",
+];
+
 function gitWorktreePorcelain(cwd: string): string | undefined {
-  const r = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd, encoding: "utf8" });
+  const r = spawnSync("git", [...SAFE_GIT_CONFIG, "worktree", "list", "--porcelain"], {
+    cwd,
+    encoding: "utf8",
+    env: { ...scrubEnv(), GIT_CONFIG_NOSYSTEM: "1" },
+  });
   if (r.status !== 0) return undefined;
   return r.stdout ?? "";
 }
@@ -1052,17 +1321,19 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
 }
 
 /** `hzcode login|logout <provider>` — OAuth PKCE when the registry entry has `oauth` (docs/33 §5.6). */
-async function runLoginCommand(args: string[]): Promise<number> {
+export async function runLoginCommand(args: string[]): Promise<number> {
   const verb = args[0];
   const device = args.includes("--device");
   const provider = args.find((a, i) => i > 0 && !a.startsWith("-"))?.trim();
   if (!provider) {
-    if (Boolean(process.stdin.isTTY)) {
+    if (verb !== "logout" && Boolean(process.stdin.isTTY)) {
       const { runAuthWizard } = await import("./tui/onboarding-wizard");
       const res = await runAuthWizard();
       return res.configured ? 0 : 1;
     }
-    process.stderr.write(`usage: hzcode ${verb} <provider> [--device]\n`);
+    process.stderr.write(
+      verb === "logout" ? "usage: hzcode logout <provider>\n" : `usage: hzcode ${verb} <provider> [--device]\n`,
+    );
     return 2;
   }
   const { loadConfig } = await import("./core/config");
@@ -1114,12 +1385,36 @@ async function runLoginCommand(args: string[]): Promise<number> {
 }
 
 /** `hzcode tui relaunch` — consume one-shot handoff (docs/13 D2 reduced). */
-function runTuiCommand(args: string[]): number {
+export function runTuiCommand(args: string[]): number {
+  if (args[0] === "--help" || args[0] === "-h") {
+    process.stdout.write("usage: hzcode tui relaunch [--workspace <path>]  (consumes <state>/tui-handoff.json)\n");
+    return 0;
+  }
   if (args[0] !== "relaunch") {
-    process.stderr.write("usage: hzcode tui relaunch  (consumes <state>/tui-handoff.json)\n");
+    process.stderr.write("usage: hzcode tui relaunch [--workspace <path>]  (consumes <state>/tui-handoff.json)\n");
     return 2;
   }
-  const workspace = process.cwd();
+  let workspace = process.cwd();
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = String(args[i] ?? "");
+    if (arg === "--help" || arg === "-h") {
+      process.stdout.write("usage: hzcode tui relaunch [--workspace <path>]  (consumes <state>/tui-handoff.json)\n");
+      return 0;
+    } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice("--workspace=".length) : args[i + 1];
+      if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("-"))) {
+        process.stderr.write("hzcode tui relaunch: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = path.resolve(value);
+    } else {
+      process.stderr.write(
+        `hzcode tui relaunch: unknown argument ${arg}\nusage: hzcode tui relaunch [--workspace <path>]\n`,
+      );
+      return 2;
+    }
+  }
   const handoff = consumeTuiHandoff(workspace);
   if (handoff === undefined) {
     process.stderr.write("hzcode tui relaunch: no handoff file (nothing to restore)\n");
@@ -1192,78 +1487,111 @@ function runKeybindCommand(args: string[]): number {
   return 0;
 }
 
-/** `hzcode models refresh` — conditional fetch + user cache (docs/33 §5.8). */
-async function runModelsCommand(args: string[]): Promise<number> {
+/** `hzcode models refresh [--force] [--workspace <path>]` — conditional fetch + user cache (docs/33 §5.8). */
+export async function runModelsCommand(args: string[]): Promise<number> {
+  if (args[0] === "--help" || args[0] === "-h") {
+    process.stdout.write("usage: hzcode models refresh [--force] [--workspace <path>]\n");
+    return 0;
+  }
   if (args[0] !== "refresh") {
-    process.stderr.write("usage: hzcode models refresh\n");
+    process.stderr.write("usage: hzcode models refresh [--force] [--workspace <path>]\n");
     return 2;
   }
-  const workspace = process.cwd();
+  let force = false;
+  let workspace = process.cwd();
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = String(args[i] ?? "");
+    if (arg === "--force" || arg === "-f") {
+      force = true;
+    } else if (arg === "--help" || arg === "-h") {
+      process.stdout.write("usage: hzcode models refresh [--force] [--workspace <path>]\n");
+      return 0;
+    } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice("--workspace=".length) : args[i + 1];
+      if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("-"))) {
+        process.stderr.write("hzcode models refresh: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = path.resolve(value);
+    } else {
+      process.stderr.write(
+        `hzcode models refresh: unknown argument ${arg}\nusage: hzcode models refresh [--force] [--workspace <path>]\n`,
+      );
+      return 2;
+    }
+  }
   const kernel = new KernelClient({ workspace });
-  await kernel.start();
-  const catalogUrl = DEFAULT_CATALOG_SOURCE.replace(/\/+$/, "") + CATALOG_PATH;
-  const guard = await kernel.checkGuard({ kind: "net.fetch", target: catalogUrl });
-  if (guard.decision === "deny") {
-    process.stderr.write(`hzcode models refresh: egress denied — ${guard.reason ?? "net.fetch"}\n`);
-    return 1;
-  }
-  if (guard.decision === "ask") {
-    process.stderr.write(
-      "hzcode models refresh: net.fetch requires approval (not available in this command); adjust egress policy or run from a session\n",
-    );
-    return 1;
-  }
-  const prev = readCatalogCache();
   try {
-    const fetched = await fetchLiveCatalog(DEFAULT_CATALOG_SOURCE, {
-      etag: prev?.meta.etag,
-      assertNetFetch: (url) => {
-        if (url !== catalogUrl) throw new Error("unexpected catalog URL");
-      },
-    });
-    if (fetched.notModified) {
-      process.stdout.write(`models cache unchanged (304) at ${catalogCachePath()}\n`);
-      for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
-      return 0;
+    await kernel.start();
+    const sourceBase = (process.env.HZ_MODELS_URL?.trim() || DEFAULT_CATALOG_SOURCE).replace(/\/+$/, "");
+    const expectedOrigin = new URL(sourceBase).origin;
+    const catalogUrl = sourceBase + CATALOG_PATH;
+    const guard = await kernel.checkGuard({ kind: "net.fetch", target: catalogUrl });
+    if (guard.decision === "deny") {
+      process.stderr.write(`hzcode models refresh: egress denied — ${guard.reason ?? "net.fetch"}\n`);
+      return 1;
     }
-    if (fetched.digest !== undefined && fetched.digest === prev?.meta.digest) {
-      process.stdout.write(`models cache unchanged (same digest) at ${catalogCachePath()}\n`);
-      for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
-      return 0;
-    }
-    // Under-admission (ruling 576): Guard fs.write on the user catalog cache.
-    const cacheTarget = catalogCachePath();
-    const writeGuard = await kernel.checkGuard({ kind: "fs.write", target: cacheTarget });
-    if (writeGuard.decision === "deny") {
+    if (guard.decision === "ask") {
       process.stderr.write(
-        `hzcode models refresh: cache write denied — ${writeGuard.reason ?? "fs.write"}\n`,
+        "hzcode models refresh: net.fetch requires approval (not available in this command); adjust egress policy or run from a session\n",
       );
       return 1;
     }
-    if (writeGuard.decision === "ask") {
-      process.stderr.write(
-        "hzcode models refresh: cache fs.write requires approval (not available in this command); allow the path in policy\n",
+    const prev = readCatalogCache();
+    try {
+      const fetched = await fetchLiveCatalog(sourceBase, {
+        etag: force ? undefined : prev?.meta.etag,
+        assertNetFetch: (url) => {
+          if (new URL(url).origin !== expectedOrigin) throw new Error("unexpected catalog URL");
+        },
+      });
+      if (!force && fetched.notModified) {
+        process.stdout.write(`models cache unchanged (304) at ${catalogCachePath()}\n`);
+        for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
+        return 0;
+      }
+      if (!force && fetched.digest !== undefined && fetched.digest === prev?.meta.digest) {
+        process.stdout.write(`models cache unchanged (same digest) at ${catalogCachePath()}\n`);
+        for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
+        return 0;
+      }
+      // Under-admission (ruling 576): Guard fs.write on the user catalog cache.
+      const cacheTarget = catalogCachePath();
+      const writeGuard = await kernel.checkGuard({ kind: "fs.write", target: cacheTarget });
+      if (writeGuard.decision === "deny") {
+        process.stderr.write(
+          `hzcode models refresh: cache write denied — ${writeGuard.reason ?? "fs.write"}\n`,
+        );
+        return 1;
+      }
+      if (writeGuard.decision === "ask") {
+        process.stderr.write(
+          "hzcode models refresh: cache fs.write requires approval (not available in this command); allow the path in policy\n",
+        );
+        return 1;
+      }
+      const file = writeCatalogCache(fetched.catalog, {
+        fetchedAt: new Date().toISOString(),
+        source: sourceBase,
+        etag: fetched.etag,
+        digest: fetched.digest,
+      });
+      const n = Object.keys(fetched.catalog.providers).length;
+      const diffLine = prev !== undefined ? summarizeCatalogDiff(prev.catalog, fetched.catalog) : undefined;
+      process.stdout.write(
+        `models cache updated: ${n} providers → ${file}${diffLine !== undefined ? `\ncatalog diff: ${diffLine}` : ""}\n`,
       );
+      for (const block of modelsRefreshPublication({ providerCount: n, unchanged: false })) {
+        process.stdout.write(`${block}\n`);
+      }
+      return 0;
+    } catch (err) {
+      process.stderr.write(`hzcode models refresh: ${errorMessage(err)}\n`);
       return 1;
     }
-    const file = writeCatalogCache(fetched.catalog, {
-      fetchedAt: new Date().toISOString(),
-      source: DEFAULT_CATALOG_SOURCE,
-      etag: fetched.etag,
-      digest: fetched.digest,
-    });
-    const n = Object.keys(fetched.catalog.providers).length;
-    const diffLine = prev !== undefined ? summarizeCatalogDiff(prev.catalog, fetched.catalog) : undefined;
-    process.stdout.write(
-      `models cache updated: ${n} providers → ${file}${diffLine !== undefined ? `\ncatalog diff: ${diffLine}` : ""}\n`,
-    );
-    for (const block of modelsRefreshPublication({ providerCount: n, unchanged: false })) {
-      process.stdout.write(`${block}\n`);
-    }
-    return 0;
-  } catch (err) {
-    process.stderr.write(`hzcode models refresh: ${errorMessage(err)}\n`);
-    return 1;
+  } finally {
+    await kernel.close().catch(() => undefined);
   }
 }
 
@@ -1484,14 +1812,17 @@ async function runReviewForkWorkerEntry(jobPath: string): Promise<number> {
     const raw = fs.readFileSync(jobPath, "utf8");
     const job = decodeReviewForkWorkerJob(raw);
     if (job === undefined) return 0;
-    const limitMicroUsd = process.env.HZ_SPEND_LIMIT_USD !== undefined ? Number(process.env.HZ_SPEND_LIMIT_USD) : 0;
+    const rawLimitUsd = (process.env.HZ_SPEND_LIMIT_USD ?? "").trim();
+    const parsedLimitUsd = rawLimitUsd !== "" ? Number(rawLimitUsd) : Number.NaN;
+    const limitMicroUsd =
+      Number.isFinite(parsedLimitUsd) && parsedLimitUsd > 0 ? Math.round(parsedLimitUsd * 1_000_000) : 0;
     // Under-admission (ruling 583): Guard before durable spend.json mutate.
-    if (Number.isFinite(limitMicroUsd) && limitMicroUsd > 0) {
+    if (limitMicroUsd > 0) {
       const spendRefused = await admitSpendLedgerWrite(job.workspace);
       if (spendRefused !== undefined) return 0;
     }
     const ledger = new SpendLedger(job.workspace, {
-      limitMicroUsd: Number.isFinite(limitMicroUsd) && limitMicroUsd > 0 ? limitMicroUsd : undefined,
+      limitMicroUsd: limitMicroUsd > 0 ? limitMicroUsd : undefined,
     });
     const config = cliConfig(job.workspace, {
       workspace: job.workspace,
@@ -1561,6 +1892,7 @@ async function main(): Promise<number> {
   if (rawArgs[0] === "keybind") return runKeybindCommand(rawArgs.slice(1));
   if (rawArgs[0] === "tui") return runTuiCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "tasks") return runTasksCommand(rawArgs.slice(1));
   if (rawArgs[0] === "receipt") return runReceiptCommand(rawArgs.slice(1));
   if (rawArgs[0] === "effect") return runEffectCommand(rawArgs.slice(1));
   if (rawArgs[0] === "session") return await runSessionCommand(rawArgs.slice(1));
@@ -1581,6 +1913,9 @@ async function main(): Promise<number> {
       process.stderr.write(`hzcode: cannot use ${serveWorkspace}: ${errorMessage(err)}\n`);
       return 2;
     }
+    if (serveOpts.provider !== undefined && !serveOpts.mock) {
+      process.env.HZ_PROVIDER = serveOpts.provider;
+    }
     return runServe(serveOpts, serveWorkspace);
   }
   if (rawArgs[0] === "acp") {
@@ -1589,7 +1924,20 @@ async function main(): Promise<number> {
       for (const message of acpOpts.errors) process.stderr.write(`hzcode: ${message}\n`);
       return 2;
     }
-    return runAcp(acpOpts, path.resolve(acpOpts.workspace));
+    const acpWorkspace = path.resolve(acpOpts.workspace);
+    try {
+      if (!fs.existsSync(acpWorkspace) || !fs.statSync(acpWorkspace).isDirectory()) {
+        process.stderr.write(`hzcode: not a folder: ${acpWorkspace}\n`);
+        return 2;
+      }
+    } catch (err) {
+      process.stderr.write(`hzcode: cannot use ${acpWorkspace}: ${errorMessage(err)}\n`);
+      return 2;
+    }
+    if (acpOpts.provider !== undefined && !acpOpts.mock) {
+      process.env.HZ_PROVIDER = acpOpts.provider;
+    }
+    return runAcp(acpOpts, acpWorkspace);
   }
   if (rawArgs[0] === "h2h") return await runH2hCommand(rawArgs.slice(1));
   if (rawArgs[0] === "verify-artifact") return await runVerifyArtifactCommand(rawArgs.slice(1));
@@ -1709,6 +2057,11 @@ async function main(): Promise<number> {
   // A human is attached when they typed into a terminal; a pipe is a script.
   // -p is always a script: never a chat bar, never an approval prompt.
   const interactive = !opts.print && Boolean(process.stdin.isTTY);
+  // OpenCode-style non-blocking ETag/SHA-256 catalog refresh on interactive boot
+  // (respects HZ_DISABLE_MODELS_FETCH=1, HZ_MODELS_PATH, and 5-minute TTL).
+  if (interactive) {
+    triggerBootCatalogRefresh({ env: process.env });
+  }
 
   // I-8 / ruling 509 + residual: first-run onboarding. A human in a genuinely
   // fresh, unconfigured state gets a short pointer to login / model discovery /
@@ -1744,6 +2097,10 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  if (opts.provider !== undefined && opts.provider.trim() !== "") {
+    process.env.HZ_PROVIDER = opts.provider.trim();
+  }
+
   let runtime: Runtime;
   try {
     runtime = await createRuntime({
@@ -1777,22 +2134,19 @@ async function main(): Promise<number> {
   }
   installAskUserHandler(ui);
 
-  // SIGTERM -> graceful shutdown: stop the current turn, close the session, and
-  // exit 143 (docs/14 §3.2) — a supervisor that stopped the run must be able to
-  // tell it did, so this is not 0.
-  const stop = (): void => {
-    try {
-      runtime.abort();
-    } catch {
-      /* nothing in flight */
-    }
-    void Promise.resolve(runtime.close()).catch(() => {
-      /* closing on the way out */
-    });
-    const timer = setTimeout(() => process.exit(143), 300);
-    if (typeof (timer as { unref?: () => void }).unref === "function") (timer as { unref: () => void }).unref();
-  };
-  process.once("SIGTERM", stop);
+  // SIGTERM (and SIGINT outside interactive TUI) -> graceful shutdown with a
+  // 10s teardown deadline, second-signal immediate exit, and 143/130 exit codes.
+  const signals = installSignalAndExitHandlers({
+    handleSigint: !interactive,
+    onShutdown: async () => {
+      try {
+        runtime.abort();
+      } catch {
+        /* nothing in flight */
+      }
+      await Promise.resolve(runtime.close()).catch(() => undefined);
+    },
+  });
 
   const handoff = interactive ? consumeTuiHandoff(workspace) : undefined;
   if (handoff !== undefined && handoff.sessionId !== runtime.sessionId) {
@@ -1816,17 +2170,20 @@ async function main(): Promise<number> {
         onboardingNotice,
       };
       if (isFullscreenChatMode(screenMode)) {
-        return await runFullscreenExperimentalChat(interactiveOpts);
+        return signals.resolveExitCode(await runFullscreenExperimentalChat(interactiveOpts));
       }
-      return await runInteractive(interactiveOpts);
+      return signals.resolveExitCode(await runInteractive(interactiveOpts));
     }
     if (opts.print) {
       // `-p "/name args"` expands a custom command file; anything else is untouched.
       const custom = resolveCommandForMessage(workspace, printPrompt.trim());
-      return await runPrint({ runtime, prompt: custom ? custom.prompt : printPrompt.trim(), format: opts.outputFormat ?? "text" });
+      return signals.resolveExitCode(
+        await runPrint({ runtime, prompt: custom ? custom.prompt : printPrompt.trim(), format: opts.outputFormat ?? "text" }),
+      );
     }
-    return await runHeadless({ runtime, initialMessage: opts.initialMessage });
+    return signals.resolveExitCode(await runHeadless({ runtime, initialMessage: opts.initialMessage }));
   } finally {
+    signals.dispose();
     try {
       await runtime.close();
     } catch {
@@ -1835,20 +2192,22 @@ async function main(): Promise<number> {
   }
 }
 
-// A closed pipe (`hzcode | head`) is not an error.
-process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-  if (err && err.code === "EPIPE") process.exit(0);
-});
+if (import.meta.main) {
+  // A closed pipe (`hzcode | head`) is not an error.
+  process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+    if (err && err.code === "EPIPE") process.exit(0);
+  });
 
-void main().then(
-  (code) => {
-    process.exitCode = code;
-    // Safety net: if some stray handle keeps the loop alive, still leave cleanly.
-    const timer = setTimeout(() => process.exit(code), 1000);
-    if (typeof (timer as { unref?: () => void }).unref === "function") (timer as { unref: () => void }).unref();
-  },
-  (err) => {
-    process.stderr.write(`hzcode: ${errorMessage(err)}\n`);
-    process.exitCode = 1;
-  },
-);
+  void main().then(
+    (code) => {
+      const finalCode = code === 0 && typeof process.exitCode === "number" ? process.exitCode : code;
+      process.exitCode = finalCode;
+      void flushStreamsAndExit(finalCode);
+    },
+    (err) => {
+      process.stderr.write(`hzcode: ${errorMessage(err)}\n`);
+      process.exitCode = 1;
+      void flushStreamsAndExit(1);
+    },
+  );
+}

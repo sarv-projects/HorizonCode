@@ -17,7 +17,13 @@ import {
 
 let workspace = "";
 afterEach(() => {
-  if (workspace) rmSync(workspace, { recursive: true, force: true });
+  if (workspace) {
+    try {
+      rmSync(workspace, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup on Windows (SQLite handle cleanup)
+    }
+  }
   workspace = "";
 });
 

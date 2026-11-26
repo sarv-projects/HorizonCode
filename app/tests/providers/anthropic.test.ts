@@ -210,21 +210,24 @@ describe("anthropic tool use", () => {
     });
   });
 
-  test("flushes a tool_use block that never received content_block_stop, and reports tool_use", async () => {
+  test("refuses (never forwards) a tool_use block that never received content_block_stop", async () => {
     const partial = '{"path": "a.tx';
     const body =
-      sseFrame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_cut", name: "read", input: {} } }, "content_block_start") +
+      sseFrame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_cut", name: "write", input: {} } }, "content_block_start") +
       sseFrame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: partial } }, "content_block_delta") +
       sseFrame({ type: "message_stop" }, "message_stop");
 
     await withServer(() => sseResponse(body), async (server) => {
       const result = await collect(providerFor(server));
+      // D-7 / H-5: a cut-off tool block is a structured refusal, not a call.
+      // (This replaces the earlier assertion that the adapter forwarded the
+      // partial JSON verbatim: H-5 exists precisely so no malformed final
+      // arguments reach dispatch, and the flush path was bypassing it.)
       const calls = toolCallsOf(result.events);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.id).toBe("toolu_cut");
-      // The adapter forwards exactly what arrived; validating an incomplete object is the caller's job.
-      expect(calls[0]!.arguments).toBe(partial);
-      expect(lastDone(result.events).stopReason).toBe("tool_use");
+      expect(calls).toHaveLength(0);
+      const refused = result.events.filter((e) => e.type === "error" && /tool_input_error/.test(e.message));
+      expect(refused).toHaveLength(1);
+      expect(lastDone(result.events).stopReason).toBe("end");
     });
   });
 

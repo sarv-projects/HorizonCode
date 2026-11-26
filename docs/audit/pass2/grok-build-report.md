@@ -212,7 +212,7 @@ Workspace membership is enumerated in `grok-build/Cargo.toml:8-116` (path not fo
 | `xai-mixpanel` | "Lightweight Mixpanel HTTP tracking client…" |
 | `xai-grok-feedback` | "Shared feedback taxonomy, durable local draft storage, and the session trace archive builder…" |
 | `xai-grok-diag-server` | "In-guest diagnostics HTTP server (/ready, /statusz, /logs)…" |
-| `xai-grok-crash-handler` | "Cross-platform crash handler (Unix signals + Windows SEH) with startup crash detection." |
+| `xai-crash-handler` | "Cross-platform crash handler (Unix signals + Windows SEH) with startup crash detection." |
 | `xai-grok-update` | Self-update: version policy, channels, download/install, leader relaunch. |
 | `xai-grok-version` | "Lockstepped grok CLI version." |
 | `xai-grok-announcements` | "Shared announcement types, persistence, and formatting…" |

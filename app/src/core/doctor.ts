@@ -16,6 +16,9 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
+import { CodeModeExecution } from "./code-mode-execution";
+import { Op } from "./code-mode-vm";
+import { LogRing, readyBody, statuszBody } from "./diag-server";
 import { catalogModel, loadCatalog } from "./catalog/catalog";
 import { parseModelsPollIntervalMs } from "./catalog/catalog-poll";
 import { handoffStorePublication, summarizeHandoffStore } from "./memory/handoff";
@@ -158,6 +161,7 @@ import {
   formatResponsesSteerDoctorDetail,
 } from "./providers/responses-steer-doctor";
 import { metricContract } from "./metrics";
+import { inspectLocalHumanKey } from "./human-principal-keys";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
 const LICENSE_STATUS_DOC = "docs/LICENSE-STATUS.md";
@@ -294,6 +298,65 @@ function kernelPinCheck(d: DoctorEnv, pin: KernelPinResult): DoctorCheck {
 }
 
 /** D-3 / ruling **707**: never claim boot-id birth on macOS/Windows; name reduced Darwin path. */
+/**
+ * Code Mode VM self-check: run a real bytecode program through the full
+ * CodeModeExecution seam (interpreter + fuel + cell host) and verify the result.
+ * Pure and deterministic — no subprocess, no provider, no IO.
+ */
+export function checkCodeModeVm(): DoctorCheck {
+  try {
+    const exec = new CodeModeExecution();
+    exec.create("doctor-vm");
+    const result = exec.runBytecode("doctor-vm", {
+      words: [Op.PUSH_INT, 20, Op.PUSH_INT, 22, Op.ADD, Op.RETURN],
+      consts: [],
+    });
+    if (result.halted === "return" && result.value === 42) {
+      return ok("code_mode.vm", "code mode vm", "bytecode self-test returned 42 (interpreter + fuel + cell host)");
+    }
+    return {
+      id: "code_mode.vm", label: "code mode vm", status: "fail",
+      detail: `bytecode self-test failed: ${JSON.stringify(result)}`,
+      hint: "check the code-mode VM interpreter and fuel meter",
+    };
+  } catch (err) {
+    return {
+      id: "code_mode.vm", label: "code mode vm", status: "fail",
+      detail: `could not run bytecode self-test: ${err instanceof Error ? err.message : String(err)}`,
+      hint: "check the code-mode VM modules",
+    };
+  }
+}
+
+export function checkDiagServerModel(): DoctorCheck {
+  try {
+    const ready = readyBody({ ready: true, state: "ready", version: "0.1.0" });
+    const statusz = statuszBody({ ready: true, state: "ready", version: "0.1.0" });
+    const ring = new LogRing(1024);
+    ring.push("test line 1");
+    ring.push("test line 2");
+    const tail = ring.tail(512);
+    if (ready.ready === true && statusz.statusz === true && tail.length === 2) {
+      return ok("diag_server.model", "diagnostic server model", "readiness, statusz and log ring models verified");
+    }
+    return {
+      id: "diag_server.model",
+      label: "diagnostic server model",
+      status: "fail",
+      detail: "diagnostic response model invariant failed",
+      hint: "check core/diag-server.ts",
+    };
+  } catch (err) {
+    return {
+      id: "diag_server.model",
+      label: "diagnostic server model",
+      status: "fail",
+      detail: `diagnostic model check threw: ${err instanceof Error ? err.message : String(err)}`,
+      hint: "check core/diag-server.ts",
+    };
+  }
+}
+
 export function checkBootBirthHonesty(d: DoctorEnv): DoctorCheck {
   const platform = d.platform ?? process.platform;
   const posture = bootBirthHonesty(platform);
@@ -611,6 +674,7 @@ export function checkKernel(d: DoctorEnv): DoctorCheck[] {
   out.push(checkKernelSupervisorHost(d));
   out.push(checkKernelSupervisorBinary(d));
   out.push(checkHumanApprovalPrincipalHonesty(d));
+  out.push(checkLocalHumanApprovalKey(d));
   out.push(checkGuardG1WireHonesty(d));
   return out;
 }
@@ -1906,6 +1970,48 @@ export function checkReceiptIssuerAttestation(d: DoctorEnv): DoctorCheck {
   return ok("receipt.issuer", "nested receipt attestation", detail);
 }
 
+/** R172 strict keyed receipt verification is opt-in, never silently assumed. */
+export function checkLocalHumanApprovalKey(d: DoctorEnv): DoctorCheck {
+  const posture = inspectLocalHumanKey(d.home);
+  if (posture.symlink) {
+    return fail(
+      "human.key",
+      "local approval key",
+      `symlink refused at ${posture.privateKey}`,
+      "remove the symlink and recreate the key with hzcode's local key helper",
+    );
+  }
+  if (!posture.present) {
+    return warn(
+      "human.key",
+      "local approval key",
+      `no local ed25519 approval key at ${posture.privateKey}`,
+      "host-local key material proves key possession only, not a cryptographic human; opt in deliberately",
+    );
+  }
+  return ok(
+    "human.key",
+    "local approval key",
+    `local ed25519 approval key present at ${posture.privateKey} (key possession, not human attestation)`,
+  );
+}
+
+export function checkR172StrictMode(d: DoctorEnv): DoctorCheck {
+  const strict = d.env.HZ_R172_REQUIRE_KEYED === "1";
+  return strict
+    ? ok(
+        "receipt.issuer.strict",
+        "R172 strict keyed verify",
+        "enabled: session verify requires the kernel issuer key for v2 receipt chains (HZ_R172_REQUIRE_KEYED=1)",
+      )
+    : warn(
+        "receipt.issuer.strict",
+        "R172 strict keyed verify",
+        "off: session verify checks nested issuer stamps when present but does not require keyed issuer evidence for all v2 chains",
+        "export HZ_R172_REQUIRE_KEYED=1 to fail closed on unkeyed v2 receipt chains (opt-in; not a default)",
+      );
+}
+
 export function checkWebSearch(d: DoctorEnv): DoctorCheck {
   const posture = assessWebSearchDoctor(d.env);
   const detail = formatWebSearchDoctorDetail(posture);
@@ -1952,6 +2058,27 @@ function checkTerminal(d: DoctorEnv): DoctorCheck[] {
       : warn("term.utf8", "locale", "no UTF-8 locale in LC_ALL, LC_CTYPE or LANG", "export LANG=en_US.UTF-8 (or C.UTF-8); otherwise box drawing and symbols may render as garbage"),
   );
   return out;
+}
+
+/**
+ * Launch-credential channel honesty (rulings 908/915/916): unix passes the
+ * secret on an inherited private pipe (fd 3); Windows passes it in a one-shot
+ * file inside the kernel state dir, which is weaker and must be said so.
+ */
+export function checkKernelControlChannel(platform: string = process.platform): DoctorCheck {
+  if (platform !== "win32") {
+    return ok(
+      "kernel.control.channel",
+      "kernel launch credential",
+      "inherited private pipe (fd 3); the secret never appears in env, argv, logs or a response",
+    );
+  }
+  return warn(
+    "kernel.control.channel",
+    "kernel launch credential",
+    "private named pipe preferred (random per launch; the secret is written to the first connection only) with a one-shot state-dir FILE fallback when a pipe cannot be created; neither is fd-3 equality and peer identity is not yet proven (H-29)",
+    "named-pipe peer proof (client PID or an in-band token) is still OPEN (H-29); keep the state dir owner-only (D-6 permm) for the file fallback",
+  );
 }
 
 /** Owner license honesty (docs/LICENSE-STATUS.md): never imply Apache/MIT without a root LICENSE. */
@@ -2117,8 +2244,8 @@ function checkTuiScreen(d: DoctorEnv): DoctorCheck {
 /** Run every check, in table order. Never throws: a check that blows up is reported as a FAIL line. */
 export function runDoctor(d: DoctorEnv): DoctorCheck[] {
   const groups: Array<[string, () => DoctorCheck | DoctorCheck[]]> = [
-    ["bun", () => checkBun(d)],
-    ["kernel", () => [...checkKernel(d), checkBootBirthHonesty(d), checkOwnerWorkerAncestorHonesty(d)]],
+    ["bun", () => [checkBun(d), checkCodeModeVm(), checkDiagServerModel()]],
+    ["kernel", () => [...checkKernel(d), checkBootBirthHonesty(d), checkKernelControlChannel(), checkOwnerWorkerAncestorHonesty(d)]],
     ["config", () => checkConfig(d)],
     ["catalog", () => [checkCatalogSource(d), checkCatalogPoll(d), checkDocs30SkipBacklog()]],
     [
@@ -2141,6 +2268,7 @@ export function runDoctor(d: DoctorEnv): DoctorCheck[] {
         checkEffectReconcileProbe(d),
         checkEffectPostimageReplay(d),
         checkReceiptIssuerAttestation(d),
+        checkR172StrictMode(d),
         checkTerminalRunCapability(d),
         checkTerminalStateProbe(d),
         checkSpeculativeExecution(d),

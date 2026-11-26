@@ -58,6 +58,7 @@ describe("memory manifest guard", () => {
       { kind: "fs.write", target: path.join(dir, "ok.txt") },
       "workspace",
     );
-    expect(ordinary.decision).toBe("allow");
+    expect(ordinary.decision).toBe("ask");
+    expect(typeof ordinary.leaseId === "string" && ordinary.leaseId.length > 0).toBe(true);
   });
 });

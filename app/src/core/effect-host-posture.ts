@@ -19,12 +19,18 @@ import {
   type AstEditProjectionMissReason,
 } from "./effect-kernel-tool-projection";
 import { effectHostEditRepairEnabled } from "./effect-host-edit-repair";
-import { effectHostMcpInvokeMutatingRefusal } from "./effect-host-mcp-invoke";
+import {
+  effectHostMcpInvokeAmbientRefusal,
+  effectHostMcpInvokeMutatingRefusal,
+} from "./effect-host-mcp-invoke";
 import { isMcpToolName } from "./mcp/registry";
 
 export {
   EFFECT_HOST_KERNEL_MCP_INVOKE_MUTATING_REFUSED_NOTICE,
+  EFFECT_HOST_KERNEL_MCP_READONLY_AMBIENT_REFUSED_NOTICE,
+  effectHostMcpInvokeAmbientRefusal,
   effectHostMcpInvokeMutatingRefusal,
+  effectHostMcpReadOnlyStrictEnabled,
 } from "./effect-host-mcp-invoke";
 
 const APPLY_PATCH_FIRST_HIT_RESIDUAL =
@@ -61,6 +67,43 @@ function effectHostEditRepairFixLines(
   return [EDIT_REPAIR_FIX_LINE];
 }
 
+export const EFFECT_HOST_KERNEL_NO_AMBIENT_FALLBACK_NOTICE =
+  "[effect-host-kernel] HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK=1: refused — unrouted mutation would fall back to ambient Bun";
+
+/** Opt-in P0-1 reduction: no silent Bun fallback when a kernel route is missed. */
+export function effectHostNoAmbientFallbackEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK === "1" || env.HZ_EFFECT_HOST_STRICT === "1";
+}
+
+/** Opt-in Code Mode + EffectHost seam: inner `tools.call` RPCs route through EffectHost. */
+export function codeModeEffectHostEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if ("HZ_CODEMODE_EFFECT_HOST" in env) {
+    return env.HZ_CODEMODE_EFFECT_HOST === "1";
+  }
+  return process.env.HZ_CODEMODE_EFFECT_HOST === "1";
+}
+
+export function effectHostNoAmbientFallbackRefusal(
+  tool: string,
+  kernelRouted: boolean,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const mode = effectHostKernelMode(env);
+  if (mode !== "default" && mode !== "opt-in") return undefined;
+  if (!effectHostNoAmbientFallbackEnabled(env)) return undefined;
+  if (kernelRouted) return undefined;
+  // Mirror the require-mode boundary: only explicitly local, non-host-effect
+  // tools may run ambiently. Never-routable and newly registered tools must
+  // not slip through the strict default gate.
+  if (REQUIRE_LOCAL_ONLY_TOOLS.has(tool)) return undefined;
+  if (tool === "code_mode" && codeModeEffectHostEnabled(env)) return undefined;
+  return `${EFFECT_HOST_KERNEL_NO_AMBIENT_FALLBACK_NOTICE} (${tool})`;
+}
+
 export type EffectHostDoctorPosture = {
   mode: "off" | "opt-in" | "default" | "require";
   detail: string;
@@ -69,6 +112,11 @@ export type EffectHostDoctorPosture = {
 
 export function effectHostDoctorPosture(env: Record<string, string | undefined> = process.env): EffectHostDoctorPosture {
   const mode = effectHostKernelMode(env);
+  const mcpStrictPosture =
+    "read-only mcp.invoke refused under =default/=1 (**956**; HZ_EFFECT_HOST_MCP_READONLY_STRICT=0 does not restore ambient invoke)";
+  const fallbackPosture = effectHostNoAmbientFallbackEnabled(env)
+    ? "unrouted mutations refuse instead of Bun-fallback (HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK=1)"
+    : "kernel-unavailable mutations can still reach Bun under =default/=1 when the route returns no outcome (opt in with HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK=1)";
   const covered =
     "kernel `effect.execute` covers eligible workspace `write` (path+content), `edit` (exact old→new, no anchors), " +
     "argv-only `shell` (no shell metachar/interpreter), one-step Add/exact-Update/Delete/exact-Move `apply_patch`, " +
@@ -78,7 +126,7 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
     ? `kernel fs.edit + apply_patch projection: trim/newline + fs.edit relative-indent replacement rebase (**345**), reindented trim three-way and unique anchored line-patch (**347**) + trimEnd + per-line trim + per-line unicode-fold line-windows (**335**/**337**/**339**) + apply_patch trimEnd + per-line trim (3-way merge) + relative-indent + unicode-fold + unique line-patch anchors + unique dominant score (≥0.97, Δ0.08) + unique max-score Levenshtein (≥0.66) when \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`
     : `kernel repair + apply_patch trim/indent/fold/Levenshtein rungs off unless \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; fuzz-needed patches stay Bun-owned at kernel route; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`;
   const shellResidual =
-    "shell: argv-only simple commands may kernel-route via hz-sandbox-exec when helper resolves (**675**); `HZ_SANDBOX_REQUIRE=1`/`HZ_SHELL_EXEC_REQUIRE_WRAP=1` refuse bare kernel argv when helper missing (**732** — doctor `kernel.shell.exec`); compound/interpreter/metachar refused when EffectHost on (**652**); reduced OwnerLog postimages `rm -f`/`touch`/`mkdir -p`/`cp`/`mv` (**669**/**686**); never shell-net enforced";
+    "shell: argv-only simple commands may kernel-route via hz-sandbox-exec when helper resolves (**675**); `HZ_SANDBOX_REQUIRE=1`/`HZ_SHELL_EXEC_REQUIRE_WRAP=1` refuse bare kernel argv when helper missing (**732** — doctor `kernel.shell.exec`); compound/interpreter/metachar refused when EffectHost on (**652**); `timeoutMs` shell refused under `=default`/`=1` (**957**); an unrouted simple shell and a thrown kernel error are final under `=default`/`=1` (**958**); reduced OwnerLog postimages `rm`/`rm -f`/`touch`/`mkdir -p`/`cp`/`mv` (**669**/**686**/**961**); `arbitrary_fs`, `likely_net`, and `unknown` argv refused before spawn (**967**/**968**); reduced shell paths that resolve outside the sandbox, including a symlink, are refused before spawn (**969**); reduced `cp` is copied in-kernel with `O_NOFOLLOW` so a destination swapped to a symlink after the preflight is not followed (**970**); `mv`/`install`/`touch`/`rm` still spawn; never shell-net enforced";
   const multiChunkResidual =
     "apply_patch residual: a same-file exact multi-hunk Update can collapse into ONE preimage-pinned atomic kernel fs.write (ruling **353**); " +
     "multi-file exact Add/Update/Move/Delete plans route via reduced kernel `fs.batch` under one OwnerLog lock (rulings 539, 548, 552, 553, 630, 631 — not full patch parity); " +
@@ -86,12 +134,13 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
     "ambiguous context / below-threshold or tied Levenshtein chunks remain Bun-owned if the user explicitly permits ambient mode; " +
     "single-step unique exact/EOF-anchored chunk → one kernel fs.edit when on-disk bytes resolve";
   const shapeMutationResidual =
-    "write/edit/apply_patch: shape-ineligible args refused when EffectHost is on (`=1`/`=default`/`=require`) — no ambient Bun fallback (**667**); kernel-unavailable or Bun-only fuzz still Bun under non-require";
+    "write/edit/apply_patch/ast_edit: shape-ineligible args refused when EffectHost is on (`=1`/`=default`/`=require`) — no ambient Bun fallback (**667**/**937**); untrusted write/edit/apply_patch refused under `=default`/`=1` (**953**); Bun-only fuzz with a trusted kernel still Bun under non-require";
   const ambientResidual =
-    "ambient residual: never-routable tools (`code_mode`, preview, agent, shell_session, …) refused when EffectHost is on (`=1`/`=default`/`=require`) before Guard (**649**/**653**); mutating `mcp.invoke` refused under EffectHost-on — not kernel OwnerLog-admitted (**721**; read-only MCP may still ambient-invoke under `=default`/`=1` when connected); MCP stdio server spawn/reconnect refused under EffectHost-on (**702**); `undo` kernel-routes (**650**); user hooks suppressed whenever EffectHost is on (**651**/**666**); compound/interpreter shell refused when EffectHost is on (**652**); mixed-score first-hit fuzz refused under require (**687**); hooks not kernel-OwnerLog-admitted";
+    "ambient residual: never-routable tools (`code_mode`, preview, agent, shell_session, …) refused when EffectHost is on (`=1`/`=default`/`=require`) before Guard (**649**/**653**); mutating `mcp.invoke` refused under EffectHost-on — not kernel OwnerLog-admitted (**721**); read-only mcp.invoke refused under `=default`/`=1` even if HZ_EFFECT_HOST_MCP_READONLY_STRICT=0 (**956**; still not OwnerLog-admitted); MCP stdio server spawn/reconnect refused under EffectHost-on (**702**); `undo` kernel-routes (**650**); user hooks suppressed whenever EffectHost is on (**651**/**666**); compound/interpreter shell refused when EffectHost is on (**652**); mixed-score first-hit fuzz refused under require (**687**); hooks not kernel-OwnerLog-admitted";
   const astResidual =
-    "ast_edit residual: variadic `$$$` kernel-routes only when rewriteMatches unique-projects to one old→new; " +
-    "multi-match / lexer / truncation refused under `=require` with named reason (**322**); Bun-owned under default/=1";
+    "ast_edit residual: shape-ineligible args refuse under `=default`/`=1` (**937**); variadic `$$$` kernel-routes only when rewriteMatches unique-projects to one old→new; " +
+    "unrouted shape-eligible ast_edit (projection miss or kernel-unavailable unique/multi plan) refuses under `=default`/`=1` (**945**/**952**) — no ambient Bun rewrite; " +
+    "multi-match / lexer / truncation projection misses are also refused under `=require` with named reason (**322**)";
   const residual =
     `Bun still owns write/edit/shell when unset; ${multiChunkResidual}; ${astResidual}; ${shellResidual}; ` +
     `${shapeMutationResidual}; ${ambientResidual}; kernel routes Delete/Move (exact single-chunk and multi-file batch) when routed; ${repairResidual}`;
@@ -121,7 +170,8 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
       detail:
         `HZ_EFFECT_HOST_KERNEL=default: recommended prototype posture — routes ${covered}; ` +
         "never-routable ambient tools refused (**653**); mutating mcp.invoke refused (**721**); MCP stdio spawn refused (**702**); compound/interpreter shell refused (**652**); " +
-        "shape-ineligible write/edit/apply_patch refused (**667**); user hooks suppressed (**666**); ambient Bun fallback for kernel-unavailable / fuzz; " +
+        "shape-ineligible write/edit/apply_patch/ast_edit refused (**667**/**937**); unrouted shape-eligible ast_edit refused (**952**); untrusted write/edit/apply_patch refused instead of ambient Bun (**953**); untrusted shell refused (**954**); untrusted undo refused (**955**); user hooks suppressed (**666**); mixed-score apply_patch does not Bun-apply (**966**); " +
+        `${mcpStrictPosture}; ${fallbackPosture}; ` +
         shellResidual,
       hint: honestyHint
         ? `${honestyHint}; ambient fallback residual: ${multiChunkResidual}`
@@ -130,12 +180,20 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
   }
   return {
     mode: "opt-in",
-    detail: `HZ_EFFECT_HOST_KERNEL=1: opt-in routes ${covered}; shape-ineligible write/edit/apply_patch refused (**667**); user hooks suppressed (**666**); falls back to Bun when kernel unavailable for eligible shapes`,
+    detail: `HZ_EFFECT_HOST_KERNEL=1: opt-in routes ${covered}; shape-ineligible write/edit/apply_patch/ast_edit refused (**667**/**937**); unrouted shape-eligible ast_edit refused (**952**); untrusted write/edit/apply_patch refused (**953**); untrusted shell refused (**954**); untrusted undo refused (**955**); user hooks suppressed (**666**); ${mcpStrictPosture}; mixed-score apply_patch does not Bun-apply (**966**); an unprojected patch still falls back to Bun`,
     hint: residual,
   };
 }
 
 /** Read-only fix lines for `hzcode doctor --fix <id>` (ruling **299**). */
+function strictPostureFixLines(env: Record<string, string | undefined>): string[] {
+  return [
+    "# read-only mcp.invoke already refused under =default/=1 (**956**); HZ_EFFECT_HOST_MCP_READONLY_STRICT=0 does not restore it",
+    "export HZ_EFFECT_HOST_NO_AMBIENT_FALLBACK=1  # refuse unrouted mutations/never-routable tools instead of Bun fallback (P0-1)",
+    ...(env.HZ_R172_REQUIRE_KEYED === "1" ? ["HZ_R172_REQUIRE_KEYED=1 already set (strict keyed receipt verification)"] : []),
+  ];
+}
+
 export function effectHostDoctorFixLines(env: Record<string, string | undefined> = process.env): string[] {
   const mode = effectHostKernelMode(env);
   const repairFix = effectHostEditRepairFixLines(env);
@@ -150,6 +208,7 @@ export function effectHostDoctorFixLines(env: Record<string, string | undefined>
       "HZ_EFFECT_HOST_KERNEL already enables kernel-route (prototype posture)",
       "export HZ_EFFECT_HOST_KERNEL=require   # prototype trust spine: fail-closed + auto postimage replay at verify (301)",
       ...repairFix,
+      ...strictPostureFixLines(env),
     ];
   }
   return [
@@ -176,7 +235,8 @@ const REQUIRE_MUTATION_TOOLS = new Set([
 // execute route or is refused until one is implemented.
 const REQUIRE_LOCAL_ONLY_TOOLS = new Set([
   "read", "grep", "glob", "repo_map", "ast_search", "memory_search",
-  "handoff_search", "tool_search",
+  "handoff_search", "tool_search", "git_status", "git_diff", "git_log", "git_blame",
+  "ctx_inspect", "history_snip_preview", "verified_open",
 ]);
 
 export const EFFECT_HOST_KERNEL_REQUIRE_NOTICE =
@@ -231,9 +291,12 @@ export function effectHostNoAmbientToolPreflight(
     return undefined;
   }
   if (tool === "present") return undefined;
+  if (tool === "code_mode" && codeModeEffectHostEnabled(env)) return undefined;
   if (REQUIRE_MUTATION_TOOLS.has(tool)) return undefined;
   const mcpMutating = effectHostMcpInvokeMutatingRefusal(tool, env);
   if (mcpMutating !== undefined) return mcpMutating;
+  const mcpAmbient = effectHostMcpInvokeAmbientRefusal(tool, env);
+  if (mcpAmbient !== undefined) return mcpAmbient;
   if (isMcpToolName(tool)) return undefined;
   return `${EFFECT_HOST_KERNEL_NO_AMBIENT_TOOL_NOTICE} for ${tool}`;
 }
@@ -285,6 +348,7 @@ export function effectHostKernelRequirePreflight(
     return undefined;
   }
   if (tool === "present") return undefined;
+  if (tool === "code_mode" && codeModeEffectHostEnabled()) return undefined;
   const mcpMutatingPreflight = effectHostMcpInvokeMutatingRefusal(tool);
   if (mcpMutatingPreflight !== undefined) return mcpMutatingPreflight;
   if (isMcpToolName(tool)) {
@@ -343,6 +407,7 @@ export function effectHostKernelRequireRefusal(
     return undefined;
   }
   if (tool === "present") return undefined;
+  if (tool === "code_mode" && codeModeEffectHostEnabled()) return undefined;
   const mcpMutatingPost = effectHostMcpInvokeMutatingRefusal(tool);
   if (mcpMutatingPost !== undefined) return mcpMutatingPost;
   if (isMcpToolName(tool)) {

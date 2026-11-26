@@ -1,9 +1,0 @@
-[    3721ms] [WARNING] Media Chrome: No style sheet found on style tag of JSHandle@node @ https://cursor.com/docs-static/_next/static/immutable/chunks/44y1p1g-rsj6l.js:112
-[    3792ms] Error: Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
-    at r1 (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:46317)
-    at im (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:97517)
-    at sw (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:139322)
-    at https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:134237
-    at su (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:134338)
-    at sJ (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:160885)
-    at MessagePort.O (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:213828)

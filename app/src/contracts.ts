@@ -147,8 +147,11 @@ export interface GuardAction {
   target: string; // path for fs.*, command for shell.exec, url for net.fetch, <serverId>:<toolName> for mcp.invoke
   detail?: Record<string, unknown>;
 }
-export type GuardDecisionValue = "allow" | "ask" | "deny";
-/** G1 / ruling 637 — Ask/Deny-only projection; frozen `decision:"allow"` maps to `g1:"ask"`. */
+/** G1 / ruling 637 (owner-approved breaking removal of `"allow"`): wire guard decisions are Ask/Deny-only; admission is `"ask"` with a non-empty `leaseId`. */
+export type GuardDecisionValue = "ask" | "deny";
+/** On-disk policy / allowlist rule intent vocabulary (`policy.json`, `DEFAULT_POLICY`, `allowlist.json`). */
+export type PolicyRuleDecision = "allow" | "ask" | "deny";
+/** G1 / ruling 637 — Ask/Deny-only projection (identical to `GuardDecisionValue`). */
 export type GuardG1Decision = "ask" | "deny";
 export interface GuardDecision {
   decision: GuardDecisionValue;
@@ -188,7 +191,7 @@ export type PolicyScope = "workspace" | "outside" | "*";
 export interface PolicyRule {
   kind: GuardKind | "*";
   scope: PolicyScope;
-  decision: GuardDecisionValue;
+  decision: PolicyRuleDecision;
 }
 
 /**
@@ -207,7 +210,7 @@ export type AllowlistPatternToken = string | string[];
 export interface AllowlistPrefixRule {
   program: string; // the first argv token, keyed
   args?: AllowlistPatternToken[]; // trailing-arg pattern (per-token match)
-  decision: GuardDecisionValue;
+  decision: PolicyRuleDecision;
   canonicalMatching?: boolean; // default true: Unicode-caseless match
   match?: string[][]; // argv lines that MUST match (validated at load, codex R8)
   notMatch?: string[][]; // argv lines that MUST NOT match
@@ -216,7 +219,7 @@ export type AllowlistNetworkProtocol = "http" | "https" | "socks5_tcp" | "socks5
 export interface AllowlistNetworkRule {
   host: string; // normalized: scheme/path/port stripped, no wildcards/whitespace, lowercased
   protocol?: AllowlistNetworkProtocol; // default "https"
-  decision: GuardDecisionValue;
+  decision: PolicyRuleDecision;
   justification?: string;
 }
 
@@ -473,6 +476,12 @@ export interface ReceiptInput {
   /** Absolute path that was hashed for postimageDigest, when present. */
   postimagePath?: string;
   /**
+   * Additive (ruling **964**): resultant directory rows for a reduced `mkdir -p`
+   * observation. Absent on every other receipt. Bound into a v2 hash when present.
+   * Not proof that each ancestor was newly created.
+   */
+  postimageRows?: { path: string; digest: string; state: "present" }[];
+  /**
    * Additive (EffectHost precursor): correlates this receipt with the in-run
    * allow→execute→observe ledger. Unhashed in historical v1, bound in v2.
    */
@@ -518,6 +527,10 @@ export interface AskUserRequest {
   context?: string;
   /** When the user accepts without picking, or on binary-approve fallback. */
   defaultOption?: string;
+  /** Additive: allow selecting multiple options. */
+  multiSelect?: boolean;
+  /** Additive: timeout in milliseconds before falling back or failing. */
+  timeoutMs?: number;
 }
 
 export type AskUserHandler = (req: AskUserRequest) => Promise<string>;
@@ -674,10 +687,22 @@ export interface Tool {
 
 /* ------------------------------ Providers ------------------------------ */
 
+/**
+ * ADDITIVE (Track A): structured strict-parse error attached to a tool call
+ * whose final accumulated arguments failed strict JSON object parsing.
+ */
+export interface ToolInputError {
+  code: "tool_input_error";
+  message: string;
+  rawInput: string;
+}
+
 export interface ToolCall {
   id: string;
   name: string;
   arguments: string; // raw JSON string as produced by the model
+  /** ADDITIVE (Track A): present when final argument JSON failed strict object parsing. */
+  toolInputError?: ToolInputError;
 }
 
 /** ADDITIVE multimodal part — string-only callers remain valid on `ChatMsg.content`. */
@@ -774,7 +799,7 @@ export type ProviderEvent =
   // `reasoning_content`, anthropic `thinking_delta`). Display-only: the loop
   // never stores it in history. Providers without reasoning never emit it.
   | { type: "thinking"; text: string }
-  | { type: "tool_call"; id: string; name: string; arguments: string }
+  | { type: "tool_call"; id: string; name: string; arguments: string; toolInputError?: ToolInputError }
   | { type: "notice"; message: string }
   /** Per-request provider quirk ids (forge T-8; docs/33 §5.10). */
   | { type: "quirks"; applied: string[] }
@@ -799,11 +824,20 @@ export interface LiveSteering {
   claim(signal: AbortSignal): Promise<LiveSteerClaim | undefined>;
 }
 
+/** ADDITIVE (Track A): tool-choice directive for provider requests. */
+export type ToolChoice = "auto" | "none" | "required";
+
 export interface ProviderRequest {
   model: string;
   system: string;
   messages: ChatMsg[];
   tools: ToolSpec[];
+  /**
+   * ADDITIVE (Track A): optional tool-choice directive. Passing `"none"` while
+   * keeping `tools` intact disables tool calls without invalidating the
+   * provider's prompt-cache prefix.
+   */
+  toolChoice?: ToolChoice;
   maxTokens?: number;
   /** C-11 reduced: explicit effort only (`reasoning_effort` on OpenAI-compatible hosts). */
   reasoningEffort?: string;
@@ -814,6 +848,21 @@ export interface ProviderRequest {
    */
   liveSteering?: LiveSteering;
 }
+/**
+ * ADDITIVE (plan Task 4): provider-level capability descriptor. Distinct from
+ * the model-level catalog capabilities in core/catalog/catalog.ts. Absent =
+ * permissive legacy behavior; shared code must not branch on a provider/model id.
+ */
+export interface ProviderCapabilities {
+  streaming: boolean;
+  tools: boolean;
+  thinking: boolean;
+  usage: boolean;
+  toolCallIds: boolean;
+  partialJson: boolean;
+  steer: boolean;
+}
+
 export interface Provider {
   name: string;
   stream(req: ProviderRequest): AsyncIterable<ProviderEvent>;
@@ -823,17 +872,19 @@ export interface Provider {
    * while the buffer can still be claimed live.
    */
   liveSteering?: boolean;
+  /** ADDITIVE; absent = permissive legacy behavior (see ProviderCapabilities). */
+  capabilities?: ProviderCapabilities;
 }
 
 /**
  * How a provider is authenticated (additive v0.1 shape; see the file header).
- * v1 implements `apiKey` and `none`; `oauth` is RESERVED for later additive
- * OAuth work (PKCE loopback + token refresh) and is not yet consumed by any
- * code path.
+ * v1 implements `apiKey` and `none`; OAuth is used by the PKCE/device auth
+ * flows and token refresh. Optional account identity and pin metadata are
+ * additive and remain absent when a provider does not supply stable identity.
  */
 export type Credential =
   | { kind: "apiKey"; value: string }
-  | { kind: "oauth"; accessToken: string; refreshToken?: string; expiresAt?: string }
+  | { kind: "oauth"; accessToken: string; refreshToken?: string; expiresAt?: string; accountId?: string; credentialPinHash?: string }
   | { kind: "none" };
 
 /* -------------------------- Runtime facade (UI) -------------------------- */
@@ -1035,7 +1086,7 @@ export interface Runtime {
    * Mid-turn steer (C-9 reduced): queue user text for the in-flight turn.
    * Returns `accepted: false` when no turn is running.
    */
-  interject?(text: string, opts?: { images?: readonly unknown[] }): {
+  interject?(text: string, opts?: { images?: readonly unknown[]; mode?: "steer" | "interrupt" }): {
     accepted: boolean;
     reason?: "idle" | "empty" | "closed";
     imagesRefused?: true;
@@ -1138,6 +1189,21 @@ export interface KernelRequestMap {
       supervisorBinarySha256?: string;
     };
   };
+  /**
+   * ADDITIVE (Group G): bounded, content-free loopback diagnostic status.
+   * No effect ids, no detail, no egress/sandbox enforcement claim.
+   */
+  "doctor.statusz": {
+    params: Record<string, never>;
+    result: {
+      ready: boolean;
+      version: string;
+      uptimeMs: number;
+      effectEvents?: number;
+      effectUnresolved?: number;
+      supervisorEpoch?: number;
+    };
+  };
   "log.append": { params: { stream: string; event: EventSeed }; result: EventEnvelope };
   "log.read": {
     params: { stream: string; fromSeq?: number; limit?: number };
@@ -1166,6 +1232,11 @@ export interface KernelRequestMap {
       /** Approval-path only: owner becomes `human:<sessionId>` when set to `human`. */
       principal?: typeof HUMAN_APPROVAL_PRINCIPAL;
       approvalProof?: string;
+      humanSig?: string;
+      humanPubKeyHex?: string;
+      humanNonce?: string;
+      humanIssuedAt?: number;
+      intentDigest?: string;
     };
     result: Lease;
   };
@@ -1177,6 +1248,11 @@ export interface KernelRequestMap {
       sessionId?: string;
       principal?: typeof HUMAN_APPROVAL_PRINCIPAL;
       approvalProof?: string;
+      humanSig?: string;
+      humanPubKeyHex?: string;
+      humanNonce?: string;
+      humanIssuedAt?: number;
+      intentDigest?: string;
     };
     result: Lease;
   };
@@ -1439,6 +1515,16 @@ export interface KernelRequestMap {
     };
     result: { verdict: "settled" | "unknown" };
   };
+  /** R170 cross-process reconcile barrier query (`reconcile.gate` RPC). */
+  "reconcile.gate": {
+    params: Record<string, never>;
+    result: {
+      blocked: boolean;
+      unresolvedCount: number;
+      unresolvedIds: string[];
+      reason?: string;
+    };
+  };
   /**
    * Rulings 243, 267/275/277/278, 348 and 539 — direct Rust execution for `pure`,
    * `echo`, contained `fs.read` and sandboxRoot-scoped `fs.write/edit/delete/rename`
@@ -1495,6 +1581,14 @@ export interface KernelRequestMap {
       stderrDigest?: string;
       stdoutConfirmDigest?: string;
       stderrConfirmDigest?: string;
+      /**
+       * ADDITIVE (ruling 904): true when a genuine second observation of the
+       * captured stream was compared (a temp-file re-read), false/absent when
+       * only one capture existed. Lets a caller distinguish "verified twice"
+       * from "captured once", which the old double-hash could not.
+       */
+      stdoutDoubleObserved?: boolean;
+      stderrDoubleObserved?: boolean;
       /** sha256 hex of canonical kernel-routed tool success output (**327** write/edit; shell streams **314**). */
       resultDigest?: string;
       /** Independent double-hash on result observe payload (**314** shell; **327** write/edit); false → `unknown`. */
@@ -1524,6 +1618,7 @@ export interface KernelRequestMap {
 export type KernelMethod = keyof KernelRequestMap;
 export const KERNEL_METHODS: KernelMethod[] = [
   "ping",
+  "doctor.statusz",
   "log.append",
   "log.read",
   "log.verify",

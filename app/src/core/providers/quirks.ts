@@ -72,6 +72,9 @@ const TRANSFORMS: Record<string, TransformFn> = {
     for (const raw of msgs) {
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
       const msg = raw as Record<string, unknown>;
+      if (msg.role === "tool" && typeof msg.tool_call_id === "string" && msg.tool_call_id.length > 40) {
+        msg.tool_call_id = msg.tool_call_id.slice(0, 40);
+      }
       const calls = msg.tool_calls;
       if (!Array.isArray(calls)) continue;
       for (const call of calls) {

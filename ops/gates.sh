@@ -111,6 +111,7 @@ GATES=(
   e2e-budget-rail
   e2e-usage-error
   startup-latency
+  ruling-ceiling
 )
 GATE_STATUS=()
 GATE_MS=()
@@ -169,16 +170,30 @@ gate_kernel_selftest() {
   # the suite passed against a kernel without one-use leases. The build is a
   # no-op when the tree is unchanged.
   ( cd "$ROOT/kernel" && cargo build --release --locked ) || return 1
-  # Pin the just-built binary for subsequent ts-suite (verifyKernelPin). Without
-  # this, a rebuild that changes bytes fails closed as "untrusted" against a
-  # stale kernel/kernel.sha256 (ruling 647 follow-up). Prefer env over rewriting
-  # the committed manifest so gates stay non-dirtying.
+  # On Windows (MSYS/MINGW/CYGWIN/native), cargo outputs hz-kernel.exe.
+  case "${OS:-$(uname -s 2>/dev/null || true)}" in
+    *Windows*|*MINGW*|*MSYS*|*CYGWIN*)
+      if [ -f "${bin}.exe" ] || [ ! -f "$bin" ]; then
+        bin="${bin}.exe"
+      fi
+      ;;
+  esac
+  if [ ! -f "$bin" ] && [ -f "${bin}.exe" ]; then
+    bin="${bin}.exe"
+  fi
+  # Pin the just-built binary for subsequent gates (verifyKernelPin). Because
+  # run_gate invokes each gate inside a subshell `( "$fn" )`, an `export` here
+  # alone would be lost before `ts-suite` runs; persist the digest under
+  # $WORK_DIR so main() exports it to all subsequent gates without dirtying the
+  # committed kernel/kernel.sha256 manifest.
   if command -v sha256sum >/dev/null 2>&1; then
     export HZ_KERNEL_SHA256
     HZ_KERNEL_SHA256="$(sha256sum "$bin" | awk '{print $1}')"
+    printf '%s\n' "$HZ_KERNEL_SHA256" >"$WORK_DIR/kernel.sha256"
   elif command -v shasum >/dev/null 2>&1; then
     export HZ_KERNEL_SHA256
     HZ_KERNEL_SHA256="$(shasum -a 256 "$bin" | awk '{print $1}')"
+    printf '%s\n' "$HZ_KERNEL_SHA256" >"$WORK_DIR/kernel.sha256"
   fi
   local state
   state="$(mktemp -d "$WORK_DIR/selftest.XXXXXX")"
@@ -195,9 +210,9 @@ gate_ts_typecheck() {
   # TS2688, so install them first (dev type definitions only; the app has no
   # runtime dependencies). A failed install, e.g. offline, fails the gate.
   if [ ! -d "$ROOT/app/node_modules/@types/bun" ] || [ ! -d "$ROOT/app/node_modules/@types/node" ]; then
-    printf 'app/node_modules/@types/{bun,node} missing — running bun install in app/\n'
-    if ! ( cd "$ROOT/app" && "$BUN" install ); then
-      printf 'bun install failed in app/ — the type definitions (@types/bun, @types/node, typescript) are required for the typecheck; is the network reachable?\n'
+    printf 'app/node_modules/@types/{bun,node} missing — running bun install --frozen-lockfile in app/\n'
+    if ! ( cd "$ROOT/app" && "$BUN" install --frozen-lockfile ); then
+      printf 'bun install --frozen-lockfile failed in app/ — the type definitions (@types/bun, @types/node, typescript) are required for the typecheck; is the network reachable?\n'
       return 1
     fi
   fi
@@ -237,15 +252,26 @@ e2e_begin() {
 # When E2E_EXPECT_TEXT is non-empty the captured output must contain it: an exit
 # code on its own cannot tell "the turn ran" from "the process bailed out early
 # with the code I was hoping for".
+e2e_build_env() {
+  E2E_ENV=(
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u XDG_CONFIG_HOME
+  )
+  local var
+  while IFS= read -r var; do
+    case "$var" in
+      HZ_KERNEL_SHA256) ;;
+      HZ_*) E2E_ENV+=(-u "$var") ;;
+    esac
+  done < <(compgen -e)
+  E2E_ENV+=(HOME="$E2E_HOME" XDG_CONFIG_HOME="$E2E_HOME/.config" PATH="$E2E_PATH" HZ_PROVIDER=mock)
+}
+
 e2e_run() {
   local label="$1" expected="$2" line="$3" extra_env="$4"
   shift 4
   local out="$WORK_DIR/$label.out" status=0
-  local -a envv=(
-    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u HZ_API_KEY -u HZ_MODEL -u HZ_BASE_URL
-    -u HZ_MAX_STEPS -u HZ_MAX_TOKENS -u HZ_MAX_WALL_MS
-    HOME="$E2E_HOME" PATH="$E2E_PATH" HZ_PROVIDER=mock
-  )
+  e2e_build_env
+  local -a envv=("${E2E_ENV[@]}")
   if [ "$extra_env" != "-" ]; then envv+=("$extra_env"); fi
 
   if [ -z "$line" ]; then
@@ -286,7 +312,7 @@ gate_e2e_headless_smoke() {
   # the durable proof that something actually executed. Layout-agnostic on purpose
   # (the state-dir name has an open rename, docs/28 §4 gap 6).
   local receipts
-  receipts="$(find "$E2E_WS" -name 'receipts.jsonl' -size +0 -print -quit 2>/dev/null || true)"
+  receipts="$(find "$E2E_WS" -name 'receipts.jsonl' -size +0 -print 2>/dev/null | sed -n '1p' || true)"
   if [ -z "$receipts" ]; then
     printf 'no non-empty receipts.jsonl under %s — nothing was receipted\n' "$E2E_WS"
     return 1
@@ -355,11 +381,8 @@ latency_median() {
   shift 4
   local -a samples=()
   local run out status start end ws
-  local -a envv=(
-    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u HZ_API_KEY -u HZ_MODEL -u HZ_BASE_URL
-    -u HZ_MAX_STEPS -u HZ_MAX_TOKENS -u HZ_MAX_WALL_MS
-    HOME="$E2E_HOME" PATH="$E2E_PATH" HZ_PROVIDER=mock
-  )
+  e2e_build_env
+  local -a envv=("${E2E_ENV[@]}")
   for run in 0 1 2 3 4 5; do
     out="$WORK_DIR/latency-$label.out"
     status=0
@@ -405,6 +428,12 @@ gate_startup_latency() {
   latency_median mock-turn "$LATENCY_TURN_MS" 'Mock mode: the glob tool returned' 'list files' "$ROOT/bin/hzcode"
 }
 
+# Additional repo-local gate (not one of the 18 docs/24 design rows): every
+# onboarding document must cite the same ruling ceiling as docs/28 section 3.
+gate_ruling_ceiling() {
+  ( cd "$ROOT/app" && "$BUN" test --timeout 30000 tests/ops/doc-ruling-consistency.test.ts )
+}
+
 # ------------------------------------------------------------------ summary ---
 
 print_summary() {
@@ -433,6 +462,10 @@ main() {
   for gate in "${GATES[@]}"; do
     fn="gate_${gate//-/_}"
     if run_gate "$i" "$gate" "$fn"; then
+      if [ -z "${HZ_KERNEL_SHA256:-}" ] && [ -s "$WORK_DIR/kernel.sha256" ]; then
+        HZ_KERNEL_SHA256="$(cat "$WORK_DIR/kernel.sha256")"
+        export HZ_KERNEL_SHA256
+      fi
       i=$((i + 1))
       continue
     fi

@@ -75,4 +75,35 @@ describe("tryRunFullscreenLocalSlash", () => {
     });
     expect(consumed).toBe(false);
   });
+
+  // D-9: deferred verbs must never reach the model as a prompt.
+  test("/exit is consumed and asks the loop to exit", async () => {
+    const renderer = mockRenderer();
+    let exited = 0;
+    const consumed = await tryRunFullscreenLocalSlash("/exit", {
+      runtime,
+      renderer,
+      workspace: "/tmp/ws",
+      write: () => {},
+      planState: { on: false },
+      requestExit: () => {
+        exited += 1;
+      },
+    } as never);
+    expect(consumed).toBe(true);
+    expect(exited).toBe(1);
+  });
+
+  test("a deferred verb with no fullscreen handler is refused, not sent", async () => {
+    const renderer = mockRenderer();
+    const consumed = await tryRunFullscreenLocalSlash("/rewind 2", {
+      runtime,
+      renderer,
+      workspace: "/tmp/ws",
+      write: () => {},
+      planState: { on: false },
+    });
+    expect(consumed).toBe(true);
+    expect(renderer.notices.some((n) => n.includes("fullscreen"))).toBe(true);
+  });
 });

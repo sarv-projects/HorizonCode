@@ -13,13 +13,16 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { newId } from "../contracts";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { realpathish } from "../core/paths";
-import { scrubEnv } from "./helpers";
+import { shellCompoundRefusal } from "../core/shell-split";
+import { invisibleUnicodeError, scrubEnv } from "./helpers";
 
 const OUTPUT_CAP = 4096;
 const URL_WAIT_MS = 12_000;
+const MAX_ACTIVE_PREVIEWS = 8;
 /** How much of a package.json script body an approval names. */
 const SCRIPT_HEAD_CHARS = 200;
 
@@ -42,8 +45,19 @@ interface PreviewEntry {
  */
 const PREVIEWS = new Map<string, PreviewEntry>();
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function appendOutput(entry: PreviewEntry, chunk: string): void {
@@ -188,6 +202,20 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     };
   }
   const command = resolvedCommand.command;
+  const invisible = invisibleUnicodeError(command, "preview command");
+  if (invisible) {
+    return { ok: false, output: invisible, error: invisible };
+  }
+  if (resolvedCommand.scriptBody !== undefined) {
+    const invisibleScript = invisibleUnicodeError(resolvedCommand.scriptBody, "preview package.json script");
+    if (invisibleScript) {
+      return { ok: false, output: invisibleScript, error: invisibleScript };
+    }
+  }
+  const compound = shellCompoundRefusal(command);
+  if (compound) {
+    return { ok: false, output: compound, error: compound };
+  }
   const portNumber = typeof args.port === "number" && Number.isFinite(args.port) ? Math.floor(args.port) : undefined;
 
   // The same guard path a shell command would take.
@@ -196,6 +224,7 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
   try {
     decision = await ctx.guard(action);
   } catch (err) {
+    tunnelPermissionError(err);
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, output: `DENIED by policy: guard unavailable (${message})`, error: "guard unavailable" };
   }
@@ -213,10 +242,29 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     let approved = false;
     try {
       approved = await ctx.approve({ title: `start preview: ${command}`, detail: detail.join("\n"), kind: "shell.exec" }, action);
-    } catch {
+    } catch (err) {
+      tunnelPermissionError(err);
       approved = false;
     }
     if (!approved) return { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" };
+  }
+
+  // Re-verify workspace containment after approval (TOCTOU symlink defense).
+  if (!insideWorkspace(ctx.workspace, cwd)) {
+    const error = `HZ_PRECONDITION_FAILED: preview cwd escaped the workspace after approval: ${cwd} is not inside ${ctx.workspace}`;
+    return { ok: false, output: error, error };
+  }
+
+  // Prune exited previews before checking active preview cap.
+  for (const [id, existing] of PREVIEWS) {
+    if (!alive(existing.pid)) PREVIEWS.delete(id);
+  }
+  if (PREVIEWS.size >= MAX_ACTIVE_PREVIEWS) {
+    const error = `preview limit reached (${MAX_ACTIVE_PREVIEWS} active previews); stop one before starting another`;
+    return { ok: false, output: error, error };
+  }
+  if (ctx.signal.aborted) {
+    return { ok: false, output: "aborted", error: "aborted" };
   }
 
   let proc: OwnedProc;
@@ -234,6 +282,9 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
       env: scrubEnv(),
       stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
       detached: true, // its own process group, so stop can kill the whole tree
+      sandboxWrap: "auto",
+      sandboxMode: ctx.sandboxMode ?? "workspace-write",
+      kernel: ctx.kernel,
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -261,6 +312,11 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
 
   const deadline = Date.now() + URL_WAIT_MS;
   for (;;) {
+    if (ctx.signal.aborted) {
+      await killEntry(entry);
+      PREVIEWS.delete(entry.id);
+      return { ok: false, output: "aborted", error: "aborted" };
+    }
     const url = scanUrl(entry.output, portNumber);
     if (url !== undefined) {
       entry.url = url;
@@ -283,7 +339,7 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
           `warning: the server may still be starting — check again with status\ncommand: ${command}\n--- output ---\n${tail(entry)}`,
       };
     }
-    await sleep(250);
+    await sleep(250, ctx.signal);
   }
 }
 
@@ -301,18 +357,53 @@ export async function stopAllPreviews(): Promise<number> {
   return entries.length;
 }
 
-async function stopPreviews(args: Record<string, unknown>): Promise<ToolResult> {
+async function guardStopPreview(ctx: ToolContext, target: string): Promise<ToolResult | undefined> {
+  const action: GuardAction = { kind: "shell.exec", target };
+  let decision: { decision: string; reason?: string };
+  try {
+    decision = await ctx.guard(action);
+  } catch (err) {
+    tunnelPermissionError(err);
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, output: `DENIED by policy: guard unavailable (${message})`, error: "guard unavailable" };
+  }
+  if (decision.decision === "deny") {
+    const reason = decision.reason ?? "shell.exec";
+    return { ok: false, output: `DENIED by policy: ${reason}`, error: `DENIED by policy: ${reason}` };
+  }
+  if (decision.decision === "ask") {
+    let approved = false;
+    try {
+      approved = await ctx.approve({ title: `stop preview: ${target}`, detail: target, kind: "shell.exec" }, action);
+    } catch (err) {
+      tunnelPermissionError(err);
+      approved = false;
+    }
+    if (!approved) return { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" };
+  }
+  return undefined;
+}
+
+async function stopPreviews(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const id = typeof args.id === "string" ? args.id.trim() : "";
   if (id !== "") {
-    // Any session may stop any preview by id (the registry is process-global).
     const entry = PREVIEWS.get(id);
-    if (!entry) return { ok: true, output: `No preview with id ${id}.` };
+    if (!entry || entry.sessionId !== ctx.sessionId) {
+      return { ok: true, output: `No preview with id ${id}.` };
+    }
+    const denied = await guardStopPreview(ctx, `preview: stop ${entry.id} (pid ${entry.pid})`);
+    if (denied !== undefined) return denied;
     await killEntry(entry);
     PREVIEWS.delete(entry.id);
     return { ok: true, output: `Stopped preview ${entry.id} (pid ${entry.pid}) — ${entry.cmd}` };
   }
-  const entries = [...PREVIEWS.values()];
+  const entries = [...PREVIEWS.values()].filter((entry) => entry.sessionId === ctx.sessionId);
   if (entries.length === 0) return { ok: true, output: "No previews to stop." };
+  const denied = await guardStopPreview(
+    ctx,
+    `preview: stop ${entries.map((e) => `${e.id}(pid ${e.pid})`).join(", ")}`,
+  );
+  if (denied !== undefined) return denied;
   const lines: string[] = [];
   for (const entry of entries) {
     await killEntry(entry);
@@ -322,8 +413,8 @@ async function stopPreviews(args: Record<string, unknown>): Promise<ToolResult> 
   return { ok: true, output: lines.join("\n") };
 }
 
-function statusPreviews(): ToolResult {
-  const entries = [...PREVIEWS.values()];
+function statusPreviews(ctx: ToolContext): ToolResult {
+  const entries = [...PREVIEWS.values()].filter((entry) => entry.sessionId === ctx.sessionId);
   if (entries.length === 0) return { ok: true, output: "No previews." };
   const lines = entries.map((entry) => {
     const up = Math.max(0, Math.round((Date.now() - entry.startedAt) / 1000));
@@ -343,7 +434,7 @@ export const previewTool: Tool = {
       action: { type: "string", enum: ["start", "stop", "status"], description: "Preview operation." },
       command: { type: "string", description: "Explicit command to run (defaults to the package.json dev or start script)." },
       cwd: { type: "string", description: "Working directory for the server, inside the workspace (defaults to the workspace)." },
-      id: { type: "string", description: "Preview id to stop (from `status`; any session may stop any preview)." },
+      id: { type: "string", description: "Preview id to stop (from `status`; scoped to the current session)." },
       port: { type: "number", description: "Expected port, used to spot the URL in the server output." },
     },
     required: ["action"],
@@ -365,9 +456,10 @@ export const previewTool: Tool = {
         return { ok: false, output: "", error: `unknown action: ${String(action)} (expected start, stop or status)` };
       }
       if (action === "start") return await startPreview(args, ctx);
-      if (action === "stop") return await stopPreviews(args);
-      return statusPreviews();
+      if (action === "stop") return await stopPreviews(args, ctx);
+      return statusPreviews(ctx);
     } catch (err) {
+      tunnelPermissionError(err);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, output: `preview failed: ${message}`, error: message };
     }

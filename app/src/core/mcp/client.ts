@@ -169,6 +169,12 @@ export interface McpToolInfo {
   inputSchema?: Record<string, unknown>;
   /** `annotations.readOnlyHint`; absent/false means mutating (R-tools-19). */
   readOnlyHint?: boolean;
+  /** Optional MCP input_examples for Code Mode stub JSDoc generation. */
+  input_examples?: ReadonlyArray<Record<string, unknown>>;
+  /** Optional stateless MCP 2026-07-28 cache TTL in milliseconds. */
+  ttlMs?: number;
+  /** Optional stateless MCP 2026-07-28 cache scope (e.g. session/workspace/global/none). */
+  cacheScope?: string;
 }
 
 /** One `tools/call` outcome, reduced to what the registry renders. */
@@ -216,24 +222,87 @@ interface PendingCall {
 
 type ClientState = "idle" | "connecting" | "connected" | "reconnecting" | "down" | "stopped";
 
+const MAX_STDOUT_BUFFER_BYTES = 16 * 1024 * 1024;
+
+interface SemaphoreWaiter {
+  grant: () => void;
+}
+
 /** Simple counting semaphore; a released slot transfers to the oldest waiter. */
 class Semaphore {
   private active = 0;
-  private readonly waiters: Array<() => void> = [];
+  private readonly waiters: SemaphoreWaiter[] = [];
 
   constructor(private readonly limit: number) {}
 
-  acquire(): Promise<void> {
+  acquire(opts?: {
+    deadline?: number;
+    signal?: AbortSignal;
+    onTimeout?: () => Error;
+    onAbort?: () => Error;
+  }): Promise<void> {
+    if (opts?.signal?.aborted) {
+      return Promise.reject(opts.onAbort ? opts.onAbort() : new Error("aborted"));
+    }
+    if (opts?.deadline !== undefined && opts.deadline - Date.now() <= 0) {
+      return Promise.reject(opts.onTimeout ? opts.onTimeout() : new Error("timed out"));
+    }
     if (this.active < this.limit) {
       this.active += 1;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => this.waiters.push(resolve));
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = (): void => {
+        if (timer !== undefined) clearTimeout(timer);
+        if (opts?.signal !== undefined) opts.signal.removeEventListener("abort", onAbort);
+      };
+      const removeWaiter = (): void => {
+        const idx = this.waiters.indexOf(waiter);
+        if (idx >= 0) this.waiters.splice(idx, 1);
+      };
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        removeWaiter();
+        cleanup();
+        reject(opts?.onAbort ? opts.onAbort() : new Error("aborted"));
+      };
+      const waiter: SemaphoreWaiter = {
+        grant: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        },
+      };
+      if (opts?.signal !== undefined) {
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      if (opts?.deadline !== undefined) {
+        const remaining = opts.deadline - Date.now();
+        if (remaining <= 0) {
+          settled = true;
+          cleanup();
+          reject(opts.onTimeout ? opts.onTimeout() : new Error("timed out"));
+          return;
+        }
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          removeWaiter();
+          cleanup();
+          reject(opts.onTimeout ? opts.onTimeout() : new Error("timed out"));
+        }, remaining);
+      }
+      this.waiters.push(waiter);
+    });
   }
 
   release(): void {
     const next = this.waiters.shift();
-    if (next) next(); // the slot is handed over; `active` is unchanged
+    if (next) next.grant(); // the slot is handed over; `active` is unchanged
     else this.active = Math.max(0, this.active - 1);
   }
 }
@@ -364,11 +433,23 @@ export class McpClient implements McpToolCaller {
       throw new McpError("config", this.serverId, "tool name is required");
     }
     const deadline = Date.now() + (opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : this.callTimeoutMs);
-    await this.semaphore.acquire();
+    await this.semaphore.acquire({
+      deadline,
+      signal: opts.signal,
+      onTimeout: () => new McpTimeoutError(this.serverId, "timed out waiting for in-flight slot"),
+      onAbort: () => new McpAbortedError(this.serverId, "aborted while waiting for in-flight slot"),
+    });
     try {
-      await this.untilRunnable(deadline);
+      await this.untilRunnable(deadline, opts.signal);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new McpTimeoutError(this.serverId, "tools/call: deadline expired before dispatch");
+      }
+      if (opts.signal?.aborted) {
+        throw new McpAbortedError(this.serverId, "tools/call: aborted");
+      }
       const params = { name, arguments: args !== null && typeof args === "object" && !Array.isArray(args) ? args : {} };
-      const result = await this.request("tools/call", params, deadline - Date.now(), opts.signal);
+      const result = await this.request("tools/call", params, remaining, opts.signal);
       return normalizeCallResult(result);
     } finally {
       this.semaphore.release();
@@ -500,6 +581,17 @@ export class McpClient implements McpToolCaller {
 
   private feed(chunk: string): void {
     this.buffer += chunk;
+    if (Buffer.byteLength(this.buffer, "utf8") > MAX_STDOUT_BUFFER_BYTES) {
+      this.buffer = "";
+      const err = new McpProtocolError(
+        this.serverId,
+        `stdout buffer exceeded ${MAX_STDOUT_BUFFER_BYTES} bytes`,
+      );
+      this.onNotice?.(`mcp server ${this.serverId}: ${err.message}`);
+      this.failAllPending(err);
+      void this.killChild();
+      return;
+    }
     for (;;) {
       const index = this.buffer.indexOf("\n");
       if (index < 0) break;
@@ -520,21 +612,21 @@ export class McpClient implements McpToolCaller {
       this.onNotice?.(`mcp server ${this.serverId} wrote a non-JSON stdout line (kept for diagnostics)`);
       return;
     }
-    const id = typeof message.id === "number" ? message.id : undefined;
-    if (id !== undefined && ("result" in message || "error" in message)) {
-      const pending = this.pendingCalls.get(id);
+    const rawId = typeof message.id === "number" || typeof message.id === "string" ? message.id : undefined;
+    if (typeof rawId === "number" && ("result" in message || "error" in message)) {
+      const pending = this.pendingCalls.get(rawId);
       if (!pending) return; // a response to a request we already gave up on
       this.settlePending(pending, message);
       return;
     }
     if (typeof message.method === "string") {
-      if (id === undefined) {
+      if (rawId === undefined) {
         this.handleNotification(message.method);
         return;
       }
       // A server -> client request. v1 serves none of them; answering keeps the
       // server from blocking on it instead of hanging silently.
-      void this.write({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not supported: ${message.method}` } });
+      void this.write({ jsonrpc: "2.0", id: rawId, error: { code: -32601, message: `method not supported: ${message.method}` } });
       return;
     }
   }
@@ -604,6 +696,9 @@ export class McpClient implements McpToolCaller {
       return Promise.reject(new McpTransportError(this.serverId, `${method}: no live transport`));
     }
     if (signal?.aborted) return Promise.reject(new McpAbortedError(this.serverId, `${method}: aborted`));
+    if (timeoutMs <= 0) {
+      return Promise.reject(new McpTimeoutError(this.serverId, `${method}: deadline expired before dispatch`));
+    }
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       let done = false;
@@ -726,9 +821,12 @@ export class McpClient implements McpToolCaller {
     for (const resolve of this.downWaiters.splice(0)) resolve(error);
   }
 
-  /** Wait until the transport is usable again, or fail with the deadline. */
-  private async untilRunnable(deadline: number): Promise<void> {
+  /** Wait until the transport is usable again, or fail with the deadline / abort signal. */
+  private async untilRunnable(deadline: number, signal?: AbortSignal): Promise<void> {
     for (;;) {
+      if (signal?.aborted) {
+        throw new McpAbortedError(this.serverId, "aborted while waiting for the server to become callable");
+      }
       const state = this.stateValue;
       if (state === "connected") return;
       if (state === "down") throw this.downErrorValue ?? new McpServerDownError(this.serverId, "server is down");
@@ -737,9 +835,23 @@ export class McpClient implements McpToolCaller {
       if (remaining <= 0) {
         throw new McpTimeoutError(this.serverId, "timed out waiting for the server to become callable");
       }
-      // Poll the state at 25 ms: the reconnect task always terminates (bounded
-      // attempts), and this call's own deadline bounds the wait either way.
-      await sleep(Math.min(25, remaining));
+      // Poll the state at 25 ms, waking early if the caller's signal aborts.
+      const waitMs = Math.min(25, remaining);
+      if (signal === undefined) {
+        await sleep(waitMs);
+      } else {
+        await new Promise<void>((resolve) => {
+          const onAbort = (): void => {
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, waitMs);
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+      }
     }
   }
 
@@ -837,8 +949,26 @@ export function parseToolsList(result: unknown, serverId: string): McpToolInfo[]
       raw.annotations !== null && typeof raw.annotations === "object" && !Array.isArray(raw.annotations)
         ? (raw.annotations as Record<string, unknown>)
         : undefined;
+    const meta =
+      raw._meta !== null && typeof raw._meta === "object" && !Array.isArray(raw._meta)
+        ? (raw._meta as Record<string, unknown>)
+        : undefined;
     const hint = annotations?.readOnlyHint;
-    tools.push({
+    const rawExamples = Array.isArray(raw.input_examples)
+      ? raw.input_examples
+      : Array.isArray(raw.inputExamples)
+        ? raw.inputExamples
+        : undefined;
+    const input_examples = rawExamples
+      ? rawExamples.filter(
+          (ex): ex is Record<string, unknown> => ex !== null && typeof ex === "object" && !Array.isArray(ex),
+        )
+      : undefined;
+    const rawTtl = raw.ttlMs ?? meta?.ttlMs ?? annotations?.ttlMs;
+    const ttlMs = typeof rawTtl === "number" && Number.isFinite(rawTtl) && rawTtl >= 0 ? rawTtl : undefined;
+    const rawScope = raw.cacheScope ?? meta?.cacheScope ?? annotations?.cacheScope;
+    const cacheScope = typeof rawScope === "string" && rawScope.trim() !== "" ? rawScope.trim() : undefined;
+    const entry: McpToolInfo = {
       name,
       description: typeof raw.description === "string" ? raw.description : undefined,
       inputSchema:
@@ -846,7 +976,11 @@ export function parseToolsList(result: unknown, serverId: string): McpToolInfo[]
           ? (raw.inputSchema as Record<string, unknown>)
           : undefined,
       readOnlyHint: typeof hint === "boolean" ? hint : undefined,
-    });
+    };
+    if (input_examples && input_examples.length > 0) entry.input_examples = input_examples;
+    if (ttlMs !== undefined) entry.ttlMs = ttlMs;
+    if (cacheScope !== undefined) entry.cacheScope = cacheScope;
+    tools.push(entry);
   }
   return tools;
 }

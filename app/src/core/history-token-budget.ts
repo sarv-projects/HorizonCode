@@ -10,6 +10,7 @@
 import type { ChatMsg } from "../contracts";
 import { chatContentText } from "./chat-content";
 import { compactHistory, tokensIn, type CompactionOptions, type CompactionResult } from "./compaction";
+import { trimHistoryMessages } from "./compaction-pruner";
 import { estimateTokens } from "./output-budget";
 
 /** Default message-count ceiling when the token budget is not binding. */
@@ -84,24 +85,40 @@ export function historyProviderTokenBudget(
 
 /**
  * When the compacted provider view still exceeds the history budget, shrink
- * the message window and re-compact until it fits or hits the floor (ruling 729).
+ * the message window and re-compact until it fits or hits the floor (ruling 729, ruling 875).
  */
 export function compactHistoryWithTokenFit(
   messages: ChatMsg[],
   options: CompactionOptions,
   contextWindowTokens: number,
-): { result: CompactionResult; limit: number; tokenFitApplied: boolean } {
+): { result: CompactionResult; limit: number; tokenFitApplied: boolean; trimmedCount?: number } {
   const budget = historyProviderTokenBudget(contextWindowTokens);
   let limit = options.limit;
   let result = compactHistory(messages, { ...options, limit });
   if (tokensIn(result.history) <= budget) {
     return { result, limit, tokenFitApplied: false };
   }
+
   let tokenFitApplied = false;
+
+  // First pass: trim oversized messages in history before aggressively reducing message limit
+  const targetPerMessageTokens = Math.max(500, Math.floor(budget / 6));
+  const { messages: trimmedHistory, trimmedCount } = trimHistoryMessages(result.history, targetPerMessageTokens);
+  if (trimmedCount > 0) {
+    result = {
+      ...result,
+      history: trimmedHistory,
+    };
+    tokenFitApplied = true;
+    if (tokensIn(result.history) <= budget) {
+      return { result, limit, tokenFitApplied, trimmedCount };
+    }
+  }
+
   while (tokensIn(result.history) > budget && limit > HISTORY_MESSAGE_FLOOR) {
     tokenFitApplied = true;
     limit -= 1;
     result = compactHistory(messages, { ...options, limit });
   }
-  return { result, limit, tokenFitApplied };
+  return { result, limit, tokenFitApplied, trimmedCount };
 }

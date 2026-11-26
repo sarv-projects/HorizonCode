@@ -190,8 +190,9 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       const events = await client.readEvents("owner:effects");
       const prepare = events.find((e) => e.type === "owner.prepare");
       const settle = events.find((e) => e.type === "owner.settled");
-      expect(prepare?.payload?.details?.guardDecision).toBe("allow");
+      expect(prepare?.payload?.details?.guardDecision).toBe("ask");
       expect(typeof prepare?.payload?.details?.guardLeaseId).toBe("string");
+      expect((prepare?.payload?.details?.guardLeaseId as string).length).toBeGreaterThan(0);
       expect(settle?.payload?.details?.guardLeaseId).toBe(prepare?.payload?.details?.guardLeaseId);
       // Ruling 542/550: archived shell streams are streamChecked, not unsupportedEffects.
       const replay = await client.ownerPostimageVerify();

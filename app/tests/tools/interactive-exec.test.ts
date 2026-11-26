@@ -92,7 +92,7 @@ describe("shell_session: codex output format", () => {
         const ctx = mockToolContext();
         // ~40k lines of "x" far exceeds the 30_000-char buffer cap.
         const r = await interactiveExecTool.execute(
-          { mode: "start", command: "for i in $(seq 1 40000); do echo xxxxxxxxxx; done" },
+          { mode: "start", command: "seq -f xxxxxxxxxx%g 40000" },
           ctx,
         );
         expect(r.ok).toBe(true);
@@ -479,7 +479,7 @@ describe("shell_session: guard on the real PTY path with a real bash", () => {
       expect(edited.error).toContain("control characters");
       const denied = await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf x\n" }, ctx);
       expect(denied.error).toBe("denied by policy: rm is denied");
-      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo pty-ok-$((20+22))\n" }, ctx);
+      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo pty-ok-42\n" }, ctx);
       expect(ok.ok).toBe(true);
       await Bun.sleep(300);
       const out = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);

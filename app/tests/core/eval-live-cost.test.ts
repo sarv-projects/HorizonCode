@@ -46,15 +46,24 @@ describe("F-4 live provider cost capture (opt-in)", () => {
   test.skipIf(process.env.HZ_LIVE_EVAL !== "1")(
     "captures real NVIDIA usage with a non-none cost source",
     async () => {
-      const envPath = path.join(homedir(), ".config", "horizon", "env");
-      if (!existsSync(envPath)) {
-        console.log(`F-4 live test skipped: no ${envPath} (NVIDIA_API_KEY not configured)`);
-        return;
+      let key = process.env.NVIDIA_API_KEY?.trim();
+      if (!key) {
+        const candidates = [
+          path.join(homedir(), ".config", "horizon", "env"),
+          process.env.USERPROFILE ? path.join(process.env.USERPROFILE, ".config", "horizon", "env") : "",
+        ].filter(Boolean);
+        for (const p of candidates) {
+          if (existsSync(p)) {
+            const dotenv = readDotEnv(p);
+            if (dotenv.NVIDIA_API_KEY?.trim()) {
+              key = dotenv.NVIDIA_API_KEY.trim();
+              break;
+            }
+          }
+        }
       }
-      const dotenv = readDotEnv(envPath);
-      const key = dotenv.NVIDIA_API_KEY;
-      if (key === undefined || key.trim() === "") {
-        console.log(`F-4 live test skipped: NVIDIA_API_KEY absent in ${envPath}`);
+      if (!key) {
+        console.log(`F-4 live test skipped: NVIDIA_API_KEY not configured`);
         return;
       }
       const saved = {

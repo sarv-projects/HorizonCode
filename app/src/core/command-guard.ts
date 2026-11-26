@@ -24,6 +24,7 @@
  */
 
 import { analyzeShellCompound } from "./shell-split";
+import { scanShellCommand, type ShellInvocation, type ShellScanOptions, type ShellScanResult } from "./shell-scan";
 
 const WRAPPERS = new Set(["sudo", "doas", "env", "timeout", "xargs", "command", "nohup", "time", "nice", "stdbuf"]);
 
@@ -77,6 +78,10 @@ const READ_ONLY_PROGRAMS = new Set([
 /** Find actions that delete, execute, or write files (`-fprintf`, `-fls`, ...). */
 const FIND_FORBIDDEN = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fls"];
 
+/** Environment variables that alter dynamic loaders, git hooks/helpers, or interpreters. */
+const DANGEROUS_ENV_VAR_RE =
+  /^(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH|PATH|IFS|ENV|BASH_ENV|ZDOTDIR|CDPATH|GLOBIGNORE|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|RUBYOPT|RUBYLIB|PERL5OPT|PERL5LIB|PERL5DB|LUA_INIT|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|GIT_SSH|GIT_SSH_COMMAND|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_CONFIG|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_ASKPASS|SSH_ASKPASS|PAGER|EDITOR|VISUAL|LESSOPEN|LESSCLOSE|BROWSER|GCONV_PATH|LOCPATH|HOSTALIASES|TMPDIR)$/i;
+
 function maskQuotesAndComments(segment: string): string {
   let out = "";
   let i = 0;
@@ -84,9 +89,26 @@ function maskQuotesAndComments(segment: string): string {
   while (i < segment.length) {
     const c = segment[i]!;
     if (quote !== null) {
-      if (c === quote) quote = null;
-      else out += " ";
+      if (quote === '"' && c === "\\" && i + 1 < segment.length) {
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (c === quote) {
+        quote = null;
+        out += " ";
+      } else {
+        out += " ";
+      }
       i++;
+      continue;
+    }
+    if (c === "\\" && i + 1 < segment.length) {
+      const next = segment[i + 1]!;
+      // Track backslash escapes outside quotes so `\"` does not enter quote mode
+      // and `\#` does not start a comment.
+      out += /[A-Za-z0-9._/-]/.test(next) ? next : " ";
+      i += 2;
       continue;
     }
     if (c === "#" && (i === 0 || /\s/.test(segment[i - 1]!))) break;
@@ -109,7 +131,6 @@ function isAllowedRedirectTarget(target: string): boolean {
   if (t.includes("..")) return false;
   if (t === "/dev/null" || t === "/dev/stdout" || t === "/dev/stderr" || t === "/dev/tty") return true;
   if (t === "nul:" || t === "nul") return true;
-  if (t === "/tmp" || t.startsWith("/tmp/") || t === "/var/tmp" || t.startsWith("/var/tmp/")) return true;
   return false;
 }
 
@@ -205,8 +226,49 @@ function skipWrapperOptions(wrapper: string, tokens: string[], start: number): n
 function peelWrappers(tokens: string[]): { tokens: string[]; refusal?: string } {
   let i = 0;
   while (i < tokens.length) {
+    // Check leading inline env assignments (e.g. `LD_PRELOAD=/tmp/x.so ls`).
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) {
+      const name = tokens[i]!.slice(0, tokens[i]!.indexOf("="));
+      if (DANGEROUS_ENV_VAR_RE.test(name)) {
+        return { tokens: tokens.slice(i), refusal: `dangerous env assignment: ${name}` };
+      }
+      i++;
+      continue;
+    }
     const head = tokens[i]!.toLowerCase();
     if (!WRAPPERS.has(head)) break;
+    if (head === "env") {
+      let j = i + 1;
+      while (j < tokens.length) {
+        const arg = tokens[j]!;
+        if (arg === "--") {
+          j++;
+          break;
+        }
+        if (arg.startsWith("-")) {
+          if (arg === "-S" || arg === "--split-string" || arg.startsWith("--split-string=") || /^-[^-]*S/.test(arg)) {
+            return { tokens: tokens.slice(i), refusal: "env -S (split-string execution)" };
+          }
+          if (arg === "-u" || arg === "--unset" || arg === "-C" || arg === "--chdir") {
+            j += 2;
+            continue;
+          }
+          j++;
+          continue;
+        }
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+          const name = arg.slice(0, arg.indexOf("="));
+          if (DANGEROUS_ENV_VAR_RE.test(name)) {
+            return { tokens: tokens.slice(i), refusal: `dangerous env assignment: ${name}` };
+          }
+          j++;
+          continue;
+        }
+        break;
+      }
+      i = j;
+      continue;
+    }
     // `/usr/bin/time -o FILE` / `-a` write the timing report to a file; the
     // shell `time` keyword has no such option, so only the binary endangers.
     if (head === "time") {
@@ -258,31 +320,125 @@ function sedInPlace(tokens: readonly string[]): boolean {
   return false;
 }
 
+/** Extract raw sed script expressions from a sed command segment (for w/W/e/E command inspection). */
+function extractSedScripts(raw: string): string[] {
+  const args: string[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /\s/.test(raw[i]!)) i += 1;
+    if (i >= raw.length) break;
+    let tok = "";
+    let quote: "'" | '"' | null = null;
+    while (i < raw.length) {
+      const c = raw[i]!;
+      if (quote !== null) {
+        if (quote === '"' && c === "\\" && i + 1 < raw.length) {
+          tok += raw[i + 1]!;
+          i += 2;
+          continue;
+        }
+        if (c === quote) {
+          quote = null;
+          i += 1;
+          continue;
+        }
+        tok += c;
+        i += 1;
+        continue;
+      }
+      if (/\s/.test(c)) break;
+      if (c === "'" || c === '"') {
+        quote = c;
+        i += 1;
+        continue;
+      }
+      if (c === "\\" && i + 1 < raw.length) {
+        tok += raw[i + 1]!;
+        i += 2;
+        continue;
+      }
+      tok += c;
+      i += 1;
+    }
+    if (tok !== "") args.push(tok);
+  }
+  const sedIdx = args.findIndex((a) => /(?:^|\/)sed$/i.test(a));
+  if (sedIdx < 0) return [];
+  const scripts: string[] = [];
+  let explicitExpr = false;
+  let positional: string | undefined;
+  for (let j = sedIdx + 1; j < args.length; j += 1) {
+    const arg = args[j]!;
+    if (arg === "--") {
+      if (!explicitExpr && positional === undefined && j + 1 < args.length) positional = args[j + 1];
+      break;
+    }
+    if (arg === "-e" || arg === "--expression") {
+      explicitExpr = true;
+      if (j + 1 < args.length) scripts.push(args[++j]!);
+      continue;
+    }
+    if (arg.startsWith("--expression=")) {
+      explicitExpr = true;
+      scripts.push(arg.slice("--expression=".length));
+      continue;
+    }
+    if (/^-[^-]*e/.test(arg) && !arg.startsWith("--")) {
+      explicitExpr = true;
+      const ePos = arg.indexOf("e");
+      const tail = arg.slice(ePos + 1);
+      if (tail !== "") scripts.push(tail);
+      else if (j + 1 < args.length) scripts.push(args[++j]!);
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    if (positional === undefined) positional = arg;
+  }
+  if (!explicitExpr && positional !== undefined) scripts.push(positional);
+  return scripts;
+}
+
+/** True when a single sed script contains a w/W/e/E command (including GNU `wout.txt` with no space). */
+function sedSingleScriptHasWriteOrExec(script: string): boolean {
+  // Strip s<delim>...<delim>...<delim><flags> and y<delim>...<delim>...<delim> bodies
+  // (substitution w/W/e/E flags are checked separately on the raw segment).
+  const cleaned = script
+    .replace(/(^|[;\n{}!\s])((?:\d+|\$|\/(?:\\.|[^/])*\/)(?:\s*,\s*(?:\d+|\$|\/(?:\\.|[^/])*\/))?\s*!*\s*)s([^a-zA-Z0-9\s])(?:\\.|(?!\3).)*\3(?:\\.|(?!\3).)*\3[a-zA-Z0-9]*/g, "$1")
+    .replace(/(^|[;\n{}!\s])((?:\d+|\$|\/(?:\\.|[^/])*\/)(?:\s*,\s*(?:\d+|\$|\/(?:\\.|[^/])*\/))?\s*!*\s*)y([^a-zA-Z0-9\s])(?:\\.|(?!\3).)*\3(?:\\.|(?!\3).)*\3/g, "$1");
+  // At any command start (start, ;, \n, {, }, !), after optional address(es), check for w/W/e/E.
+  const cmdRe = /(?:^|[;\n{}!])[ \t]*(?:(?:\d+|\$|\/(?:\\.|[^/])*\/)(?:\s*,\s*(?:\d+|\$|\/(?:\\.|[^/])*\/))?\s*!*\s*)?([wWeE])/g;
+  return cmdRe.test(cleaned);
+}
+
 /**
  * sed can write even without `-i`: the `w`/`W` commands write files and `e`/`E`
  * execute a shell. Scripts are normally quoted (masked above), so the RAW
  * segment is inspected. Conservative: a false positive refuses the command.
  */
 function sedScriptWrites(raw: string): boolean {
+  // Substitution flags: s/a/b/w file, s/a/b/wout.txt, s/a/b/gw file, s/a/b/e.
+  if (/(?:^|[\s'";{!])s(.).*?\1.*?\1[a-zA-Z0-9]*[wWeE]/.test(raw)) return true;
+  // Inspect extracted sed script expressions for w/W/e/E commands (with or without space, e.g. GNU `wout.txt`).
+  for (const script of extractSedScripts(raw)) {
+    if (sedSingleScriptHasWriteOrExec(script)) return true;
+  }
   // Any w/W/e/E command or flag not embedded in a word: `w file`, `1w file`,
-  // `1,$w file`, `/re/w file`, `s/a/b/w file`, `s/a/b/e`. A replacement that
-  // merely starts with w/e (`s/hello/world/`) is not a separator-terminated
-  // command and stays allowed.
+  // `1,$w file`, `/re/w file`. A replacement that merely starts with w/e
+  // (`s/hello/world/`) is not a separator-terminated command and stays allowed.
   if (/(?:^|[^A-Za-z0-9_])[wWeE](?=[\s;'"{}!]|$)/.test(raw)) return true;
-  // Address glued to the command: `1w file`, `1,3w file`.
-  if (/(?:^|[;\n'"{}!])[ \t]*\d+(?:,\d+)?[ \t]*[wWeE](?=[\s;'"{}!]|$)/.test(raw)) return true;
-  // Substitution flags: s/a/b/w file, s/a/b/gw file, s/a/b/e.
-  if (/(?:^|[\s'";])s(.).*?\1.*?\1[a-zA-Z0-9]*[wWeE]/.test(raw)) return true;
+  // Address glued to the command: `1w file`, `1,3w file`, `1wout.txt`.
+  if (/(?:^|[;\n'"{}!])[ \t]*\d+(?:,\d+)?[ \t]*[wWeE]/.test(raw)) return true;
   return false;
 }
 
-/** awk can execute (`system`) and write (`print > file`, `print | "cmd"`). */
+/** awk can execute (`system`) and write (`print > file`, `print | "cmd"`, `|&` coprocess). */
 function awkScriptWrites(raw: string): boolean {
   if (/\bsystem\s*\(/.test(raw)) return true;
   if (/\b(?:print|printf)\b[^;\n}]*>>?/.test(raw)) return true;
   if (/\b(?:print|printf)\b[^;\n}]*\|/.test(raw)) return true;
-  // `"command" | getline` runs a shell command (awk's other exec vector).
-  if (/\|\s*getline\b/.test(raw)) return true;
+  // `"command" | getline` and `"command" |& getline` run a shell command (awk's other exec vector).
+  if (/\|&?\s*getline\b/.test(raw)) return true;
+  if (/\|&/.test(raw)) return true;
   if (/@(?:include|load)\b/.test(raw)) return true;
   return false;
 }
@@ -472,12 +628,75 @@ function checkSegment(segment: string): string | undefined {
   return programRefusal(program, tokens, segment);
 }
 
+function checkAstInvocation(inv: ShellInvocation): string | undefined {
+  if (inv.backgrounded) return "background operator &";
+  for (const a of inv.envAssignments) {
+    if (DANGEROUS_ENV_VAR_RE.test(a.name)) {
+      return inv.nested ? `nested command dangerous env assignment: ${a.name}` : `dangerous env assignment: ${a.name}`;
+    }
+  }
+  for (const r of inv.redirects) {
+    if (r.isWrite && !r.isFdDup && !isAllowedRedirectTarget(r.target)) {
+      return `redirect write to ${r.target}`;
+    }
+  }
+  if (inv.argv.length === 0) return undefined;
+  const peeled = peelWrappers(inv.argv);
+  if (peeled.refusal !== undefined) {
+    return inv.nested ? `nested command ${peeled.refusal}` : peeled.refusal;
+  }
+  const tokens = peeled.tokens;
+  if (tokens.length === 0) return "empty command segment";
+  const program = tokens[0]!;
+  if (!READ_ONLY_PROGRAMS.has(program)) {
+    return inv.nested
+      ? `nested command not a read-only command: ${program}`
+      : `not a read-only command: ${program}`;
+  }
+  const refusal = programRefusal(program, tokens, inv.raw);
+  if (refusal !== undefined) {
+    return inv.nested ? `nested command ${refusal}` : refusal;
+  }
+  return undefined;
+}
+
+/**
+ * Inspect a shell command using the static AST scanner and plan-mode read-only
+ * allowlist. Exposes both the structured AST scan and any plan-mode refusal.
+ */
+export function inspectShellCommandWithAst(
+  command: string,
+  opts?: ShellScanOptions,
+): { scan: ShellScanResult; planModeRefusal?: string } {
+  const scan = scanShellCommand(command, opts);
+  const planModeRefusal = findPlanModeMutatingCommand(command, opts);
+  return { scan, planModeRefusal };
+}
+
 /**
  * Short reason when a plan-mode command is not on the read-only allowlist, or
  * undefined when every segment is an allowed investigation command. The name is
  * kept for existing callers; the meaning is now "refused by the allowlist".
  */
-export function findPlanModeMutatingCommand(command: string): string | undefined {
+export function findPlanModeMutatingCommand(command: string, opts?: ShellScanOptions): string | undefined {
+  // Multi-line commands are always refused in plan mode.
+  if (/[\r\n]/.test(command)) return "multi-line shell";
+
+  // Static AST scan catches nested commands inside $(...), backticks, subshells,
+  // pipelines, and dynamic/opaque execution (eval, source, exec, $CMD, ${!var},
+  // PowerShell Invoke-Expression / iex / & $var / . $var).
+  const ast = scanShellCommand(command, opts);
+  if (ast.opaque) {
+    return `unparsed/opaque shell (${ast.opaqueReason}: ${ast.detail})`;
+  }
+  if (ast.commands.some((inv) => inv.backgrounded)) {
+    return "background operator &";
+  }
+  for (const inv of ast.commands) {
+    const astReason = checkAstInvocation(inv);
+    if (astReason !== undefined) return astReason;
+  }
+
   const analysis = analyzeShellCompound(command);
   if (analysis.ok === false) return `unparsed shell (${analysis.reason})`;
   for (const seg of analysis.segments) {
@@ -488,8 +707,8 @@ export function findPlanModeMutatingCommand(command: string): string | undefined
 }
 
 /** Model-facing refusal for plan-mode shell, or undefined to allow investigation commands. */
-export function planModeShellRefusal(command: string): string | undefined {
-  const reason = findPlanModeMutatingCommand(command);
+export function planModeShellRefusal(command: string, opts?: ShellScanOptions): string | undefined {
+  const reason = findPlanModeMutatingCommand(command, opts);
   if (reason === undefined) return undefined;
   return (
     `plan mode: shell refused (${reason}); plan mode runs only read-only investigation commands. ` +

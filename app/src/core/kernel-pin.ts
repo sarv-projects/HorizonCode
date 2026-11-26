@@ -67,8 +67,10 @@ export interface KernelPinOptions {
   env?: Record<string, string | undefined>;
   /** Repository root that owns `kernel/kernel.sha256`. */
   repoRoot?: string;
-  /** Explicit manifest path (tests). Defaults to `<repoRoot>/kernel/kernel.sha256`. */
+  /** Explicit manifest path (tests). Defaults to the platform manifest or `<repoRoot>/kernel/kernel.sha256`. */
   manifestPath?: string;
+  /** Platform whose manifest is preferred (defaults to `process.platform`; tests inject). */
+  platform?: string;
 }
 
 /** The repository root (app/src/core -> repo root). */
@@ -76,9 +78,23 @@ export function kernelRepoRoot(): string {
   return path.resolve(import.meta.dir, "../../..");
 }
 
-/** The repository-owned kernel digest manifest. */
-export function kernelPinManifestPath(repoRoot: string = kernelRepoRoot()): string {
-  return path.join(repoRoot, "kernel", "kernel.sha256");
+/**
+ * Candidate manifests, most specific first: `kernel/kernel.sha256.<platform>`
+ * then the shared `kernel/kernel.sha256`. One shared digest can only match one
+ * platform's build, so a multi-platform release pins each build separately
+ * without the Windows file rewriting (and breaking) the Linux pin.
+ */
+export function kernelPinManifestCandidates(repoRoot: string, platform: string = process.platform): string[] {
+  return [
+    path.join(repoRoot, "kernel", `kernel.sha256.${platform}`),
+    path.join(repoRoot, "kernel", "kernel.sha256"),
+  ];
+}
+
+/** The repository-owned kernel digest manifest: the platform file when present, else the shared one. */
+export function kernelPinManifestPath(repoRoot: string = kernelRepoRoot(), platform: string = process.platform): string {
+  const candidates = kernelPinManifestCandidates(repoRoot, platform);
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1]!;
 }
 
 /** sha256 of a file as lowercase hex. Throws when the file cannot be read. */
@@ -158,7 +174,7 @@ export function verifyKernelPin(opts: KernelPinOptions): KernelPinResult {
   }
 
   const envDigestRaw = typeof env.HZ_KERNEL_SHA256 === "string" ? env.HZ_KERNEL_SHA256.trim() : "";
-  const manifest = opts.manifestPath ?? kernelPinManifestPath(opts.repoRoot);
+  const manifest = opts.manifestPath ?? kernelPinManifestPath(opts.repoRoot, opts.platform);
 
   let expected: string | undefined;
   let source: KernelPinResult["source"] = "none";

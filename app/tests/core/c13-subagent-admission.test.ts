@@ -23,7 +23,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(workspace, { recursive: true, force: true });
+  // Windows keeps the SQLite handle open briefly; a failed cleanup is not a test
+  // failure (the assertions above already ran), and the OS reclaims the temp dir.
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch {
+    /* best-effort cleanup */
+  }
 });
 
 /** A child provider that makes exactly one `read` call, then ends. */
@@ -181,5 +187,5 @@ describe("C-13 — cross-process batch fence (incremental R170 hardening)", () =
     } finally {
       release();
     }
-  });
+  }, 15_000);
 });

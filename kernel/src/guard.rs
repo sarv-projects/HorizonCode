@@ -126,9 +126,14 @@ pub struct Lease {
     /// so a subagent child cannot inherit its parent session's "always" grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
-    /// Approval-path attribution (`human`); not cryptographic human identity.
+    /// Approval-path attribution (`human`); cryptographically verified when
+    /// `principal_verified` is `Some(true)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
+    /// True when `principal: "human"` was backed by a verified Ed25519
+    /// human-approval signature over the canonical payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_verified: Option<bool>,
     /// Launch-time workspace identity at mint (ruling **636**). Absent on
     /// legacy leases minted before binding existed — those stay consultable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +158,10 @@ pub struct Grant {
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_verified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_binding: Option<LeaseWorkspaceBinding>,
 }
 
 /// The action kinds this kernel's guard vocabulary knows. The protocol refuses
@@ -161,7 +170,14 @@ pub struct Grant {
 /// client's `fs.edit`) would otherwise reach the policy as an unknown rule and
 /// land on the fallback answer. Keep this list in step with `parse_rule` and
 /// the TS `GuardKind`.
-pub const KNOWN_KINDS: [&str; 6] = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn", "mcp.invoke"];
+pub const KNOWN_KINDS: [&str; 6] = [
+    "fs.read",
+    "fs.write",
+    "shell.exec",
+    "net.fetch",
+    "spawn",
+    "mcp.invoke",
+];
 
 pub fn known_kind(kind: &str) -> bool {
     KNOWN_KINDS.contains(&kind)
@@ -220,34 +236,18 @@ pub struct GuardDecision {
 }
 
 impl GuardDecision {
-    /// G1 Ask/Deny-only projection (ruling **637**): frozen `allow` → `ask`.
+    /// G1 Ask/Deny-only projection (ruling **637**, owner-approved breaking removal of `"allow"`).
     pub fn g1_decision(&self) -> &'static str {
         match self.decision.as_str() {
             "deny" => "deny",
-            _ => "ask", // allow (lease-resolved) and ask both map to Ask
+            _ => "ask",
         }
-    }
-
-    fn g1_wire_protocol_v2_enabled() -> bool {
-        std::env::var("HZ_GUARD_G1_WIRE")
-            .map(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes"
-                )
-            })
-            .unwrap_or(false)
     }
 
     pub fn to_json(&self) -> Value {
         let g1 = self.g1_decision();
-        let wire_decision = if Self::g1_wire_protocol_v2_enabled() {
-            g1.to_string()
-        } else {
-            self.decision.clone()
-        };
         let mut out = json!({
-            "decision": wire_decision,
+            "decision": g1,
             "reason": self.reason,
             "g1": g1,
         });
@@ -285,6 +285,10 @@ pub struct Guard {
     /// H-31 / ruling 629: optional launch-time `(root, device, inode)` folded
     /// into every decision's `intentDigest`.
     workspace_binding: Option<crate::workspace_binding::WorkspaceBinding>,
+    /// When true (workspace binding failed or parent-controlled kernel lacks a
+    /// binding), fail closed to `"outside"` for `fs.*` actions instead of
+    /// trusting caller-claimed `"workspace"`.
+    fail_closed_unbound_scope: bool,
 }
 
 impl Guard {
@@ -295,7 +299,13 @@ impl Guard {
             leases: Mutex::new(Vec::new()),
             grants: Mutex::new(Vec::new()),
             workspace_binding: None,
+            fail_closed_unbound_scope: false,
         }
+    }
+
+    /// Force unbound `fs.*` scope derivation to fail closed to `"outside"`.
+    pub fn set_fail_closed_unbound_scope(&mut self, fail_closed: bool) {
+        self.fail_closed_unbound_scope = fail_closed;
     }
 
     /// Bind this Guard to a launch-time workspace identity (H-31).
@@ -337,8 +347,7 @@ impl Guard {
         // Derive scope from target vs workspace binding — never trust a caller
         // claim of "workspace" for a path outside the bound root (ruling 658).
         let scope_str = self.derive_scope(action, scope);
-        let decision =
-            self.check_unguarded(action, Some(&scope_str), caller_leases, session_id)?;
+        let decision = self.check_unguarded(action, Some(&scope_str), caller_leases, session_id)?;
         Ok(self.annotate(decision, action, &scope_str))
     }
 
@@ -360,6 +369,9 @@ impl Guard {
                     Some(s) => s.to_string(),
                     None => "workspace".to_string(),
                 };
+            }
+            if self.fail_closed_unbound_scope {
+                return "outside".to_string();
             }
         }
         claimed.unwrap_or("*").to_string()
@@ -406,7 +418,8 @@ impl Guard {
         // held lease.
         // NOTE: keyed to `fs.write` + `shell.exec`. Any future mutating kind
         // must be added HERE as well as to KNOWN_KINDS.
-        if action.kind == "fs.write" && resolves_inside(&self.state_dir, Path::new(&action.target)) {
+        if action.kind == "fs.write" && resolves_inside(&self.state_dir, Path::new(&action.target))
+        {
             return Ok(GuardDecision {
                 decision: "deny".to_string(),
                 reason: format!(
@@ -418,7 +431,8 @@ impl Guard {
                 workspace_binding: None,
             });
         }
-        if action.kind == "shell.exec" && shell_references_kernel_state(&action.target, &self.state_dir)
+        if action.kind == "shell.exec"
+            && shell_references_kernel_state(&action.target, &self.state_dir)
         {
             return Ok(GuardDecision {
                 decision: "deny".to_string(),
@@ -432,13 +446,20 @@ impl Guard {
             });
         }
 
+        // R1 is deny > lease > ask > allow ACROSS layers (D-2). A policy-layer
+        // rule is a verdict; an allowlist/egress `allow` is only an ADMISSION
+        // CANDIDATE. It is recorded here and consulted at the final default step,
+        // after policy deny/ask/allow have had their say, so an allowlist cannot
+        // admit what policy.json denies or asks about.
+        let mut allowlist_admission: Option<String> = None;
+        let mut egress_admission: Option<String> = None;
+
         // Command allowlist (FEAT-002, docs/11 R1): for shell.exec ONLY, consult
         // the declarative allowlist BEFORE the policy rules so an allowlist
-        // `deny` wins (R1) and an allowlist `allow` can admit. A non-match or an
-        // `ask` returns `None`/`Ask` and falls through to the EXISTING flow
-        // unchanged — so shell.exec with no allowlist file present behaves
-        // EXACTLY as today (ask). A malformed allowlist is a typed refusal
-        // (fail closed), never silently ignored.
+        // `deny` wins (R1). A non-match or an `ask` returns `None`/`Ask` and falls
+        // through to the EXISTING flow unchanged — so shell.exec with no
+        // allowlist file present behaves EXACTLY as today (ask). A malformed
+        // allowlist is a typed refusal (fail closed), never silently ignored.
         if action.kind == "shell.exec" {
             // Reduced-form argv split: whitespace tokenization. Wrapper
             // unwrapping (env/timeout/...), quote handling and a tree-sitter
@@ -464,29 +485,19 @@ impl Guard {
                                     policy.fingerprint()
                                 ),
                                 lease_id: None,
-                intent_digest: None,
-                workspace_binding: None,
-            });
+                                intent_digest: None,
+                                workspace_binding: None,
+                            });
                         }
                         Some(Decision::Allow) => {
-                            let lease = self.mint_allow_lease(
-                                &action.kind,
-                                &action.target,
-                                session_id,
-                                now_millis(),
-                            );
-                            return Ok(GuardDecision {
-                                decision: "allow".to_string(),
-                                reason: format!(
-                                    "allowlist allow: {} matches an allow rule (fingerprint {}; minted one-use lease {})",
-                                    action.target,
-                                    policy.fingerprint(),
-                                    lease.lease_id
-                                ),
-                                lease_id: Some(lease.lease_id),
-                intent_digest: None,
-                workspace_binding: None,
-            });
+                            // Reject shell control metacharacters / quotes / escapes so
+                            // compound commands like `git status; rm -rf /` can never
+                            // match an allowlisted `git status` prefix (fall through to ask).
+                            if !execpolicy::contains_shell_control_metachar(&action.target) {
+                                // D-2: an admission candidate, not a verdict. The
+                                // policy layer below may still deny or ask.
+                                allowlist_admission = Some(policy.fingerprint());
+                            }
                         }
                         // Ask or None: no allowlist admission — fall through to
                         // the existing policy/lease/grant/ask flow unchanged.
@@ -534,29 +545,14 @@ impl Guard {
                                 source.as_str()
                             ),
                             lease_id: None,
-                intent_digest: None,
-                workspace_binding: None,
-            });
-                    }
-                    egress::EgressDecision::Allow => {
-                        // H-4 / G1 (rulings 624, 637, 662): every allow cites a
-                        // one-use lease — same as execpolicy Allow + policy allow.
-                        let lease = self.mint_allow_lease(
-                            &action.kind,
-                            &action.target,
-                            session_id,
-                            now_millis(),
-                        );
-                        return Ok(GuardDecision {
-                            decision: "allow".to_string(),
-                            reason: format!(
-                                "egress allow: {} matches an allow rule (minted one-use lease {})",
-                                origin_label, lease.lease_id
-                            ),
-                            lease_id: Some(lease.lease_id),
                             intent_digest: None,
                             workspace_binding: None,
                         });
+                    }
+                    egress::EgressDecision::Allow => {
+                        // D-2: candidate only, exactly like the allowlist. A
+                        // policy deny/ask for net.fetch still wins.
+                        egress_admission = Some(origin_label);
                     }
                     egress::EgressDecision::AllowAndRecord { would } => {
                         // observe mode: ADMIT at the decider, but do not short-
@@ -577,6 +573,11 @@ impl Guard {
 
         let scope = scope.filter(|s| !s.is_empty()).unwrap_or("*");
         let now_ms = now_millis();
+        // D-2: an explicit policy file is a human verdict and outranks a layer
+        // admission (allowlist/egress) for ask as well as deny. The BUILT-IN
+        // default ask is not explicit: an allowlist allow exists precisely to
+        // lift it (FEAT-002), so it may admit before the default rule answers.
+        let explicit_policy = self.state_dir.join("policy.json").exists();
 
         let matching: Vec<PolicyRule> = self
             .policy()?
@@ -597,6 +598,30 @@ impl Guard {
             });
         }
 
+        // D-2: with no explicit policy.json, a layer admission admits here —
+        // before the built-in default ask rule can answer.
+        if !explicit_policy && (allowlist_admission.is_some() || egress_admission.is_some()) {
+            let lease = self.mint_allow_lease(&action.kind, &action.target, session_id, now_ms);
+            let source = match (&allowlist_admission, &egress_admission) {
+                (Some(fingerprint), _) => format!(
+                    "allowlist allow: {} matches an allow rule (fingerprint {}; no policy deny)",
+                    action.target, fingerprint
+                ),
+                (None, Some(origin)) => format!(
+                    "egress allow: {} matches an allow rule (no policy deny)",
+                    origin
+                ),
+                (None, None) => unreachable!(),
+            };
+            return Ok(GuardDecision {
+                decision: "ask".to_string(),
+                reason: format!("{}; minted one-use lease {}", source, lease.lease_id),
+                lease_id: Some(lease.lease_id),
+                intent_digest: None,
+                workspace_binding: None,
+            });
+        }
+
         // Only leases this kernel issued are honoured (the held table). A
         // caller-supplied lease is a claim, not a mint: a raw client echoing
         // back `{leaseId, kind, pattern, expiry}` must not unlock anything it
@@ -612,7 +637,7 @@ impl Guard {
         if action.kind == "fs.write" && is_sensitive_write(Path::new(&action.target)) {
             if let Some(lease) = self.take_exact_matching_lease(action, session_id, now_ms) {
                 return Ok(GuardDecision {
-                    decision: "allow".to_string(),
+                    decision: "ask".to_string(),
                     reason: format!(
                         "lease {} (exact) covers sensitive-write {} on {} (consumed)",
                         lease.lease_id, action.kind, action.target
@@ -640,7 +665,7 @@ impl Guard {
         // back to policy (ask) or a grant — never to the spent lease.
         if let Some(lease) = self.take_matching_lease(action, session_id, now_ms) {
             return Ok(GuardDecision {
-                decision: "allow".to_string(),
+                decision: "ask".to_string(),
                 reason: format!(
                     "lease {} ({}) covers {} on {} (consumed)",
                     lease.lease_id, lease.pattern, action.kind, action.target
@@ -662,15 +687,15 @@ impl Guard {
             if let Some(grant) = self.matching_grant(action, session_id, now_ms) {
                 let lease = self.mint_bound_lease(&action.kind, &action.target, &grant, now_ms);
                 return Ok(GuardDecision {
-                    decision: "allow".to_string(),
+                    decision: "ask".to_string(),
                     reason: format!(
                         "grant {} covers {} on {} (minted one-use lease {})",
                         grant.lease_id, action.kind, action.target, lease.lease_id
                     ),
                     lease_id: Some(lease.lease_id),
-                intent_digest: None,
-                workspace_binding: None,
-            });
+                    intent_digest: None,
+                    workspace_binding: None,
+                });
             }
         }
 
@@ -693,7 +718,8 @@ impl Guard {
             // MEMORY.md is user-curated memory (docs/33 §5.4): a policy allow
             // never silent-writes it; a human ask (or a held/grant lease above)
             // is required.
-            if action.kind == "fs.write" && is_memory_manifest_write(&self.state_dir, Path::new(&action.target))
+            if action.kind == "fs.write"
+                && is_memory_manifest_write(&self.state_dir, Path::new(&action.target))
             {
                 return Ok(GuardDecision {
                     decision: "ask".to_string(),
@@ -711,11 +737,36 @@ impl Guard {
             // is not held — same shape as grant-minted leases (L3 reduced).
             let lease = self.mint_allow_lease(&action.kind, &action.target, session_id, now_ms);
             return Ok(GuardDecision {
-                decision: "allow".to_string(),
+                decision: "ask".to_string(),
                 reason: format!(
                     "policy allow: {} @ {} (action {} on {}; minted one-use lease {})",
                     allow.kind, allow.scope, action.kind, action.target, lease.lease_id
                 ),
+                lease_id: Some(lease.lease_id),
+                intent_digest: None,
+                workspace_binding: None,
+            });
+        }
+
+        // D-2: a layer admission candidate decides only here — after policy
+        // deny, policy ask and policy allow. Every allow cites a one-use lease
+        // (H-4 / G1, rulings 624/637/662).
+        if allowlist_admission.is_some() || egress_admission.is_some() {
+            let lease = self.mint_allow_lease(&action.kind, &action.target, session_id, now_ms);
+            let source = match (allowlist_admission, egress_admission) {
+                (Some(fingerprint), _) => format!(
+                    "allowlist allow: {} matches an allow rule (fingerprint {}; no policy deny/ask)",
+                    action.target, fingerprint
+                ),
+                (None, Some(origin)) => format!(
+                    "egress allow: {} matches an allow rule (no policy deny/ask)",
+                    origin
+                ),
+                (None, None) => unreachable!(),
+            };
+            return Ok(GuardDecision {
+                decision: "ask".to_string(),
+                reason: format!("{}; minted one-use lease {}", source, lease.lease_id),
                 lease_id: Some(lease.lease_id),
                 intent_digest: None,
                 workspace_binding: None,
@@ -729,9 +780,9 @@ impl Guard {
                 action.kind, scope, action.kind, action.target
             ),
             lease_id: None,
-                intent_digest: None,
-                workspace_binding: None,
-            })
+            intent_digest: None,
+            workspace_binding: None,
+        })
     }
 
     /// Append an allowlist prefix rule at runtime (FEAT-002). File-locked
@@ -768,6 +819,7 @@ impl Guard {
     /// Create and remember a lease; returns it with a fresh uuid v4 id. `owner`
     /// is the session the lease is minted for; a `None` owner mints a legacy
     /// owner-less lease that stays globally consultable (see `Lease::owner`).
+    #[allow(dead_code)]
     pub fn issue_lease(
         &self,
         kind: &str,
@@ -776,6 +828,18 @@ impl Guard {
         owner: Option<String>,
         principal: Option<String>,
     ) -> Lease {
+        self.issue_lease_with_verification(kind, pattern, ttl_ms, owner, principal, None)
+    }
+
+    pub fn issue_lease_with_verification(
+        &self,
+        kind: &str,
+        pattern: &str,
+        ttl_ms: u64,
+        owner: Option<String>,
+        principal: Option<String>,
+        principal_verified: Option<bool>,
+    ) -> Lease {
         let lease = Lease {
             lease_id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
@@ -783,6 +847,7 @@ impl Guard {
             expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
             owner,
             principal,
+            principal_verified,
             workspace_binding: self
                 .workspace_binding
                 .as_ref()
@@ -802,6 +867,7 @@ impl Guard {
     /// Create and remember a session grant (docs/11 L7 reduced form). Same
     /// validation and window as `issue_lease`; its own table, so it is never
     /// consumed by a check.
+    #[allow(dead_code)]
     pub fn issue_grant(
         &self,
         kind: &str,
@@ -810,6 +876,18 @@ impl Guard {
         owner: Option<String>,
         principal: Option<String>,
     ) -> Grant {
+        self.issue_grant_with_verification(kind, pattern, ttl_ms, owner, principal, None)
+    }
+
+    pub fn issue_grant_with_verification(
+        &self,
+        kind: &str,
+        pattern: &str,
+        ttl_ms: u64,
+        owner: Option<String>,
+        principal: Option<String>,
+        principal_verified: Option<bool>,
+    ) -> Grant {
         let grant = Grant {
             lease_id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
@@ -817,6 +895,11 @@ impl Guard {
             expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
             owner,
             principal,
+            principal_verified,
+            workspace_binding: self
+                .workspace_binding
+                .as_ref()
+                .map(LeaseWorkspaceBinding::from_binding),
         };
         if let Ok(mut held) = self.grants.lock() {
             let now_ms = now_millis();
@@ -832,7 +915,12 @@ impl Guard {
     /// Take the first active, visible, matching lease OUT of the held table and
     /// return it (docs/11 L1: consumed at most once). A poisoned lock returns
     /// `None` — the fail-closed direction (ask), matching `active_leases`.
-    fn take_matching_lease(&self, action: &GuardAction, session_id: Option<&str>, now_ms: i64) -> Option<Lease> {
+    fn take_matching_lease(
+        &self,
+        action: &GuardAction,
+        session_id: Option<&str>,
+        now_ms: i64,
+    ) -> Option<Lease> {
         let mut held = self.leases.lock().ok()?;
         held.retain(|lease| !lease.is_expired(now_ms));
         let index = held.iter().position(|lease| {
@@ -888,7 +976,14 @@ impl Guard {
 
     /// The newest active, visible, matching grant, if any. Grants are never
     /// removed by a check — they are pre-authorisations, not tokens.
-    fn matching_grant(&self, action: &GuardAction, session_id: Option<&str>, now_ms: i64) -> Option<Grant> {
+    /// Revalidates any stamped `workspace_binding` so a remount/rename-swap
+    /// cannot reuse a grant minted under a different workspace `(dev, ino)`.
+    fn matching_grant(
+        &self,
+        action: &GuardAction,
+        session_id: Option<&str>,
+        now_ms: i64,
+    ) -> Option<Grant> {
         let held = self.grants.lock().ok()?;
         held.iter()
             .filter(|grant| {
@@ -896,6 +991,11 @@ impl Guard {
                     && grant_visible_to(grant, session_id)
                     && grant.kind == action.kind
                     && pattern_matches(&grant.pattern, &action.target)
+                    && grant
+                        .workspace_binding
+                        .as_ref()
+                        .map(|stamp| stamp.still_valid())
+                        .unwrap_or(true)
             })
             .next_back()
             .cloned()
@@ -922,6 +1022,7 @@ impl Guard {
             expiry: iso_from_unix_millis(now_ms + ttl),
             owner: grant.owner.clone(),
             principal: grant.principal.clone(),
+            principal_verified: grant.principal_verified,
             workspace_binding: self
                 .workspace_binding
                 .as_ref()
@@ -945,6 +1046,7 @@ impl Guard {
             expiry: iso_from_unix_millis(now_ms + BOUND_LEASE_MS),
             owner: session_id.map(|s| s.to_string()),
             principal: None,
+            principal_verified: None,
             workspace_binding: self
                 .workspace_binding
                 .as_ref()
@@ -1084,9 +1186,17 @@ fn read_policy_rules(path: &Path) -> Result<Option<Vec<PolicyRule>>, PolicyError
         Value::Array(items) => items,
         Value::Object(mut map) => match map.remove("rules") {
             Some(Value::Array(items)) => items,
-            _ => return Err(PolicyError::Shape("expected a JSON array of rules".to_string())),
+            _ => {
+                return Err(PolicyError::Shape(
+                    "expected a JSON array of rules".to_string(),
+                ))
+            }
         },
-        _ => return Err(PolicyError::Shape("expected a JSON array of rules".to_string())),
+        _ => {
+            return Err(PolicyError::Shape(
+                "expected a JSON array of rules".to_string(),
+            ))
+        }
     };
     let mut rules = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
@@ -1100,8 +1210,8 @@ fn read_policy_rules(path: &Path) -> Result<Option<Vec<PolicyRule>>, PolicyError
 fn parse_rule(index: usize, item: &Value) -> Result<PolicyRule, PolicyError> {
     let invalid = |detail: String| PolicyError::Rule { index, detail };
     // A missing or non-string field fails here, naming the field.
-    let rule: PolicyRule = serde_json::from_value(item.clone())
-        .map_err(|e| invalid(e.to_string()))?;
+    let rule: PolicyRule =
+        serde_json::from_value(item.clone()).map_err(|e| invalid(e.to_string()))?;
     if !matches!(
         rule.kind.as_str(),
         "*" | "fs.read" | "fs.write" | "shell.exec" | "net.fetch" | "spawn" | "mcp.invoke"
@@ -1168,9 +1278,41 @@ fn grant_visible_to(grant: &Grant, session_id: Option<&str>) -> bool {
 /// beyond the hop limit, an unreadable component) the answer is `true`: this
 /// rule only ever guards the kernel state directory, so failing closed means
 /// refusing the write.
+fn normalize_path_for_compare(path: &Path, case_insensitive: bool) -> String {
+    let mut s = path.to_string_lossy().replace('\\', "/");
+    while s.len() > 1 && s.ends_with('/') {
+        // Keep drive roots like "C:/" intact.
+        if s.len() == 3 && s.as_bytes()[1] == b':' {
+            break;
+        }
+        s.pop();
+    }
+    if case_insensitive {
+        s.to_ascii_lowercase()
+    } else {
+        s
+    }
+}
+
+fn path_starts_with_case(target: &Path, root: &Path, case_insensitive: bool) -> bool {
+    if !case_insensitive {
+        return target == root || target.starts_with(root);
+    }
+    let t = normalize_path_for_compare(target, true);
+    let r = normalize_path_for_compare(root, true);
+    if t == r {
+        return true;
+    }
+    if r.ends_with('/') {
+        t.starts_with(&r)
+    } else {
+        t.starts_with(&r) && t.as_bytes().get(r.len()) == Some(&b'/')
+    }
+}
+
 fn resolves_inside(root: &Path, target: &Path) -> bool {
     match (resolve_lexical(root), resolve_lexical(target)) {
-        (Some(root), Some(target)) => target == root || target.starts_with(&root),
+        (Some(root), Some(target)) => path_starts_with_case(&target, &root, cfg!(windows)),
         _ => true,
     }
 }
@@ -1179,7 +1321,7 @@ fn resolves_inside(root: &Path, target: &Path) -> bool {
 /// paths return `false` (sandbox reads fail closed; unlike `resolves_inside`).
 pub fn path_contained_in(root: &Path, target: &Path) -> bool {
     match (resolve_lexical(root), resolve_lexical(target)) {
-        (Some(root), Some(target)) => target == root || target.starts_with(&root),
+        (Some(root), Some(target)) => path_starts_with_case(&target, &root, cfg!(windows)),
         _ => false,
     }
 }
@@ -1189,23 +1331,206 @@ pub fn lexical_resolve(path: &Path) -> Option<PathBuf> {
     resolve_lexical(path)
 }
 
+/// Strip shell quotes (`'` and `"`) and backslash escapes before non-slash
+/// characters so quoted/escaped path spellings like `".hz"/state/kernel` or
+/// `.hz/stat\e/kernel` collapse to `.hz/state/kernel`.
+fn strip_shell_quoting(input: &str, preserve_backslash_as_slash: bool) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' => {}
+            '\\' => {
+                if preserve_backslash_as_slash {
+                    out.push('/');
+                } else if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Simple POSIX-style glob matcher (`*`, `?`, `[abc]`) for path segments.
+fn glob_segment_matches(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star_pi: Option<usize> = None;
+    let mut star_ti: usize = 0;
+
+    while ti < t.len() {
+        if pi < p.len() && p[pi] == '*' {
+            star_pi = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '?' {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '[' {
+            if let Some(close_rel) = p[pi + 1..].iter().position(|&c| c == ']') {
+                let class = &p[pi + 1..pi + 1 + close_rel];
+                let ch = t[ti];
+                let (negated, body) = if class.first() == Some(&'!') || class.first() == Some(&'^') {
+                    (true, &class[1..])
+                } else {
+                    (false, class)
+                };
+                let mut matched = false;
+                let mut i = 0;
+                while i < body.len() {
+                    if i + 2 < body.len() && body[i + 1] == '-' {
+                        if ch >= body[i] && ch <= body[i + 2] {
+                            matched = true;
+                        }
+                        i += 3;
+                    } else {
+                        if ch == body[i] {
+                            matched = true;
+                        }
+                        i += 1;
+                    }
+                }
+                if negated {
+                    matched = !matched;
+                }
+                if matched {
+                    pi += close_rel + 2;
+                    ti += 1;
+                } else if let Some(sp) = star_pi {
+                    pi = sp + 1;
+                    star_ti += 1;
+                    ti = star_ti;
+                } else {
+                    return false;
+                }
+            } else if p[pi] == t[ti] {
+                pi += 1;
+                ti += 1;
+            } else if let Some(sp) = star_pi {
+                pi = sp + 1;
+                star_ti += 1;
+                ti = star_ti;
+            } else {
+                return false;
+            }
+        } else if pi < p.len() && p[pi] == t[ti] {
+            pi += 1;
+            ti += 1;
+        } else if let Some(sp) = star_pi {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn token_glob_matches_sequence(token: &str, target: &[&str]) -> bool {
+    if !token.contains('*') && !token.contains('?') && !token.contains('[') {
+        return false;
+    }
+    let segs: Vec<&str> = token.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.len() < target.len() {
+        return false;
+    }
+    for win in segs.windows(target.len()) {
+        // Require the first segment in the window to explicitly start with '.'
+        // (e.g. `.hz`, `.h?`, `.hz*`, `.[h]z`) so generic globs like `*/*/*`
+        // do not false-positive.
+        if !win[0].starts_with('.') {
+            continue;
+        }
+        if win
+            .iter()
+            .zip(target.iter())
+            .all(|(pat, literal)| glob_segment_matches(pat, literal))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn shell_references_kernel_state_with_case(
+    command: &str,
+    state_dir: &Path,
+    case_insensitive: bool,
+) -> bool {
+    let norm = |s: &str| -> String {
+        let replaced = s.replace('\\', "/");
+        if case_insensitive {
+            replaced.to_ascii_lowercase()
+        } else {
+            replaced
+        }
+    };
+    let cmd_slash = norm(command);
+    let cmd_dequoted_slash = {
+        let s = strip_shell_quoting(command, true);
+        if case_insensitive {
+            s.to_ascii_lowercase()
+        } else {
+            s
+        }
+    };
+    let cmd_dequoted_unix = {
+        let s = strip_shell_quoting(command, false);
+        if case_insensitive {
+            s.to_ascii_lowercase()
+        } else {
+            s
+        }
+    };
+
+    let state_raw = normalize_path_for_compare(state_dir, case_insensitive);
+    if !state_raw.is_empty()
+        && (cmd_slash.contains(&state_raw)
+            || cmd_dequoted_slash.contains(&state_raw)
+            || cmd_dequoted_unix.contains(&state_raw))
+    {
+        return true;
+    }
+    if let Some(resolved) = resolve_lexical(state_dir) {
+        let state_norm = normalize_path_for_compare(&resolved, case_insensitive);
+        if !state_norm.is_empty()
+            && (cmd_slash.contains(&state_norm)
+                || cmd_dequoted_slash.contains(&state_norm)
+                || cmd_dequoted_unix.contains(&state_norm))
+        {
+            return true;
+        }
+    }
+    for candidate in [&cmd_slash, &cmd_dequoted_slash, &cmd_dequoted_unix] {
+        if candidate.contains(".hz/state/kernel") || candidate.contains(".hzcode/kernel") {
+            return true;
+        }
+        for token in candidate.split(|c: char| {
+            c.is_whitespace() || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '=')
+        }) {
+            if token_glob_matches_sequence(token, &[".hz", "state", "kernel"])
+                || token_glob_matches_sequence(token, &[".hzcode", "kernel"])
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Conservative shell-command scan: absolute state-dir substrings and the
 /// canonical/legacy relative markers. Mirrors `shellCommandReferencesKernelState`
 /// in the TypeScript transport (path-token resolution lives there; Rust catches
 /// the common redirect spellings before allowlist/policy).
 fn shell_references_kernel_state(command: &str, state_dir: &Path) -> bool {
-    let cmd = command.replace('\\', "/");
-    let state_raw = state_dir.to_string_lossy().replace('\\', "/");
-    if !state_raw.is_empty() && cmd.contains(&state_raw) {
-        return true;
-    }
-    if let Some(resolved) = resolve_lexical(state_dir) {
-        let state_norm = resolved.to_string_lossy().replace('\\', "/");
-        if !state_norm.is_empty() && cmd.contains(&state_norm) {
-            return true;
-        }
-    }
-    cmd.contains(".hz/state/kernel") || cmd.contains(".hzcode/kernel")
+    shell_references_kernel_state_with_case(command, state_dir, cfg!(windows))
 }
 
 /// `.hz/MEMORY.md` (or legacy `.hzcode/MEMORY.md`) beside the kernel state tree.
@@ -1221,13 +1546,19 @@ fn memory_manifest_path(state_dir: &Path) -> PathBuf {
 
 fn is_memory_manifest_write(state_dir: &Path, target: &Path) -> bool {
     let manifest = memory_manifest_path(state_dir);
-    let Some(manifest_parent) = manifest.parent() else {
+    let Some(manifest_resolved) = resolve_lexical(&manifest) else {
+        return true;
+    };
+    let Some(target_resolved) = resolve_lexical(target) else {
         return false;
     };
-    if !resolves_inside(manifest_parent, target) {
+    let Some(manifest_parent) = manifest_resolved.parent() else {
+        return false;
+    };
+    if !path_starts_with_case(&target_resolved, manifest_parent, cfg!(windows)) {
         return false;
     }
-    target
+    target_resolved
         .file_name()
         .and_then(|n| n.to_str())
         .map(|n| n.eq_ignore_ascii_case("memory.md"))
@@ -1246,7 +1577,12 @@ fn is_memory_manifest_write(state_dir: &Path, target: &Path) -> bool {
 /// component window for the directory-scoped ones, so `.git/hooks/pre-commit`
 /// and `nested/repo/.github/workflows/ci.yml` are caught at any depth.
 fn is_sensitive_write(target: &Path) -> bool {
-    let resolved = resolve_lexical(target).unwrap_or_else(|| absolutize(target));
+    // Fail closed: an unresolvable path (e.g. symlink loop or unreadable
+    // component) must require explicit approval rather than falling back to
+    // un-resolved `absolutize`.
+    let Some(resolved) = resolve_lexical(target) else {
+        return true;
+    };
     let parts: Vec<&str> = resolved
         .components()
         .filter_map(|component| match component {
@@ -1257,15 +1593,34 @@ fn is_sensitive_write(target: &Path) -> bool {
 
     for (index, part) in parts.iter().enumerate() {
         // `.git/hooks` and everything under it; `.git/config` exactly.
-        if *part == ".git" {
+        if part.eq_ignore_ascii_case(".git") {
             match parts.get(index + 1) {
-                Some(&"hooks") => return true,
-                Some(&"config") if index + 2 == parts.len() => return true,
+                Some(next) if next.eq_ignore_ascii_case("hooks") => return true,
+                Some(next) if next.eq_ignore_ascii_case("config") && index + 2 == parts.len() => {
+                    return true;
+                }
                 _ => {}
             }
         }
         // `.github/workflows` and everything under it.
-        if *part == ".github" && parts.get(index + 1) == Some(&"workflows") {
+        if part.eq_ignore_ascii_case(".github")
+            && parts
+                .get(index + 1)
+                .is_some_and(|next| next.eq_ignore_ascii_case("workflows"))
+        {
+            return true;
+        }
+        // `.husky` directory and everything under it.
+        if part.eq_ignore_ascii_case(".husky") {
+            return true;
+        }
+        // `.vscode/tasks.json` executes arbitrary workspace tasks.
+        if part.eq_ignore_ascii_case(".vscode")
+            && parts
+                .get(index + 1)
+                .is_some_and(|next| next.eq_ignore_ascii_case("tasks.json"))
+            && index + 2 == parts.len()
+        {
             return true;
         }
     }
@@ -1273,24 +1628,43 @@ fn is_sensitive_write(target: &Path) -> bool {
     let Some(base) = resolved.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if base == ".env" || base.starts_with(".env.") {
+    let base_lower = base.to_ascii_lowercase();
+    if base_lower == ".env"
+        || base_lower.starts_with(".env.")
+        || base_lower == "dockerfile"
+        || base_lower.starts_with("dockerfile.")
+    {
         return true;
     }
     matches!(
-        base,
+        base_lower.as_str(),
         "package.json"
             | "package-lock.json"
             | "bun.lock"
             | "bun.lockb"
             | "pnpm-lock.yaml"
             | "yarn.lock"
-            | "Cargo.lock"
+            | "cargo.toml"
+            | "cargo.lock"
+            | "build.rs"
+            | "pyproject.toml"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
             | ".gitlab-ci.yml"
-            | "Makefile"
-            | "Dockerfile"
+            | "makefile"
+            | "gnumakefile"
             | ".bashrc"
             | ".zshrc"
             | ".profile"
+            | ".bash_profile"
+            | ".zprofile"
+            | ".zshenv"
+            | ".npmrc"
+            | ".pypirc"
+            | ".netrc"
+            | ".gitmodules"
+            | ".gitconfig"
+            | ".husky"
     )
 }
 
@@ -1306,16 +1680,25 @@ fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
+/// One typed step of a lexical path walk. Prefix must stay typed: on Windows a
+/// bare `C:` component followed by a root reset would otherwise lose the drive.
+#[derive(Debug, Clone)]
+enum LexStep {
+    Prefix(OsString),
+    Root,
+    Name(OsString),
+}
+
 /// Append a path's components to the back of the work queue.
-fn enqueue_back(pending: &mut VecDeque<OsString>, path: &Path) {
+fn enqueue_back(pending: &mut VecDeque<LexStep>, path: &Path) {
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => pending.push_back(prefix.as_os_str().to_os_string()),
-            Component::RootDir => {
-                pending.push_back(OsString::from(std::path::MAIN_SEPARATOR_STR))
+            Component::Prefix(prefix) => {
+                pending.push_back(LexStep::Prefix(prefix.as_os_str().to_os_string()))
             }
-            Component::Normal(name) => pending.push_back(name.to_os_string()),
-            Component::ParentDir => pending.push_back(OsString::from("..")),
+            Component::RootDir => pending.push_back(LexStep::Root),
+            Component::Normal(name) => pending.push_back(LexStep::Name(name.to_os_string())),
+            Component::ParentDir => pending.push_back(LexStep::Name(OsString::from(".."))),
             Component::CurDir => {}
         }
     }
@@ -1323,14 +1706,16 @@ fn enqueue_back(pending: &mut VecDeque<OsString>, path: &Path) {
 
 /// Prepend a path's components to the front of the work queue (a symlink's
 /// target is spliced in where the link was).
-fn enqueue_front(pending: &mut VecDeque<OsString>, path: &Path) {
-    let mut parts: Vec<OsString> = Vec::new();
+fn enqueue_front(pending: &mut VecDeque<LexStep>, path: &Path) {
+    let mut parts: Vec<LexStep> = Vec::new();
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_os_string()),
-            Component::RootDir => parts.push(OsString::from(std::path::MAIN_SEPARATOR_STR)),
-            Component::Normal(name) => parts.push(name.to_os_string()),
-            Component::ParentDir => parts.push(OsString::from("..")),
+            Component::Prefix(prefix) => {
+                parts.push(LexStep::Prefix(prefix.as_os_str().to_os_string()))
+            }
+            Component::RootDir => parts.push(LexStep::Root),
+            Component::Normal(name) => parts.push(LexStep::Name(name.to_os_string())),
+            Component::ParentDir => parts.push(LexStep::Name(OsString::from(".."))),
             Component::CurDir => {}
         }
     }
@@ -1354,36 +1739,51 @@ fn resolve_lexical(path: &Path) -> Option<PathBuf> {
     const MAX_HOPS: usize = 40;
     let start = absolutize(path);
     let mut out = PathBuf::new();
-    let mut pending: VecDeque<OsString> = VecDeque::new();
+    let mut prefix: Option<OsString> = None;
+    let mut pending: VecDeque<LexStep> = VecDeque::new();
     enqueue_back(&mut pending, &start);
 
     let mut hops = 0usize;
-    while let Some(name) = pending.pop_front() {
-        if name == OsStr::new(std::path::MAIN_SEPARATOR_STR) {
-            // A root component restarts the walk at the filesystem root (this is
-            // how an absolute symlink target is spliced in).
-            out = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
-            continue;
-        }
-        if name == OsStr::new("..") {
-            out.pop(); // never escapes the root: pop() is a no-op at "/"
-            continue;
-        }
-        let candidate = out.join(&name);
-        match fs::symlink_metadata(&candidate) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                hops += 1;
-                if hops > MAX_HOPS {
-                    return None; // a link loop (or an absurd chain)
-                }
-                let target = fs::read_link(&candidate).ok()?;
-                enqueue_front(&mut pending, &target);
+    while let Some(step) = pending.pop_front() {
+        match step {
+            LexStep::Prefix(p) => {
+                prefix = Some(p.clone());
+                out = PathBuf::from(p);
+                continue;
             }
-            Ok(_) => out = candidate,
-            // Not created yet: the remaining components can only be lexical.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => out = candidate,
-            // Unreadable component (EACCES, ...): fail closed.
-            Err(_) => return None,
+            LexStep::Root => {
+                // A root component restarts the walk at the filesystem root.
+                // On Windows keep the drive prefix; dropping it made every
+                // resolved absolute path relative (and failed absolute checks).
+                out = match &prefix {
+                    Some(p) => PathBuf::from(p).join(std::path::MAIN_SEPARATOR_STR),
+                    None => PathBuf::from(std::path::MAIN_SEPARATOR_STR),
+                };
+                continue;
+            }
+            LexStep::Name(name) if name == OsStr::new("..") => {
+                out.pop(); // never escapes the root: pop() is a no-op at "/"
+                continue;
+            }
+            LexStep::Name(name) => {
+                let name = name;
+                let candidate = out.join(&name);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        hops += 1;
+                        if hops > MAX_HOPS {
+                            return None; // a link loop (or an absurd chain)
+                        }
+                        let target = fs::read_link(&candidate).ok()?;
+                        enqueue_front(&mut pending, &target);
+                    }
+                    Ok(_) => out = candidate,
+                    // Not created yet: the remaining components can only be lexical.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => out = candidate,
+                    // Unreadable component (EACCES, ...): fail closed.
+                    Err(_) => return None,
+                }
+            }
         }
     }
     Some(out)
@@ -1457,7 +1857,10 @@ mod tests {
         assert_eq!(write_decision(&guard, &alias).decision, "deny");
 
         // 4. a symlinked middle component
-        assert_eq!(write_decision(&guard, &alias.join("policy.json")).decision, "deny");
+        assert_eq!(
+            write_decision(&guard, &alias.join("policy.json")).decision,
+            "deny"
+        );
 
         // 5. a relative link target (`../../<state-name>/policy.json`)
         let nested = workspace.join("sub");
@@ -1465,7 +1868,10 @@ mod tests {
         let relative = nested.join("rel");
         let state_name = state.file_name().expect("state name");
         symlink(
-            PathBuf::from("..").join("..").join(state_name).join("policy.json"),
+            PathBuf::from("..")
+                .join("..")
+                .join(state_name)
+                .join("policy.json"),
             &relative,
         )
         .expect("relative link");
@@ -1600,15 +2006,22 @@ mod tests {
             ".envrc",
             "package.json.bak",
             "Makefile.in",
-            "Dockerfile.dev",
             ".github/ISSUE_TEMPLATE/bug.yml",
             "hooks/pre-commit",
             ".git/objects/ab",
         ];
         for rel in ordinary {
             let decision = write_decision(&guard, &workspace.join(rel));
-            assert_eq!(decision.decision, "allow", "{}: {}", rel, decision.reason);
+            assert_eq!(decision.decision, "ask", "{}: {}", rel, decision.reason);
+            assert!(decision.lease_id.as_deref().is_some_and(|s| !s.is_empty()), "{}: {}", rel, decision.reason);
         }
+
+        // Unresolvable symlink loop fails closed in is_sensitive_write (never falls back to absolutize)
+        let loop_a = workspace.join("sens-loop-a");
+        let loop_b = workspace.join("sens-loop-b");
+        symlink(&loop_b, &loop_a).expect("loop a");
+        symlink(&loop_a, &loop_b).expect("loop b");
+        assert!(is_sensitive_write(&loop_a), "symlink loop must fail closed as sensitive write");
 
         // Scope is irrelevant to the structural rule: an outside path asks too.
         let outside = scratch("outside-sensitive");
@@ -1646,7 +2059,8 @@ mod tests {
 
         // Wildcard lease was not consumed by sensitive-write: ordinary write uses it.
         let ordinary = write_decision(&guard, &workspace.join("notes.txt"));
-        assert_eq!(ordinary.decision, "allow", "{}", ordinary.reason);
+        assert_eq!(ordinary.decision, "ask", "{}", ordinary.reason);
+        assert!(ordinary.lease_id.as_deref().is_some_and(|s| !s.is_empty()), "{}", ordinary.reason);
         assert!(
             ordinary.reason.contains(&lease.lease_id),
             "{}",
@@ -1679,7 +2093,7 @@ mod tests {
 
         let lease = guard.issue_lease("fs.write", &target_s, 60_000, None, None);
         let allowed = write_decision(&guard, &target);
-        assert_eq!(allowed.decision, "allow", "{}", allowed.reason);
+        assert_eq!(allowed.decision, "ask", "{}", allowed.reason);
         assert_eq!(allowed.lease_id.as_deref(), Some(lease.lease_id.as_str()));
         assert!(allowed.reason.contains("exact"), "{}", allowed.reason);
 
@@ -1746,7 +2160,11 @@ mod tests {
         let guard = Guard::new(&state);
         let decision = write_decision(&guard, &workspace.join(".env"));
         assert_eq!(decision.decision, "deny", "{}", decision.reason);
-        assert!(decision.reason.contains("policy deny"), "{}", decision.reason);
+        assert!(
+            decision.reason.contains("policy deny"),
+            "{}",
+            decision.reason
+        );
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&workspace);
     }
@@ -1821,7 +2239,10 @@ mod tests {
         let target = ws_a.join("note.txt");
         let a = write_decision(&guard, &target);
         assert!(a.intent_digest.is_some(), "{a:?}");
-        assert_eq!(a.workspace_binding.as_ref().map(|b| b.inode), Some(binding_a.inode));
+        assert_eq!(
+            a.workspace_binding.as_ref().map(|b| b.inode),
+            Some(binding_a.inode)
+        );
         guard.set_workspace_binding(Some(binding_b.clone()));
         let b = write_decision(&guard, &target);
         assert_ne!(
@@ -1843,8 +2264,8 @@ mod tests {
         let target = ws.join("note.txt");
         let a = write_decision(&guard, &target);
         let b = write_decision(&guard, &target);
-        assert_eq!(a.decision, "allow", "{}", a.reason);
-        assert_eq!(b.decision, "allow", "{}", b.reason);
+        assert_eq!(a.decision, "ask", "{}", a.reason);
+        assert_eq!(b.decision, "ask", "{}", b.reason);
         let la = a.lease_id.expect("first allow mints lease");
         let lb = b.lease_id.expect("second allow mints lease");
         assert_ne!(la, lb, "each allow must mint a fresh citation");
@@ -1860,17 +2281,18 @@ mod tests {
 
     #[test]
     fn g1_wire_projects_allow_to_ask_with_lease_citation() {
-        // G1 / ruling 637: frozen decision remains "allow"; additive g1 is Ask/Deny-only.
+        // G1 / ruling 637 (owner-approved breaking removal of "allow"): decision is always Ask/Deny-only.
         let state = scratch("state-g1-wire");
         fs::create_dir_all(state.join("events")).expect("state dirs");
         write_allow_all_policy(&state);
         let guard = Guard::new(&state);
         let ws = scratch("ws-g1-wire");
         let allowed = write_decision(&guard, &ws.join("ok.txt"));
-        assert_eq!(allowed.decision, "allow");
+        assert_eq!(allowed.decision, "ask");
         assert_eq!(allowed.g1_decision(), "ask");
         assert!(allowed.lease_id.is_some());
         let json = allowed.to_json();
+        assert_eq!(json["decision"], json!("ask"));
         assert_eq!(json["g1"], json!("ask"));
         assert!(json.get("leaseId").is_some());
         write_deny_all_policy(&state);
@@ -1899,7 +2321,7 @@ mod tests {
         } else {
             std::env::remove_var("HZ_GUARD_G1_WIRE");
         }
-        assert_eq!(allowed.decision, "allow");
+        assert_eq!(allowed.decision, "ask");
         assert_eq!(json["decision"], json!("ask"));
         assert_eq!(json["g1"], json!("ask"));
         assert!(json.get("leaseId").is_some());
@@ -1934,7 +2356,7 @@ mod tests {
                 Some("sess-9"),
             )
             .expect("check");
-        assert_eq!(ok.decision, "allow");
+        assert_eq!(ok.decision, "ask");
         assert_eq!(ok.lease_id.as_deref(), Some(lease.lease_id.as_str()));
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&ws);
@@ -1942,6 +2364,7 @@ mod tests {
 
     #[test]
     fn g1_wire_v2_off_keeps_frozen_allow_on_decision_field() {
+        // Owner-approved G1 breaking removal: decision is always "ask" + leaseId even when HZ_GUARD_G1_WIRE is unset.
         let state = scratch("state-g1-wire-legacy");
         fs::create_dir_all(state.join("events")).expect("state dirs");
         write_allow_all_policy(&state);
@@ -1954,8 +2377,9 @@ mod tests {
         if let Some(p) = prev {
             std::env::set_var("HZ_GUARD_G1_WIRE", p);
         }
-        assert_eq!(json["decision"], json!("allow"));
+        assert_eq!(json["decision"], json!("ask"));
         assert_eq!(json["g1"], json!("ask"));
+        assert!(json["leaseId"].as_str().is_some_and(|s| !s.is_empty()));
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&ws);
     }
@@ -2017,5 +2441,255 @@ mod tests {
             decision.reason
         );
         let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn execpolicy_allow_rejects_shell_control_metacharacters() {
+        let dir = scratch("execpolicy-metachar");
+        fs::create_dir_all(&dir).unwrap();
+        let allowlist = r#"[{"program":"git","args":["status"],"decision":"allow"}]"#;
+        fs::write(dir.join(execpolicy::ALLOWLIST_FILE), allowlist).unwrap();
+        let guard = Guard::new(&dir);
+
+        let plain = guard
+            .check(
+                &GuardAction {
+                    kind: "shell.exec".to_string(),
+                    target: "git status".to_string(),
+                },
+                Some("workspace"),
+                &[],
+                None,
+            )
+            .unwrap();
+        assert_eq!(plain.decision, "ask", "plain allowlisted command should admit via G1 ask + lease");
+        assert!(plain.lease_id.as_deref().is_some_and(|s| !s.is_empty()), "plain allowlisted command must mint leaseId");
+
+        for compound in [
+            "git status; rm -rf /",
+            "git status && id",
+            "git status | cat",
+            "git status `id`",
+            "git status $(id)",
+            "git status > /tmp/pwn",
+            "git status < /etc/passwd",
+            "git status\nid",
+            "git status\rid",
+            "git status 'foo'",
+            "git status \"foo\"",
+            "git status \\n",
+        ] {
+            let decision = guard
+                .check(
+                    &GuardAction {
+                        kind: "shell.exec".to_string(),
+                        target: compound.to_string(),
+                    },
+                    Some("workspace"),
+                    &[],
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                decision.decision, "ask",
+                "compound command {:?} must fall through to ask, got {:?}",
+                compound, decision
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_sensitive_write_is_case_insensitive_and_covers_new_dotfiles() {
+        for p in [
+            "/ws/MAKEFILE",
+            "/ws/Dockerfile",
+            "/ws/DOCKERFILE",
+            "/ws/CARGO.LOCK",
+            "/ws/.ENV",
+            "/ws/.Env.local",
+            "/ws/.GIT/HOOKS/pre-commit",
+            "/ws/.GIT/CONFIG",
+            "/ws/.GITHUB/WORKFLOWS/ci.yml",
+            "/ws/.npmrc",
+            "/ws/.NPMRC",
+            "/ws/.pypirc",
+            "/ws/.netrc",
+            "/ws/.gitmodules",
+            "/ws/.husky/pre-commit",
+            "/ws/.HUSKY/commit-msg",
+            "/ws/.bash_profile",
+            "/ws/.zprofile",
+            "/ws/.zshenv",
+        ] {
+            assert!(
+                is_sensitive_write(Path::new(p)),
+                "expected sensitive write for {p}"
+            );
+        }
+        assert!(!is_sensitive_write(Path::new("/ws/src/main.rs")));
+    }
+}
+
+#[cfg(test)]
+mod track1_hardening_tests {
+    use super::*;
+    use std::fs;
+
+    fn unique_scratch(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "hz-guard-track1-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn p1_1_memory_manifest_blocks_symlink_alias_existing_and_dangling() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_scratch("mem-symlink");
+        let state_dir = root.join(".hz").join("state").join("kernel");
+        fs::create_dir_all(&state_dir).unwrap();
+        let manifest = root.join(".hz").join("MEMORY.md");
+
+        // Dangling symlink notes.txt -> .hz/MEMORY.md must be caught.
+        let dangling_alias = root.join("notes.txt");
+        symlink(&manifest, &dangling_alias).unwrap();
+        assert!(
+            is_memory_manifest_write(&state_dir, &dangling_alias),
+            "dangling symlink to .hz/MEMORY.md must be blocked"
+        );
+
+        // Existing target symlink notes2.txt -> .hz/MEMORY.md must also be caught.
+        fs::write(&manifest, "# memory\n").unwrap();
+        let existing_alias = root.join("notes2.txt");
+        symlink(&manifest, &existing_alias).unwrap();
+        assert!(
+            is_memory_manifest_write(&state_dir, &existing_alias),
+            "existing symlink to .hz/MEMORY.md must be blocked"
+        );
+
+        // Unrelated file in workspace must not trigger.
+        let benign = root.join("plain.txt");
+        fs::write(&benign, "ok").unwrap();
+        assert!(!is_memory_manifest_write(&state_dir, &benign));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn p1_2_and_p2_sensitive_write_covers_build_container_vscode_and_gitconfig() {
+        let root = unique_scratch("sensitive-writes");
+        let sensitive = [
+            root.join("GNUmakefile"),
+            root.join("Cargo.toml"),
+            root.join("build.rs"),
+            root.join("pyproject.toml"),
+            root.join("Dockerfile.prod"),
+            root.join("Dockerfile.dev"),
+            root.join("docker-compose.yml"),
+            root.join(".vscode").join("tasks.json"),
+            root.join(".gitconfig"),
+        ];
+        for path in &sensitive {
+            assert!(
+                is_sensitive_write(path),
+                "expected sensitive write protection for {}",
+                path.display()
+            );
+        }
+        assert!(!is_sensitive_write(&root.join("src").join("lib.rs")));
+        assert!(!is_sensitive_write(&root.join(".vscode").join("settings.json")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn p1_3_kernel_state_protected_handles_windows_case_drives_quotes_and_globs() {
+        let win_state = Path::new(r"C:\Users\Alice\Repo\.hz\state\kernel");
+        // Case-insensitive path containment with mixed slashes and drive casing.
+        assert!(path_starts_with_case(
+            Path::new(r"c:/users/alice/repo/.hz/state/kernel/policy.json"),
+            win_state,
+            true
+        ));
+        assert!(path_starts_with_case(
+            Path::new(r"C:\USERS\ALICE\REPO\.HZ\STATE\KERNEL\events.jsonl"),
+            win_state,
+            true
+        ));
+        assert!(!path_starts_with_case(
+            Path::new(r"C:\Users\Alice\Repo\.hz\state\kernel2\policy.json"),
+            win_state,
+            true
+        ));
+
+        // Shell checks: case-insensitive Windows drive paths.
+        assert!(shell_references_kernel_state_with_case(
+            r"type C:\USERS\ALICE\REPO\.HZ\STATE\KERNEL\policy.json",
+            win_state,
+            true
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            r"cat c:/users/alice/repo/.hz/state/kernel/policy.json",
+            win_state,
+            true
+        ));
+
+        // Quoted / escaped references to .hz/state/kernel.
+        let unix_state = Path::new("/tmp/ws/.hz/state/kernel");
+        assert!(shell_references_kernel_state_with_case(
+            r#"cat ".hz"/state/kernel/policy.json"#,
+            unix_state,
+            false
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            r#"echo x > .hz/'state'/"kernel"/policy.json"#,
+            unix_state,
+            false
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            r#"cat .hz/stat\e/kernel/policy.json"#,
+            unix_state,
+            false
+        ));
+
+        // Globbed references to .hz/state/kernel.
+        assert!(shell_references_kernel_state_with_case(
+            "cat .hz/state/kern*/policy.json",
+            unix_state,
+            false
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            "rm -rf .hz/*/kernel",
+            unix_state,
+            false
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            "cat .hz/stat?/k[e]rnel/policy.json",
+            unix_state,
+            false
+        ));
+        assert!(shell_references_kernel_state_with_case(
+            "rm -rf .hz/state/*",
+            unix_state,
+            false
+        ));
+
+        // Non-matching benign commands must not false-positive.
+        assert!(!shell_references_kernel_state_with_case(
+            "ls -la src/*.rs",
+            unix_state,
+            false
+        ));
+        assert!(!shell_references_kernel_state_with_case(
+            "echo */*/*",
+            unix_state,
+            false
+        ));
     }
 }

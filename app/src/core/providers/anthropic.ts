@@ -14,12 +14,13 @@ import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
 import { formatObservationMessages, NO_TOOL_OUTPUT, toolResultContent, toolResultIsMultipart } from "./tool-result-content";
 import type { MessageFormatter } from "./message-formatter";
-import { toolInputErrorEvent, validateFinalToolArguments } from "./tool-call-assembly";
+import { finalizeAssembledToolCall, toolInputErrorEvent, validateFinalToolArguments } from "./tool-call-assembly";
 import { parseJsonObject } from "../json-repair";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
 import { maybeDumpProviderRequest } from "./request-dump";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
+import { maskSecrets } from "../compaction";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 import {
   isProviderTimeoutError,
@@ -44,6 +45,8 @@ export interface AnthropicSettings {
    * when set, the resolved dialect renders messages and observations.
    */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
 }
 
 const API_VERSION = "2023-06-01";
@@ -155,6 +158,7 @@ interface UsageShape {
   outputTokens?: number;
   cacheCreationInputTokens?: number;
   cacheReadInputTokens?: number;
+  nonCachedInputTokens?: number;
 }
 
 async function* streamAnthropic(
@@ -189,8 +193,18 @@ async function* streamAnthropic(
     stream: true,
   };
   if (cached.system !== undefined && cached.system !== "") body.system = cached.system;
-  if (Array.isArray(wire.tools) && wire.tools.length > 0) body.tools = toAnthropicTools(wire.tools);
+  if (Array.isArray(wire.tools) && wire.tools.length > 0) {
+    body.tools = toAnthropicTools(wire.tools);
+    if (wire.toolChoice === "none") body.tool_choice = { type: "none" };
+    else if (wire.toolChoice === "auto") body.tool_choice = { type: "auto" };
+    else if (wire.toolChoice === "required") body.tool_choice = { type: "any" };
+  }
   await maybeDumpProviderRequest("anthropic", body);
+
+  const normalizedHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(settings.headers ?? {})) {
+    normalizedHeaders[k.toLowerCase()] = v;
+  }
 
   let response: Response;
   const retries: string[] = [];
@@ -201,6 +215,7 @@ async function* streamAnthropic(
       {
         method: "POST",
         headers: {
+          ...normalizedHeaders,
           "content-type": "application/json",
           "x-api-key": settings.apiKey,
           "anthropic-version": API_VERSION,
@@ -212,6 +227,7 @@ async function* streamAnthropic(
       {
         ...settings.retry,
         timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
+        breakerRoute: `anthropic@${baseUrl}`,
         // 429 (rate limit) and 529 (overloaded) are routine on this API; a turn
         // must ride them out rather than die on the first one.
         onRetry: (info) => retries.push(retryNotice("anthropic", info, retryAttempts)),
@@ -234,7 +250,7 @@ async function* streamAnthropic(
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = maskSecrets(await response.text().catch(() => ""));
     const expired = deadline.timedOut();
     if (expired) {
       yield providerTimeoutEvent("anthropic", expired, "request");
@@ -286,8 +302,19 @@ async function* streamAnthropic(
     for (const index of indexes) {
       const info = meta.get(index);
       if (!info) continue;
+      // D-7 / H-5: the stream ended mid-block, so the accumulated JSON may be
+      // cut off. Validate the FINAL assembled arguments exactly as a clean
+      // content_block_stop does: a complete object passes through, syntax-only
+      // damage is repaired, a truncated blob becomes a structured
+      // tool_input_error instead of a tool_call with malformed arguments.
+      const raw = anthropicToolArguments(args.get(index) ?? "", info.input);
+      const validated = validateFinalToolArguments({ id: info.id, name: info.name, arguments: raw });
+      if (validated.ok === false) {
+        yield toolInputErrorEvent(validated.refusal);
+        continue;
+      }
       emittedTool = true;
-      yield { type: "tool_call", id: info.id, name: info.name, arguments: anthropicToolArguments(args.get(index) ?? "", info.input) };
+      yield { type: "tool_call", id: info.id, name: info.name, arguments: validated.arguments };
     }
     meta.clear();
     args.clear();
@@ -310,11 +337,24 @@ async function* streamAnthropic(
         case "message_start": {
           const u = event.message?.usage;
           if (u && typeof u === "object") {
-            if (typeof u.input_tokens === "number") usage.inputTokens = u.input_tokens;
-            if (typeof u.cache_creation_input_tokens === "number") {
-              usage.cacheCreationInputTokens = u.cache_creation_input_tokens;
+            const rawInput = typeof u.input_tokens === "number" ? u.input_tokens : undefined;
+            const cacheCreate =
+              typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : undefined;
+            const cacheRead =
+              typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : undefined;
+            if (cacheCreate !== undefined) usage.cacheCreationInputTokens = cacheCreate;
+            if (cacheRead !== undefined) usage.cacheReadInputTokens = cacheRead;
+            if (rawInput !== undefined) {
+              if (cacheCreate !== undefined || cacheRead !== undefined) {
+                // Anthropic's `input_tokens` is already non-cached; normalize
+                // `inputTokens` to inclusive total (matching openai-usage.ts)
+                // and preserve `nonCachedInputTokens` explicitly.
+                usage.nonCachedInputTokens = rawInput;
+                usage.inputTokens = rawInput + (cacheCreate ?? 0) + (cacheRead ?? 0);
+              } else {
+                usage.inputTokens = rawInput;
+              }
             }
-            if (typeof u.cache_read_input_tokens === "number") usage.cacheReadInputTokens = u.cache_read_input_tokens;
           }
           break;
         }
@@ -357,17 +397,25 @@ async function* streamAnthropic(
             meta.delete(index);
             const raw = anthropicToolArguments(args.get(index) ?? "", info.input);
             args.delete(index);
-            // H-5: FINAL assembled args never go downstream malformed. Syntax-
-            // only repair is admitted; an unrepairable / cut-off blob becomes a
-            // structured tool_input_error instead of a broken tool_call.
-            const validated = validateFinalToolArguments({ id: info.id, name: info.name, arguments: raw });
-            if (validated.ok === false) {
-              yield toolInputErrorEvent(validated.refusal);
-              break;
-            }
+            // Track A: strict finish parse on content_block_stop. Valid JSON
+            // objects emit cleanly; malformed/truncated/non-object payloads
+            // attach `toolInputError` so loop.ts returns a self-correction
+            // tool result without executing the tool or crashing the turn.
+            const finalized = finalizeAssembledToolCall({ id: info.id, name: info.name, arguments: raw });
             emittedTool = true;
-            const call: ToolCall = { id: info.id, name: info.name, arguments: validated.arguments };
-            yield { type: "tool_call", id: call.id, name: call.name, arguments: call.arguments };
+            const call: ToolCall = {
+              id: finalized.id,
+              name: finalized.name,
+              arguments: finalized.arguments,
+              ...(finalized.toolInputError !== undefined ? { toolInputError: finalized.toolInputError } : {}),
+            };
+            yield {
+              type: "tool_call",
+              id: call.id,
+              name: call.name,
+              arguments: call.arguments,
+              ...(call.toolInputError !== undefined ? { toolInputError: call.toolInputError } : {}),
+            };
           }
           break;
         }
@@ -416,13 +464,15 @@ async function* streamAnthropic(
     usage.inputTokens === undefined &&
     usage.outputTokens === undefined &&
     usage.cacheCreationInputTokens === undefined &&
-    usage.cacheReadInputTokens === undefined
+    usage.cacheReadInputTokens === undefined &&
+    usage.nonCachedInputTokens === undefined
       ? undefined
       : {
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           cacheCreationInputTokens: usage.cacheCreationInputTokens,
           cacheReadInputTokens: usage.cacheReadInputTokens,
+          ...(usage.nonCachedInputTokens !== undefined ? { nonCachedInputTokens: usage.nonCachedInputTokens } : {}),
         };
   yield { type: "done", stopReason, usage: finalUsage, ...(thinkingEcho ? { thinking: thinkingEcho } : {}) };
 }

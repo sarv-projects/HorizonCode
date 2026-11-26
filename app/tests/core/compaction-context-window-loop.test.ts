@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { Provider, ProviderEvent, ProviderRequest, RuntimeEvent } from "../../src/contracts";
-import { CONTEXT_WINDOW_COMPACTION_NOTICE } from "../../src/core/compaction-context-window";
+import { CONTEXT_WINDOW_COMPACTION_NOTICE, EMERGENCY_SHRINK_LADDER } from "../../src/core/compaction-context-window";
 import { KernelClient } from "../../src/core/kernel";
 import { runTurn, type LoopDeps } from "../../src/core/loop";
 import { SessionStore } from "../../src/core/session";
@@ -112,7 +112,7 @@ describe("CONTEXT_WINDOW_EXCEEDED compaction recovery", () => {
     };
     const { exit } = await runTurn(deps, "go");
     expect(exit.terminal).toBe("failed");
-    expect(seen.filter((e) => e.type === "notice" && e.message === CONTEXT_WINDOW_COMPACTION_NOTICE)).toHaveLength(1);
+    expect(seen.filter((e) => e.type === "notice" && e.message === CONTEXT_WINDOW_COMPACTION_NOTICE)).toHaveLength(EMERGENCY_SHRINK_LADDER.length);
     expect(seen.filter((e) => e.type === "error").length).toBeGreaterThanOrEqual(1);
   });
 });

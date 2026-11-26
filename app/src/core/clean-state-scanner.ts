@@ -85,7 +85,8 @@ function walkDirectory(
       }
 
       // 2. Debug logs in source
-      if (entry.name.endsWith(".log") && (relPath.startsWith("src/") || relPath.startsWith("app/"))) {
+      const normRel = relPath.replace(/\\/g, "/");
+      if (entry.name.endsWith(".log") && (normRel.startsWith("src/") || normRel.startsWith("app/"))) {
         findings.push({
           path: relPath,
           category: "debug_log",

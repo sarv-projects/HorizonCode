@@ -242,7 +242,7 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 
 ### 2.8 Approval prompts
 
-> **PARTIAL.** Shipped: the single-key approval card (ruling 85) and the guardian line (ruling 60). **DESIGN ONLY: NOT IMPLEMENTED:** exact-effect rendering bound to the intent digest. Deferral note D8.
+> **PARTIAL.** Shipped: the 3-stage approval card (`askStagedKey`: `permission` -> `always_confirm` / `reject_steer`; evolved from ruling 85) and the guardian line (ruling 60). **DESIGN ONLY: NOT IMPLEMENTED:** exact-effect rendering bound to the intent digest. Deferral note D8.
 
 | # | Rule |
 |---|---|

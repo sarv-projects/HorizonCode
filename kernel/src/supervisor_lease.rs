@@ -39,10 +39,7 @@ impl SupervisorLease {
                 .map_err(|e| {
                     format!("HZ_PRECONDITION_FAILED: supervisor lease unavailable: {e}")
                 })?;
-            return Ok(Self {
-                lock: None,
-                path,
-            });
+            return Ok(Self { lock: None, path });
         }
         let _ = fs::create_dir_all(state_dir);
         let path = state_dir.join("hzk.supervisor.lock");
@@ -57,7 +54,7 @@ impl SupervisorLease {
         {
             match ExclusiveOsFileLock::try_acquire(&path) {
                 Ok(lock) => {
-                    let _ = fs::write(&path, format!("{}\n", std::process::id()));
+                    let _ = lock.write_pid(std::process::id());
                     Ok(Self {
                         lock: Some(lock),
                         path,

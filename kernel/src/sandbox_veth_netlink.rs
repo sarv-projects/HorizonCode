@@ -26,13 +26,6 @@ struct CapUserData {
 
 #[cfg(target_os = "linux")]
 pub fn has_cap_net_admin() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    const SYS_CAPGET: i64 = 125;
-    #[cfg(target_arch = "aarch64")]
-    const SYS_CAPGET: i64 = 90;
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    return false;
-
     let mut hdr = CapUserHeader {
         version: _LINUX_CAPABILITY_VERSION_3,
         pid: 0,
@@ -49,18 +42,7 @@ pub fn has_cap_net_admin() -> bool {
             inheritable: 0,
         },
     ];
-    let ret: i64;
-    unsafe {
-        std::arch::asm!(
-            "syscall",
-            inlateout("rax") SYS_CAPGET => ret,
-            in("rdi") &mut hdr as *mut _ as u64,
-            in("rsi") data.as_mut_ptr() as u64,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
+    let ret = unsafe { libc::syscall(libc::SYS_capget, &mut hdr as *mut _, data.as_mut_ptr()) };
     if ret != 0 {
         return false;
     }

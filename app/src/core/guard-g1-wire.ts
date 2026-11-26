@@ -57,22 +57,16 @@ export function projectProductGuardG1WireDoctorEnv(
   return { ...env, HZ_GUARD_G1_WIRE: "1" };
 }
 
-/** Stamp additive `g1` and optionally project `decision` for HZ_GUARD_G1_WIRE=1 clients. */
-export function applyGuardG1Wire(decision: GuardDecision, env: NodeJS.ProcessEnv = process.env): GuardDecision {
+/** Stamp additive `g1` and enforce G1 Ask/Deny-only primary `decision`. */
+export function applyGuardG1Wire(decision: GuardDecision, _env: NodeJS.ProcessEnv = process.env): GuardDecision {
   const g1 = guardG1Decision(decision.decision);
-  const stamped: GuardDecision = { ...decision, g1 };
-  if (guardG1WireEnabled(env)) {
-    return { ...stamped, decision: g1 };
-  }
-  return stamped;
+  return { ...decision, decision: g1, g1 };
 }
 
 /**
- * Internal admission: true when the kernel admitted the action (legacy `allow`
- * or G1 V2 wire `ask` with a minted/consumed lease citation).
+ * Internal admission: true only when the kernel admitted the action via G1
+ * (`decision: "ask"` with a non-empty minted/consumed `leaseId` citation).
  */
 export function guardEffectivelyAllows(decision: GuardDecision): boolean {
-  if (decision.decision === "allow") return true;
-  if (decision.decision === "ask" && decision.leaseId !== undefined && decision.leaseId !== "") return true;
-  return false;
+  return decision.decision === "ask" && typeof decision.leaseId === "string" && decision.leaseId.trim() !== "";
 }

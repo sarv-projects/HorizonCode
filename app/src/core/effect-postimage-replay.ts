@@ -12,7 +12,16 @@ import { effectHostKernelMode } from "./effect-kernel-mutation-route";
 import { observePostimageDigest } from "./receipt-postimage";
 import { receiptsPath } from "./session-kernel-reconcile";
 
-const REPLAY_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit"]);
+const REPLAY_TOOLS = new Set([
+  "write",
+  "edit",
+  "apply_patch",
+  "ast_edit",
+  "multi_edit",
+  "shell",
+  "delete",
+  "fs.delete",
+]);
 
 export function postimageReplayEnabled(env: Record<string, string | undefined> = process.env): boolean {
   const raw = env.HZ_VERIFY_POSTIMAGE_REPLAY?.trim().toLowerCase();
@@ -41,7 +50,7 @@ export function postimageReplayDoctorPosture(
   const active = explicit || requireAuto;
   const base =
     "independent receipt postimage digest replay at `hzcode session verify` / `hzcode effect reconcile` " +
-    "(read-only re-read vs stored digest on write/edit/apply_patch/ast_edit/multi_edit receipts; kernel-routed ast_edit incl. unique `$$$` when postimagePath set — not full Rust observe)";
+    "(read-only re-read vs stored digest on write/edit/apply_patch/ast_edit/multi_edit/shell receipts; kernel-routed ast_edit incl. unique `$$$` when postimagePath set — not full Rust observe)";
   if (explicit) {
     return {
       active: true,

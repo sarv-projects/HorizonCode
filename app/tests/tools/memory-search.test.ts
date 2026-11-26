@@ -10,7 +10,13 @@ import { mockToolContext } from "./helpers";
 let workspace = "";
 
 afterEach(() => {
-  if (workspace) rmSync(workspace, { recursive: true, force: true });
+  if (workspace) {
+    try {
+      rmSync(workspace, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup on Windows (SQLite handle cleanup)
+    }
+  }
   workspace = "";
 });
 
@@ -42,5 +48,17 @@ describe("memory_search tool", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toContain("[project]");
     expect(result.output).toContain("gates");
+  });
+
+  test("rank:true opts into the fused ranking path (end-to-end wiring)", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-memtool-rank-"));
+    replaceMemoryIndex(workspace, ["alpha bravo charlie", "alpha delta echo"]);
+    const ctx = mockToolContext({ workspace, cwd: workspace, decision: "allow" });
+    const plain = await memorySearchTool.execute({ query: "alpha" }, ctx);
+    const ranked = await memorySearchTool.execute({ query: "alpha", rank: true }, ctx);
+    expect(plain.ok).toBe(true);
+    expect(ranked.ok).toBe(true);
+    // Both surfaces return the stored facts; the ranked path is exercised.
+    expect(ranked.output).toContain("alpha");
   });
 });

@@ -498,7 +498,7 @@ describe("ollama provider", () => {
 
 describe("config and factory", () => {
   /** A config path inside a fresh temp dir: no file exists there. */
-  const missingConfig = (): string => path.join(tempDir("hz-providers-expansion-"), "config.json");
+  const missingConfig = (): string => path.join(tempDir("hz-providers-expansion-"), ".config", "hzcode", "config.json");
 
   function configFor(overrides: Partial<HzConfig> = {}): HzConfig {
     return {
@@ -534,7 +534,7 @@ describe("config and factory", () => {
 
     // NVIDIA NIM: a first-class OpenAI-chat provider; its base already carries
     // /v1, so openAiChatCompletionsUrl appends only /chat/completions.
-    const nvidia = loadConfig({ HZ_PROVIDER: "NVIDIA" }, missingConfig());
+    const nvidia = loadConfig({ HZ_PROVIDER: "NVIDIA", HZ_NO_COMMITTED_SNAPSHOT: "1" }, missingConfig());
     expect(nvidia.provider).toBe("nvidia");
     expect(nvidia.model).toBe("minimaxai/minimax-m3.1-flash");
     expect(nvidia.baseUrl).toBe("https://integrate.api.nvidia.com/v1");

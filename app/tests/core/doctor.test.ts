@@ -10,7 +10,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, wri
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  checkCodeModeVm,
   checkRepoLicense,
+  checkR172StrictMode,
+  checkLocalHumanApprovalKey,
   doctorFixSuggestion,
   doctorExitCode,
   doctorPublication,
@@ -36,8 +39,12 @@ beforeEach(() => {
   workspace = mkdtempSync(path.join(tmpdir(), "hz-doctor-ws-"));
 });
 afterEach(() => {
-  rmSync(home, { recursive: true, force: true });
-  rmSync(workspace, { recursive: true, force: true });
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {}
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch {}
 });
 
 test("repo.license is honest when root LICENSE is absent", () => {
@@ -499,6 +506,31 @@ const OKRUN = (cmd: string): SpawnResult =>
     ? { ok: true, status: 0, stdout: "git version 2.40.0\n", stderr: "" }
     : { ok: true, status: 0, stdout: "SELFTEST OK (25 checks)\n", stderr: "" };
 
+describe("local human key doctor posture (ruling 773)", () => {
+  test("doctor reports absent key and never claims human attestation", () => {
+    const isolatedHome = mkdtempSync(path.join(tmpdir(), "hz-doctor-human-"));
+    try {
+      const check = checkLocalHumanApprovalKey(fakeEnv({ home: isolatedHome }));
+      expect(check.status).toBe("warn");
+      expect(check.hint).toContain("not a cryptographic human");
+    } finally {
+      rmSync(isolatedHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R172 strict mode posture (ruling 754)", () => {
+  test("doctor reports the opt-in strict flag without claiming it is default", () => {
+    const off = checkR172StrictMode(fakeEnv());
+    expect(off.status).toBe("warn");
+    expect(off.hint).toContain("HZ_R172_REQUIRE_KEYED");
+
+    const on = checkR172StrictMode(fakeEnv({ env: { ...fakeEnv().env, HZ_R172_REQUIRE_KEYED: "1" } }));
+    expect(on.status).toBe("ok");
+    expect(on.detail).toContain("HZ_R172_REQUIRE_KEYED");
+  });
+});
+
 function fakeEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
   return {
     // The injected fake kernel cannot match the repository's real pin manifest;
@@ -807,7 +839,7 @@ describe("diagnose only", () => {
 describe("the real CLI", () => {
   const main = path.resolve(import.meta.dir, "../../src/main.ts");
   const run = (args: string[], env: Record<string, string>) =>
-    Bun.spawnSync(["bun", main, ...args], { env: { PATH: process.env.PATH ?? "", HOME: home, LANG: "C.UTF-8", ...env }, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync([process.execPath || "bun", main, ...args], { env: { PATH: process.env.PATH ?? "", HOME: home, LANG: "C.UTF-8", ...env }, stdout: "pipe", stderr: "pipe" });
 
   test("--json is machine readable, exits 0, and the key is not in it", () => {
     // Pin provider: Bun may load a repo `.env` that sets HZ_PROVIDER=openai and
@@ -825,12 +857,18 @@ describe("the real CLI", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.checks.map((c) => c.id)).toContain("kernel.selftest");
     expect(parsed.published?.some((b) => b.includes("saved allows exact-target rows"))).toBe(true);
-  });
+  }, 15_000);
   test("a broken config makes the command exit 1 and print FAIL", () => {
     writeConfig("{ nope");
     const r = run(["doctor", "--workspace", workspace], {});
     expect(r.exitCode).toBe(1);
     expect(r.stdout.toString()).toContain("[FAIL] config file");
+  }, 15_000);
+  test("code_mode.vm check runs real bytecode through the full VM stack", () => {
+    const c = checkCodeModeVm();
+    expect(c.id).toBe("code_mode.vm");
+    expect(c.status).toBe("ok");
+    expect(c.detail).toContain("42");
   });
   // Three real Bun starts (~1.2-1.8 s each on the /mnt/c workspace) exceed the
   // default 5 s under load; the assertion is about CLI semantics, not latency.

@@ -252,7 +252,7 @@ describe("H-5 Anthropic final tool-call arguments", () => {
     expect(lastDone(events).stopReason).toBe("tool_use");
   });
 
-  test("malformed-but-repairable args are repaired and emitted", async () => {
+  test("malformed non-JSON args carry structured toolInputError on content_block_stop", async () => {
     let events: ProviderEvent[] = [];
     await withServer(
       () => sseResponse(anthropicToolStream("toolu_fix", "read", ["{'path': 'a.ts',}"])),
@@ -264,11 +264,12 @@ describe("H-5 Anthropic final tool-call arguments", () => {
     );
     const calls = toolCallsOf(events);
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(calls[0]!.arguments)).toEqual({ path: "a.ts" });
+    expect(calls[0]!.toolInputError?.code).toBe("tool_input_error");
+    expect(calls[0]!.toolInputError?.message).toContain("Invalid JSON");
     expect(events.filter((e) => e.type === "error")).toHaveLength(0);
   });
 
-  test("truncated non-repairable args are refused, not emitted as a broken tool_call", async () => {
+  test("truncated non-repairable args attach toolInputError for loop self-correction", async () => {
     let events: ProviderEvent[] = [];
     await withServer(
       () => sseResponse(anthropicToolStream("toolu_bad", "shell", ['{"command":"rm -'])),
@@ -279,11 +280,11 @@ describe("H-5 Anthropic final tool-call arguments", () => {
         events = result.events;
       },
     );
-    expect(toolCallsOf(events)).toHaveLength(0);
-    const errors = events.filter((e) => e.type === "error") as Array<Extract<ProviderEvent, { type: "error" }>>;
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toContain("tool_input_error");
-    expect(errors[0]!.message).toContain("cut off");
+    const calls = toolCallsOf(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.toolInputError?.code).toBe("tool_input_error");
+    expect(calls[0]!.toolInputError?.message).toContain("Invalid JSON");
+    expect(events.filter((e) => e.type === "error")).toHaveLength(0);
   });
 });
 
@@ -294,7 +295,7 @@ describe("H-5 OpenAI final tool-call arguments (assembler)", () => {
     return sseFrame({ id: "chatcmpl-1", choices: [choice] });
   }
 
-  test("a truncated side-effecting final blob is refused with a structured error", async () => {
+  test("a truncated side-effecting final blob attaches structured toolInputError", async () => {
     const body =
       chunk({
         index: 0,
@@ -313,11 +314,11 @@ describe("H-5 OpenAI final tool-call arguments (assembler)", () => {
         events = result.events;
       },
     );
-    expect(toolCallsOf(events)).toHaveLength(0);
-    const errors = events.filter((e) => e.type === "error") as Array<Extract<ProviderEvent, { type: "error" }>>;
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toContain("tool_input_error");
-    expect(errors[0]!.message).toContain("cut off");
+    const calls = toolCallsOf(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.toolInputError?.code).toBe("tool_input_error");
+    expect(calls[0]!.toolInputError?.message).toContain("Invalid JSON");
+    expect(events.filter((e) => e.type === "error")).toHaveLength(0);
   });
 
   test("valid assembled args still emit a tool_call and tool_use done", async () => {

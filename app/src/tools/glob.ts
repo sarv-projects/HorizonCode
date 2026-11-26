@@ -3,18 +3,19 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { kernelStateDir } from "../core/owned-spawn";
-import { relPath, resolvePath } from "./helpers";
+import { relPath, resolveRealTarget } from "./helpers";
 import { gitIgnoredPaths } from "./ignore";
 
 const MAX_RESULTS = 300;
 const MAX_COLLECT = 5000;
 const MAX_SCANNED = 50_000;
-const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".hz", ".hzcode"]);
 
 /** True when any path segment is a directory we never descend into. */
 function skipPath(rel: string): boolean {
-  for (const segment of rel.split("/")) if (SKIP_DIRS.has(segment)) return true;
+  for (const segment of rel.split(/[\\/]/)) if (SKIP_DIRS.has(segment)) return true;
   return false;
 }
 
@@ -58,7 +59,14 @@ export const globTool: Tool = {
       // A slash-less pattern is meant recursively: '*.ts' -> '**/*.ts'.
       if (!pattern.includes("/") && !pattern.startsWith("**")) pattern = `**/${pattern}`;
 
-      const root = resolvePath(ctx.cwd, typeof args.path === "string" && args.path !== "" ? args.path : ".");
+      // D-1: guard and walk the REAL root. A directory symlink inside the
+      // workspace must not hide an outside tree behind an "inside" spelling.
+      const target = resolveRealTarget(
+        ctx.cwd,
+        typeof args.path === "string" && args.path !== "" ? args.path : ".",
+        ctx.workspace,
+      );
+      const root = target.real;
       const rootRel = relPath(ctx.cwd, root);
 
       const denied = await checkAccess(ctx, root, rootRel);
@@ -97,6 +105,7 @@ export const globTool: Tool = {
           }
         }
       } catch (e) {
+        tunnelPermissionError(e);
         return fail(msg(e));
       }
 
@@ -127,6 +136,7 @@ export const globTool: Tool = {
       const body = shown.join("\n");
       return { ok: true, output: notices.length === 0 ? body : `${body}\n${notices.join("\n")}` };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

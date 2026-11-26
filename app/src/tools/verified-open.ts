@@ -20,9 +20,11 @@
  * `/proc/self/fd`, so the fallback is weaker: the last component is pinned with
  * `O_NOFOLLOW` when the path is not already a symlink, and the descriptor is
  * compared by device+inode against the path plus classified through the same
- * helper. Residual there: an intermediate path component swapped inside the
- * window between classification and the effect. The general fix is
- * kernel-executed effects (NF-016).
+ * helper. Every ancestor from the parent through the workspace root is also
+ * re-statted after open (**959**). That detects a completed swap of an
+ * intermediate directory. It is not an atomic open, and a swap that lands
+ * after the post-stat is still unseen. The general fix is kernel-executed
+ * effects (NF-016).
  *
  * One more residual, on every platform: the open itself uses `O_CREAT` when the
  * path did not exist, so a racer that points the path into the state directory
@@ -37,6 +39,7 @@
 
 import { constants } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
+import * as path from "node:path";
 import type { GuardAction, ToolContext } from "../contracts";
 import { verifyFdInWorkspace } from "../core/sandbox-fd-verify";
 import { kernelStateDir, realpathish } from "../core/paths";
@@ -76,6 +79,51 @@ export interface VerifiedOpenOptions {
   exclusive?: boolean;
   /** Guard-approved real target; refuse when resolution moves before open. */
   expectedReal?: string;
+  /** Test seam: runs after the ancestor snapshot and before the post-open recheck. */
+  afterAncestorCapture?: () => Promise<void>;
+}
+
+export interface PathAncestorIdentity {
+  path: string;
+  dev: number;
+  ino: number;
+}
+
+function pathInsideOrEqual(root: string, dir: string): boolean {
+  if (dir === root) return true;
+  const rel = path.relative(root, dir);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/** Snapshot every directory from the file's parent up through the workspace root. */
+export async function capturePathAncestors(resolvedFile: string, workspace: string): Promise<PathAncestorIdentity[]> {
+  const root = path.resolve(workspace);
+  const ancestors: PathAncestorIdentity[] = [];
+  let current = path.dirname(path.resolve(resolvedFile));
+  while (pathInsideOrEqual(root, current)) {
+    const st = await lstat(current).catch(() => undefined);
+    if (st === undefined) break;
+    ancestors.push({ path: current, dev: st.dev, ino: st.ino });
+    if (current === root) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return ancestors;
+}
+
+/** Path of the first ancestor whose identity changed. `undefined` means the chain matches. */
+export function pathAncestorDrift(
+  before: readonly PathAncestorIdentity[],
+  after: readonly PathAncestorIdentity[],
+): string | undefined {
+  if (before.length !== after.length) return before[0]?.path ?? after[0]?.path ?? "ancestor chain";
+  for (let i = 0; i < before.length; i += 1) {
+    const left = before[i]!;
+    const right = after[i]!;
+    if (left.path !== right.path || left.dev !== right.dev || left.ino !== right.ino) return left.path;
+  }
+  return undefined;
 }
 
 /**
@@ -106,6 +154,9 @@ export async function openVerifiedWrite(
   opts: VerifiedOpenOptions = {},
 ): Promise<VerifiedWrite | { refusal: string }> {
   const stateDir = kernelStateDir(ctx.workspace);
+  const ancestorsPre = await capturePathAncestors(resolved, ctx.workspace);
+  const parentDir = path.dirname(resolved);
+  const parentPre = await lstat(parentDir).catch(() => undefined);
   const pre = await lstat(resolved).catch(() => undefined);
   // Pin the final component with O_NOFOLLOW when we are not deliberately writing
   // through an existing file-level symlink (verify-then-allow policy).
@@ -123,6 +174,29 @@ export async function openVerifiedWrite(
       return { refusal: `HZ_PRECONDITION_FAILED: write refused: ${resolved} became a symlink while being opened; nothing was written` };
     }
     throw err;
+  }
+
+  if (opts.afterAncestorCapture) await opts.afterAncestorCapture();
+
+  const ancestorsPost = await capturePathAncestors(resolved, ctx.workspace);
+  const drifted = pathAncestorDrift(ancestorsPre, ancestorsPost);
+  if (drifted !== undefined) {
+    await handle.close();
+    return {
+      refusal:
+        `HZ_PRECONDITION_FAILED: write refused: ancestor ${drifted} of ${resolved} changed while being opened; nothing was written`,
+    };
+  }
+
+  // Parent directory TOCTOU check (ruling 861): refuse if parent directory changed
+  const parentPost = await lstat(parentDir).catch(() => undefined);
+  if (parentPre !== undefined && parentPost !== undefined) {
+    if (parentPre.dev !== parentPost.dev || parentPre.ino !== parentPost.ino) {
+      await handle.close();
+      return {
+        refusal: `HZ_PRECONDITION_FAILED: write refused: parent directory of ${resolved} changed while being opened; nothing was written`,
+      };
+    }
   }
 
   try {

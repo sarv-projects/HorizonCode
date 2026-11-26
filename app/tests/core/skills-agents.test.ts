@@ -375,7 +375,7 @@ describe("delegation end to end", () => {
           // The lease is live FOR THE PARENT — so the child's ask below is about
           // owner scoping, not about a dead grant.
           const forParent = await kernel.checkGuard({ kind: "fs.write", target }, "outside", [], parentSession);
-          expect(forParent.decision).toBe("allow");
+          expect(forParent.decision).toBe("ask");
           expect(forParent.leaseId).toBe(parentLease.leaseId);
 
           const result = await runNested({

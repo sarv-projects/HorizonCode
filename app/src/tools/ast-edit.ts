@@ -22,10 +22,13 @@
 
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { sha256Hex } from "../core/canon";
 import { MAX_MATCHES, MAX_SOURCE_BYTES, langFromPath, rewriteMatches } from "./ast-match";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { captureWorkspaceBinding, isWorkspaceBindingError } from "../core/workspace-binding";
 import { isRefused, writeAtomic } from "./atomic-write";
-import { withFileLock, targetLockPath } from "../core/file-lock";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
@@ -74,9 +77,24 @@ export const astEditTool: Tool = {
       // Guard the real target: a structural rewrite through a symlink must be
       // classified on the file whose bytes it replaces.
       const action: GuardAction = { kind: "fs.write", target: real };
+      const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+      if (isWorkspaceBindingError(wsBindingCap)) return fail(wsBindingCap.error);
+      const wsBinding = wsBindingCap;
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+      }
+
+      const needsApproval = decision.decision === "ask" && !guardEffectivelyAllows(decision);
+      // Do not leak outside-workspace file existence/contents via readFile before user approval.
+      let approvedBeforeRead = false;
+      if (needsApproval && !target.inside) {
+        const approved = await ctx.approve(
+          { title: `AST edit ${rel}`, detail: `AST edit outside workspace${targetNote}`, kind: "fs.write" },
+          action,
+        );
+        if (!approved) return fail("declined by user");
+        approvedBeforeRead = true;
       }
 
       let before: string;
@@ -137,7 +155,7 @@ export const astEditTool: Tool = {
       }
       const after = rewrite.text;
 
-      if (decision.decision === "ask") {
+      if (needsApproval && !approvedBeforeRead) {
         const approved = await ctx.approve(
           {
             title: `AST edit ${rel}`,
@@ -149,10 +167,10 @@ export const astEditTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
-      // section per target file, taken AFTER approval. A second process that changed
-      // the file first is caught by the check below, never clobbered.
-      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
+      // Cross-process (core/effect-r170-bun-mutation-fence.ts): workspace R170 fence
+      // + per-target lock verify -> write -> journal is one critical section per target file,
+      // taken AFTER approval. A second process that changed the file first is caught by the check below, never clobbered.
+      const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
         // Preimage check immediately before the write: a file changed during the
         // guard/approval window is a conflict, and nothing is written (docs/09 §8.2).
         let actualSha256: string;
@@ -168,13 +186,15 @@ export const astEditTool: Tool = {
           );
         }
 
-        const outcome = await writeAtomic(real, after, ctx, real);
+        const outcome = await writeAtomic(real, after, ctx, real, wsBinding);
         if (isRefused(outcome)) return fail(outcome.refusal);
         const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
+        // D-4: journal the real target (see write.ts).
         await recordChangeGuarded(ctx.sessionId, {
-          path: resolved,
+          path: real,
+          workspace: ctx.workspace,
           rel,
           before,
           afterSha256: sha256Hex(after),
@@ -184,11 +204,15 @@ export const astEditTool: Tool = {
         noteRead(ctx, real);
 
         return undefined;
-      }).catch((e: unknown) => fail(msg(e)));
+      }).catch((e: unknown) => {
+        tunnelPermissionError(e);
+        return fail(msg(e));
+      });
       if (locked !== undefined) return locked;
 
       return { ok: true, output: `Replaced ${rewrite.count} structural match(es) in ${rel}` };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

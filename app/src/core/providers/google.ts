@@ -26,6 +26,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { maskSecrets } from "../compaction";
 import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
 import { maybeDumpProviderRequest } from "./request-dump";
@@ -33,6 +34,7 @@ import {
   DEFAULT_RETRY_ATTEMPTS,
   backoffDelay,
   delay,
+  fetchWithRetry,
   isRetryableStatus,
   parseRetryAfter,
   retryNotice,
@@ -50,7 +52,8 @@ import {
   type ProviderTimeoutOptions,
 } from "./timeout";
 import type { MessageFormatter } from "./message-formatter";
-import { toolArgsJson, toolArgsObject } from "./tool-args-object";
+import { wireGoogleParts } from "../chat-content";
+import { strictParseToolArgsObject, toolArgsObject } from "./tool-args-object";
 import { toolResultContent } from "./tool-result-content";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
@@ -72,10 +75,13 @@ export interface GoogleSettings {
   timeouts?: ProviderTimeoutOptions;
   /** H-4: optional config-selected formatter; absent → native converter. */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
 }
 
 type GooglePart =
   | { text: string }
+  | { inlineData: { mimeType: string; data: string } }
   | { functionCall: { name: string; args: Record<string, unknown> } }
   | { functionResponse: { name: string; response: Record<string, unknown> } };
 
@@ -104,7 +110,8 @@ export function toGoogleContents(messages: ChatMsg[]): GoogleContent[] {
     if (!msg) continue;
     if (msg.role === "system") continue; // delivered as the top-level systemInstruction
     if (msg.role === "user") {
-      if (typeof msg.content === "string" && msg.content !== "") push("user", [{ text: msg.content }]);
+      const parts = wireGoogleParts(msg.content);
+      if (parts.length > 0) push("user", parts);
       continue;
     }
     if (msg.role === "assistant") {
@@ -233,7 +240,16 @@ async function* streamGoogle(
     body.systemInstruction = { parts: [{ text: req.system }] };
   }
   const tools = toGoogleTools(req.tools ?? []);
-  if (tools.length > 0) body.tools = tools;
+  if (tools.length > 0) {
+    body.tools = tools;
+    if (req.toolChoice === "none") {
+      body.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+    } else if (req.toolChoice === "auto") {
+      body.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+    } else if (req.toolChoice === "required") {
+      body.toolConfig = { functionCallingConfig: { mode: "ANY" } };
+    }
+  }
   const maxTokens = req.maxTokens && req.maxTokens > 0 ? req.maxTokens : (settings.maxTokens ?? 0);
   if (maxTokens > 0) body.generationConfig = { maxOutputTokens: maxTokens };
   await maybeDumpProviderRequest("google", body);
@@ -242,15 +258,20 @@ async function* streamGoogle(
   const policy = settings.retry ?? {};
   const attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_RETRY_ATTEMPTS));
 
+  const normalizedHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(settings.headers ?? {})) {
+    normalizedHeaders[k.toLowerCase()] = v;
+  }
+
   let response: Response;
   const retries: string[] = [];
   try {
-    response = await requestWithRetry(
-      transport,
+    response = await fetchWithRetry(
       url,
       {
         method: "POST",
         headers: {
+          ...normalizedHeaders,
           "content-type": "application/json",
           "x-goog-api-key": settings.apiKey,
           accept: "text/event-stream",
@@ -258,9 +279,13 @@ async function* streamGoogle(
         body: JSON.stringify(body),
         signal: deadline.signal,
       },
-      policy,
-      (info) => retries.push(retryNotice("google", info, attempts)),
-      timeouts.requestMs,
+      {
+        ...policy,
+        fetch: transport,
+        timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
+        breakerRoute: `google@${baseUrl}`,
+        onRetry: (info) => retries.push(retryNotice("google", info, attempts)),
+      },
     );
     deadline.headersReceived();
   } catch (err) {
@@ -279,7 +304,7 @@ async function* streamGoogle(
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = maskSecrets(await response.text().catch(() => ""));
     const expired = deadline.timedOut();
     if (expired) {
       yield providerTimeoutEvent("google", expired, "request");
@@ -347,9 +372,21 @@ async function* streamGoogle(
           calls += 1;
           emittedTool = true;
           const id = typeof call.id === "string" && call.id !== "" ? call.id : `call_${calls}`;
-          // H-5: normalize any wire arg shape (object, JSON string, malformed /
-          // truncated tail) through the util; fail closed to "{}".
-          yield { type: "tool_call", id, name: call.name, arguments: toolArgsJson(call.args) };
+          // Track A: strict finish parse on functionCall args; plain objects
+          // serialize normally, while malformed/non-object payloads attach
+          // `toolInputError` instead of silently corrupting to "{}".
+          const strict = strictParseToolArgsObject(call.args === undefined ? "{}" : call.args);
+          if ("error" in strict) {
+            yield {
+              type: "tool_call",
+              id,
+              name: call.name,
+              arguments: typeof call.args === "string" ? call.args : JSON.stringify(call.args ?? ""),
+              toolInputError: strict.error,
+            };
+          } else {
+            yield { type: "tool_call", id, name: call.name, arguments: strict.json };
+          }
         }
       }
     }

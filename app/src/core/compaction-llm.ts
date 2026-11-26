@@ -15,6 +15,7 @@ import {
   summariseElided,
   tokensIn,
 } from "./compaction";
+import type { CompactionBreaker } from "./compaction-breaker";
 import type { CompactionHoldBuffer } from "./compaction-hold";
 import type { ElidedSummariser } from "./compaction-hold";
 import { textFromChatContent } from "./chat-content";
@@ -190,11 +191,15 @@ export async function tryLlmSemanticCompaction(
   total: number,
   limit: number,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  breaker?: CompactionBreaker,
 ): Promise<string | undefined> {
   const models = compactionSummaryModels(deps.model, env);
   if (models.length === 0) return undefined;
   const prompt = buildLlmCompactionPrompt(elided, total, limit);
   if (estimateTokens(prompt) > 100_000) return undefined;
+  // ADDITIVE: a per-run breaker refuses further attempts after repeated
+  // compaction failures, so a failing summariser cannot burn provider calls.
+  if (breaker !== undefined && !breaker.allowAttempt().allowed) return undefined;
 
   for (const model of models) {
     const raw = await streamCompactionSummary({
@@ -204,8 +209,10 @@ export async function tryLlmSemanticCompaction(
       signal: deps.signal,
     });
     if (raw !== undefined) {
+      breaker?.recordSuccess();
       return formatLlmCompactionSummary(raw, elided, total, limit);
     }
+    breaker?.recordFailure(`compaction summary model ${model} returned no output`);
   }
   return undefined;
 }
@@ -219,12 +226,13 @@ export async function resolveLlmCompactionSummariser(
   rawHistory: ChatMsg[],
   historyLimit: number,
   hold?: CompactionHoldBuffer,
+  breaker?: CompactionBreaker,
 ): Promise<ElidedSummariser | undefined> {
   if (!llmCompactionEnabled(deps)) return undefined;
   const elided = elidedPrefixForCompaction(rawHistory, historyLimit);
   if (!elided) return undefined;
   if (hold?.wouldSwap(elided)) return undefined;
-  const llm = await tryLlmSemanticCompaction(deps, elided, rawHistory.length, historyLimit);
+  const llm = await tryLlmSemanticCompaction(deps, elided, rawHistory.length, historyLimit, process.env, breaker);
   if (llm === undefined) return undefined;
   return () => llm;
 }

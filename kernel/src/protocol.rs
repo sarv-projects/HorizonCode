@@ -44,6 +44,9 @@ pub struct Kernel {
     supervisor_epoch: AtomicU64,
     /// H-30 / 709: running image digest after `--socket` bind (unset on stdio-only).
     supervisor_binary_sha: Mutex<Option<String>>,
+    /// Group G: construction time for the loopback `doctor.statusz` uptime
+    /// counter (content-free, no egress/sandbox enforcement claim).
+    started_ms: i64,
 }
 
 impl Kernel {
@@ -69,8 +72,13 @@ impl Kernel {
         };
         let mut guard = Guard::new(state_dir);
         // H-31 / 629: fold launch binding into every Guard decision digest.
-        if let Ok(Some(ref binding)) = workspace_binding {
-            guard.set_workspace_binding(Some(binding.clone()));
+        // Fail closed on `fs.*` scope derivation whenever workspace binding
+        // failed or a parent-controlled kernel has no workspace binding.
+        match &workspace_binding {
+            Ok(Some(binding)) => guard.set_workspace_binding(Some(binding.clone())),
+            Err(_) => guard.set_fail_closed_unbound_scope(true),
+            Ok(None) if control_secret.is_some() => guard.set_fail_closed_unbound_scope(true),
+            Ok(None) => {}
         }
         Kernel {
             events: EventLog::new_with_anchor(state_dir, anchor.clone()),
@@ -83,6 +91,7 @@ impl Kernel {
             effect_hermetic: Mutex::new(effect_host::HermeticEffectLedger::default()),
             supervisor_epoch: AtomicU64::new(0),
             supervisor_binary_sha: Mutex::new(None),
+            started_ms: crate::time::now_millis(),
         }
     }
 
@@ -140,6 +149,97 @@ impl Kernel {
         )
     }
 
+    fn verify_and_resolve_mint_principal(
+        &self,
+        params: &Value,
+        kind: &str,
+        target: &str,
+        ttl_ms: u64,
+    ) -> Result<(Option<String>, Option<String>, Option<bool>), String> {
+        let session = session_param(params);
+        let (owner_in, principal_in) = mint_owner_and_principal(params);
+
+        let human_sig = match params.get("humanSig") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim()),
+            Some(_) => {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: humanSig must be a non-empty hex string".to_string(),
+                );
+            }
+        };
+
+        if let Some(sig_hex) = human_sig {
+            let pub_key_hex = match params.get("humanPubKeyHex") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim()),
+                Some(_) => {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: humanPubKeyHex must be a non-empty hex string"
+                            .to_string(),
+                    );
+                }
+            };
+            let nonce = match params.get("humanNonce") {
+                Some(Value::String(s)) if !s.trim().is_empty() => s.trim(),
+                _ => {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: humanNonce must be a non-empty string when humanSig is provided"
+                            .to_string(),
+                    );
+                }
+            };
+            let issued_at_owned = match params.get("humanIssuedAt") {
+                Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+                Some(Value::Number(n)) => n.to_string(),
+                _ => {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: humanIssuedAt must be a non-empty string or number when humanSig is provided"
+                            .to_string(),
+                    );
+                }
+            };
+            let issued_at = issued_at_owned.as_str();
+            let intent_digest = match params.get("intentDigest") {
+                None | Some(Value::Null) => "",
+                Some(Value::String(s)) => s.trim(),
+                Some(_) => {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: intentDigest must be a string".to_string(),
+                    );
+                }
+            };
+
+            let proof = human_principal::HumanApprovalProof {
+                sig_hex,
+                pub_key_hex,
+                nonce,
+                issued_at,
+                intent_digest,
+                kind,
+                target,
+                session_id: session.as_deref().unwrap_or(""),
+                ttl_ms,
+            };
+            human_principal::verify_and_consume_human_approval(&proof)?;
+
+            let (principal, principal_verified) = human_principal::resolve_mint_principal(
+                self.control_secret.is_some(),
+                Some(human_principal::HUMAN_APPROVAL_PRINCIPAL.to_string()),
+                true,
+            )?;
+            let owner = session.map(|sid| format!("human:{sid}"));
+            return Ok((owner, principal, principal_verified));
+        }
+
+        let (principal, principal_verified) = human_principal::resolve_mint_principal(
+            self.control_secret.is_some(),
+            principal_in,
+            false,
+        )?;
+        Ok((owner_in, principal, principal_verified))
+    }
+
     fn dispatch(&self, method: &str, params: &Value) -> Result<Value, String> {
         match method {
             "ping" => {
@@ -160,10 +260,7 @@ impl Kernel {
                     }
                 } else if let Err(err) = &self.workspace_binding {
                     if let Some(obj) = out.as_object_mut() {
-                        obj.insert(
-                            "workspaceBindingError".to_string(),
-                            json!(err),
-                        );
+                        obj.insert("workspaceBindingError".to_string(), json!(err));
                     }
                 }
                 let epoch = self.supervisor_epoch();
@@ -178,6 +275,22 @@ impl Kernel {
                     }
                 }
                 Ok(out)
+            }
+
+            // Group G: bounded, content-free loopback diagnostic status. Read-only
+            // like ping. Projects only counts — never unresolvedIds or effect detail —
+            // and makes NO claim that egress/sandbox is `enforced`.
+            "doctor.statusz" => {
+                let uptime_ms = (crate::time::now_millis() - self.started_ms).max(0);
+                let owner = effect_owner::status(&self.events, self.guard.state_dir())?;
+                Ok(json!({
+                    "ready": true,
+                    "version": VERSION,
+                    "uptimeMs": uptime_ms,
+                    "effectEvents": owner["events"],
+                    "effectUnresolved": owner["unresolved"],
+                    "supervisorEpoch": self.supervisor_epoch(),
+                }))
             }
 
             "log.append" => {
@@ -217,7 +330,7 @@ impl Kernel {
                 // use the existing additive input contract and control proof.
                 self.authorize_parent_control(params)?;
                 self.receipts.issue(params)
-            },
+            }
 
             "receipt.verify" => Ok(self.receipts.verify()?.to_json()),
 
@@ -282,12 +395,20 @@ impl Kernel {
                 // Additive: a client that supplies sessionId mints a lease owned
                 // by that session; one that does not mints a legacy owner-less
                 // lease, which stays globally consultable (documented legacy).
-                let (owner, principal_in) = mint_owner_and_principal(params);
-                let principal = human_principal::normalize_parent_control_mint_principal(
-                    self.control_secret.is_some(),
-                    principal_in,
+                let (owner, principal, principal_verified) = self.verify_and_resolve_mint_principal(
+                    params,
+                    &kind,
+                    &pattern,
+                    ttl_ms,
                 )?;
-                let lease = self.guard.issue_lease(&kind, &pattern, ttl_ms, owner, principal);
+                let lease = self.guard.issue_lease_with_verification(
+                    &kind,
+                    &pattern,
+                    ttl_ms,
+                    owner,
+                    principal,
+                    principal_verified,
+                );
                 serde_json::to_value(lease).map_err(|e| format!("cannot serialize lease: {}", e))
             }
 
@@ -305,12 +426,20 @@ impl Kernel {
                 let pattern = string_param(params, "pattern")?;
                 let ttl_ms = number_param(params, "ttlMs")
                     .ok_or_else(|| "guard.grant.ttlMs must be a number".to_string())?;
-                let (owner, principal_in) = mint_owner_and_principal(params);
-                let principal = human_principal::normalize_parent_control_mint_principal(
-                    self.control_secret.is_some(),
-                    principal_in,
+                let (owner, principal, principal_verified) = self.verify_and_resolve_mint_principal(
+                    params,
+                    &kind,
+                    &pattern,
+                    ttl_ms,
                 )?;
-                let grant = self.guard.issue_grant(&kind, &pattern, ttl_ms, owner, principal);
+                let grant = self.guard.issue_grant_with_verification(
+                    &kind,
+                    &pattern,
+                    ttl_ms,
+                    owner,
+                    principal,
+                    principal_verified,
+                );
                 serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
             }
 
@@ -325,7 +454,9 @@ impl Kernel {
                     .get("kind")
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "guard.grant.query.action.kind must be a non-empty string".to_string())?
+                    .ok_or_else(|| {
+                        "guard.grant.query.action.kind must be a non-empty string".to_string()
+                    })?
                     .to_string();
                 if !guard::known_kind(&kind) {
                     return Err(guard::unknown_kind_refusal(&kind));
@@ -463,16 +594,20 @@ impl Kernel {
                 // child-net posture (notably the WSL `on` default).
                 let mut result = outcome.to_json();
                 if let Some(object) = result.as_object_mut() {
-                    object.insert(
-                        "probe".to_string(),
-                        sandbox::probe_sandbox_exec().to_json(),
-                    );
+                    object.insert("probe".to_string(), sandbox::probe_sandbox_exec().to_json());
                 }
                 Ok(result)
             }
 
             // EffectHost mirror for callers not entering the direct owner seam.
             "effect.reconcile" => effect_host::reconcile_params(params),
+
+            // P0-3 cross-process R170 reconciliation barrier.
+            "reconcile.gate" => effect_owner::check_reconcile_barrier(
+                &self.events,
+                &self.receipts,
+                self.guard.state_dir(),
+            ),
 
             // Kernel-owned, cross-process five-phase effect execution.
             // The OS owner lock covers prepare, execute, postimage and settle.
@@ -550,6 +685,7 @@ impl Kernel {
             // V2 OwnerLog: PREPARE-only clean release (**349**); attested
             // executed-UNKNOWN abandon (**655**); observe-settle (**714**/**721**).
             "effect.owner.recover" => {
+                self.authorize_parent_control(params)?;
                 let effect_id = string_param(params, "effectId")?;
                 let mode = params.get("mode").and_then(|v| v.as_str());
                 let attestation = params.get("attestation").and_then(|v| v.as_str());
@@ -566,6 +702,7 @@ impl Kernel {
 
             // §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced).
             "egress.connect.listen" => {
+                self.authorize_parent_control(params)?;
                 let action = params
                     .get("action")
                     .and_then(|v| v.as_str())

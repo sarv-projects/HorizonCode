@@ -18,7 +18,7 @@ describe("command-guard (plan lane)", () => {
     expect(findPlanModeMutatingCommand("echo x > out.txt")).toContain("redirect");
     expect(findPlanModeMutatingCommand("tee notes.md")).toContain("tee");
     expect(findPlanModeMutatingCommand("echo x > /dev/null")).toBeUndefined();
-    expect(findPlanModeMutatingCommand("echo x >> /tmp/log.txt")).toBeUndefined();
+    expect(findPlanModeMutatingCommand("echo x >> /tmp/log.txt")).toContain("redirect");
   });
 
   test("peels wrappers before classifying", () => {
@@ -72,6 +72,11 @@ describe("plan-mode shell allowlist (read-only, conservative)", () => {
     "sed -Ei 's/a/b/' f",
     "sed --in-place=.bak 's/a/b/' f",
     "sed 'w /tmp/owned' f",
+    "sed 'wout.txt' f",
+    "sed '1wout.txt' f",
+    "sed '1,$wout.txt' f",
+    "sed '/foo/wout.txt' f",
+    "sed 's/a/b/wout.txt' f",
     "sed '1w /tmp/owned' f",
     "sed '1,$w /tmp/owned' f",
     "sed '/foo/w /tmp/owned' f",
@@ -140,7 +145,7 @@ describe("plan-mode shell allowlist (read-only, conservative)", () => {
     "cd src && ls -la",
     "cat f 2>&1",
     "ls > /dev/null 2>&1",
-    "echo x > /tmp/hz-plan-scratch.txt",
+    "sed 's/hello/world/' write.txt",
   ];
 
   test("mutating commands are refused with the allowlist message", () => {
@@ -170,7 +175,7 @@ describe("plan-mode shell allowlist (read-only, conservative)", () => {
     expect(findPlanModeMutatingCommand("echo x > out.txt")).toContain("redirect");
     expect(findPlanModeMutatingCommand("echo x > .git/config")).toContain("redirect");
     expect(findPlanModeMutatingCommand("echo x > /tmp/../etc/passwd")).toContain("redirect");
+    expect(findPlanModeMutatingCommand("echo x > /tmp/scratch")).toContain("redirect");
     expect(findPlanModeMutatingCommand("echo x > /dev/null")).toBeUndefined();
-    expect(findPlanModeMutatingCommand("echo x > /tmp/scratch")).toBeUndefined();
   });
 });

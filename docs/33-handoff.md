@@ -12,7 +12,7 @@
 
 ---
 
-> **2026-11-20 stop-of-day (rechecked) — finish-all paused; Goal NOT COMPLETE:** Working tree through ruling **739** (`docs/28` §3; deep audit [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md); competitive viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md)). Full done/left/owner-input/v1 inventory: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). P0-1…4 done-bars still OPEN; never shell-net **`enforced`**; LICENSE deferred. **Owner live-spend grant:** unlimited usage / no holding back — run live residuals and fix rate-limits/errors in place (stop-of-day §3.1).
+> **2026-11-26 status sync — finish-all paused; Goal NOT COMPLETE:** Working tree through ruling **970** (`docs/28` §3; 2026-11-25 Waves 1-3 audit remediation + 9/9 gates passing in WSL; fresh-eyes release audit in [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) §Z; deep audit [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md); competitive viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md)). Full done/left/owner-input/v1 inventory: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). P0-1…4 done-bars still OPEN; never shell-net **`enforced`**; LICENSE deferred. **Owner live-spend grant:** unlimited usage / no holding back — run live residuals and fix rate-limits/errors in place (stop-of-day §3.1).
 
 > **2026-11-15 ruling 478 — R172 nested event-stream replay reduced, R172 still OPEN:** `receipt-nested-event-stream-replay.ts` walks nested child session JSONL streams from a verified parent event read (depth/cycle budgets; missing/broken child refusal) into the receipt inspector and `hzcode session verify` (exit 3). Complements **456** nested receipt-graph replay and **357** flat parent/child hash inspection. Does **not** complete authenticated issuer, `parentReceiptId` contracts, or keyed attestation. See [status §3](28-implementation-status.md) ruling **478**.
 >
@@ -121,7 +121,7 @@ Entry points:
 | `catalog/` | `catalog.ts` and `models-dev.curated.json` (five providers, about 2.8 KB) |
 | `mcp/`, `lsp/` | MCP stdio client v1 and registry; LSP client, framing, mux, workspace diagnostics |
 
-`app/src/tools/` (the model-facing tools; 28 statically registered in `index.ts` as of 2026-11-16): `read`, `write`, `edit` (repair ladder, CRLF-safe, hashline mode), `grep`, `glob`, `shell` (`shell.ts`), `todo`, `undo`, `repo_map`, `agent`, `code_mode` (`codemode.ts`, `codemode-child.ts`), `preview`, `apply_patch` (`apply-patch.ts`, `apply-patch-parser.ts`), `shell_session` (`interactive-exec.ts`, PTY), `lsp`, `tool_search`, `ast_search`, `ast_edit` (`ast-match.ts`), `present`, `lint`, `debug`, `memory_search`, `handoff_create`, `handoff_resume`, `handoff_search`. Supporting modules: `hashline.ts`, `line-endings.ts`, `atomic-write.ts`, `verified-open.ts`, `change-journal.ts`, `read-ledger.ts`, `repo-map-cache.ts`, `model-tool-routing.ts`, `ignore.ts`, `helpers.ts`.
+`app/src/tools/` (the model-facing tools; 41 statically registered in `index.ts` through ruling 888): `read`, `write`, `edit` (repair ladder, CRLF-safe, hashline mode), `undo`, `grep`, `glob`, `repo_map`, `present`, `ask_user`, `shell` (`shell.ts`), `shell_bg`, `git_status`, `git_diff`, `git_log`, `git_blame`, `todo`, `todo_write`, `agent`, `best_of_n`, `code_mode` (`codemode.ts`, `codemode-child.ts`), `preview`, `apply_patch` (`apply-patch.ts`, `apply-patch-parser.ts`), `shell_session` (`interactive-exec.ts`, PTY), `lsp`, `lint`, `debug`, `memory_search`, `memory_remember`, `memory_forget`, `handoff_create`, `handoff_resume`, `handoff_search`, `tool_search`, `ast_search`, `ast_edit` (`ast-match.ts`), `web_fetch`, `web_search`, `ctx_inspect`, `history_snip_preview`, `code_mode_vm`. Supporting modules: `hashline.ts`, `line-endings.ts`, `atomic-write.ts`, `verified-open.ts`, `change-journal.ts`, `read-ledger.ts`, `repo-map-cache.ts`, `model-tool-routing.ts`, `ignore.ts`, `helpers.ts`, `tool-loadout-delta.ts`.
 
 `app/src/tui/` (the terminal UI, scrollback-native, rich on a TTY, plain otherwise): `index.ts` (chat surface), `interactive.ts` (chat loop, slash commands), `headless.ts`, `print.ts` (`-p`), `render.ts` (events to terminal output, `sanitizeText`), `live.ts` (status bar, spinner, live region), `style.ts` (ANSI and colour ladder, `/theme`), `markdown.ts` (streaming markdown), `cards.ts` (tool cards), `diff.ts` (diff gutters), `approval.ts` (line prompt), `approval-card.ts` (single-key card), `paste.ts` (bracketed paste), `completion.ts` (Tab and ghost text), `banner.ts`.
 
@@ -134,12 +134,12 @@ Entry points:
 | File | Role |
 |---|---|
 | `main.rs` | NDJSON stdio server; also `--selftest` (25 checks) |
-| `protocol.rs` | Request dispatch (12 methods in `protocol.rs`; the TS `KERNEL_METHODS` also has 12) |
-| `guard.rs` | Authority evaluation `deny > lease > ask > allow`, in-memory leases, structural deny on the kernel state directory (symlink-lexical), consults `egress.rs` for `net.fetch` and `execpolicy.rs` for `shell.exec` |
+| `protocol.rs` | Request dispatch (20 methods in `protocol.rs`; the TS `KERNEL_METHODS` in `contracts.ts` also has 20) |
+| `guard.rs` | Authority evaluation returning G1 decisions (`ask` with `leaseId` or `deny`; `"allow"` removed from `GuardDecisionValue` in Wave B), in-memory leases, structural deny on the kernel state directory (symlink-lexical), Ed25519 human-principal verification (`human_principal.rs`), consults `egress.rs` for `net.fetch` and `execpolicy.rs` for `shell.exec` |
 | `egress.rs` | Pure per-origin decider for `net.fetch` (admission only; no traffic is intercepted) |
 | `egress_connect.rs` | Loopback CONNECT listener stub (`egress.connect.listen`); consults `egress.json`; advisory only (**234**) |
 | `execpolicy.rs` | Declarative command allowlist (`Deny > Ask > Allow`) |
-| `sandbox.rs` | Fail-closed `SandboxMode` ladder and `sandbox.report`; `kernel_applied_mechanisms()` true for `hz-sandbox-exec` dimensions (rulings 140–150); companion binary `bin/hz_sandbox_exec.rs` |
+| `sandbox.rs` | Fail-closed `SandboxMode` ladder and `sandbox.report`; `kernel_applied_mechanisms()` true for `hz-sandbox-exec` dimensions (rulings 140–150); companion binary `bin/hz_sandbox_exec/main.rs` |
 | `eventlog.rs`, `receipts.rs` | Append-only hash-chained `events/<stream>.jsonl` and `receipts.jsonl` with `.head` anchors, optional HMAC anchor (`HZ_ANCHOR_KEY`) |
 | `canon.rs` | Canonical JSON and SHA-256. FROZEN: do not change (section 3) |
 | `permm.rs` | Owner-only permissions for state directories and files |
@@ -149,7 +149,7 @@ Entry points:
 
 | File | Role |
 |---|---|
-| `ops/gates.sh` | The CI gate runner (8 gates, fail fast), section 2.6 |
+| `ops/gates.sh` | The CI gate runner (9 gates, fail fast), section 2.6 |
 | `ops/gate-catalogue.md` | Maps the 18 docs/24 section 3.5 gates to runnable or declared-gap; READ BY A TEST, edit with care |
 | `ops/ci/github-actions.yml` | Tracked payload of the CI workflow |
 | `ops/install-ci.sh` | Copies the payload to `.github/workflows/ci.yml` (needed because the automation token lacks the `workflow` scope) |
@@ -549,7 +549,7 @@ Each is small; the full list with the fix for each is `docs/13-tui.md` deferral 
 ### 5.20 Repo-take steal wave (`99-SYNTHESIS` #1–#18)
 
 - **What.** Ordered competitive backlog from `repo_take/notes/99-SYNTHESIS.md`, registered in `docs/30-steal-list.md` §8 with **concrete `repo_take/` file paths** to read before coding. Plan: `docs/superpowers/plans/2026-11-12-repo-take-steal-wave.md`. Compare: `repo_take/notes/HZ-DOCS-VS-NOTES.md`.
-- **Status (2026-11-14 refresh).** **#1 PARTIAL — TESTED** (ruling **167**, alt-screen picker **196**). **#10 PARTIAL — TESTED** (ruling **168**). **#3 PARTIAL — TESTED** (rulings **366**–**395**, handoffs + `todo_write` + durable todos). **#4 PARTIAL — TESTED** (ruling **170**, mnemopi banks ADAPT + `shared_recall`). **#7 PARTIAL — TESTED** (rulings **171**, **372**, **417** max_tokens partial dispatch). **#8 PARTIAL — TESTED** (rulings **172**, **415** `session.interject` on serve). **#5, #6, #9 PARTIAL — TESTED** (ruling **173**, OAuth refresh flock + permission presentation + hook RO_PATHS wiring). **#11–#12, #14–#15 PARTIAL — TESTED** (ruling **175**, wave D: Never preset, failure codes, autonomy presets, output offset, quirks/OAuth/poll module). **#16 PARTIAL — TESTED** (ruling **182**, hermetic DAP TCP e2e). **#2, #13** open or partial. **#17–#18** SKIP until spine. Speculation **UNWIRED** (ruling **65**, unchanged).
+- **Status (2026-11-14 refresh).** **#1 PARTIAL — TESTED** (ruling **167**, alt-screen picker **196**). **#10 PARTIAL — TESTED** (ruling **168**). **#3 PARTIAL — TESTED** (rulings **366**–**395**, handoffs + `todo_write` + durable todos). **#4 PARTIAL — TESTED** (ruling **170**, mnemopi banks ADAPT + `shared_recall`). **#7 PARTIAL — TESTED** (rulings **171**, **372**, **417** max_tokens partial dispatch). **#8 PARTIAL — TESTED** (rulings **172**, **415** `session.interject` on serve). **#5, #6, #9 PARTIAL — TESTED** (ruling **173**, OAuth refresh flock + permission presentation + hook RO_PATHS wiring). **#11–#12, #14–#15 PARTIAL — TESTED** (ruling **175**, wave D: Never preset, failure codes, autonomy presets, output offset, quirks/OAuth/poll module). **#16 PARTIAL — TESTED** (ruling **182**, hermetic DAP TCP e2e). **#2, #13** open or partial. **#17–#18** SKIP until spine. Speculation **opt-in wired** (rulings **670**, **730**, **879**; default-off).
 - **Rule.** For each item: open the listed upstream files under `repo_take/`, adapt mechanisms into HorizonCode style, update docs/28 + docs/30 §8 Status in the same commit. Do not design from scratch when a clone path is listed.
 - **Next priority.** #9 sandbox deepen; #4 residuals (remember/forget, embed/MMR); C-9 mid-stream provider steer.
 - **Priority.** P0 for #1 remainder (picker) only after 5.17; P1 for #3/#4/#10; P2 for #5/#6/#7/#8; P2–P3 for the rest.

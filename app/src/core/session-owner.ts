@@ -305,6 +305,7 @@ export function readSessionOwner(store: SessionStore, sessionId: string): Sessio
  * - a provably dead/stale owner: taken over (CAS on the old epoch).
  */
 export function acquireOwner(store: SessionStore, sessionId: string, identity?: OwnerIdentity): OwnerAcquisition {
+  store.guardWrite("session-owner.acquireOwner");
   requireSessionId(sessionId);
   const me = normalizeIdentity(identity);
   me.sessionId = sessionId;
@@ -371,6 +372,7 @@ export function acquireOwner(store: SessionStore, sessionId: string, identity?: 
  * taken over.
  */
 export function releaseOwner(store: SessionStore, sessionId: string, epoch?: string): boolean {
+  store.guardWrite("session-owner.releaseOwner");
   requireSessionId(sessionId);
   const result =
     epoch === undefined
@@ -381,6 +383,7 @@ export function releaseOwner(store: SessionStore, sessionId: string, epoch?: str
 
 /** Refresh `heartbeat_at`; epoch-scoped when provided. */
 export function touchOwner(store: SessionStore, sessionId: string, epoch?: string): boolean {
+  store.guardWrite("session-owner.touchOwner");
   requireSessionId(sessionId);
   const result =
     epoch === undefined

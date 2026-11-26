@@ -5,6 +5,8 @@
  */
 
 import { homedir } from "node:os";
+import * as path from "node:path";
+import { extractOAuthAccountId } from "./account-identity";
 import type { Credential } from "../../contracts";
 import type { ProviderOAuthEndpoints } from "../config";
 import { appendOAuthClientAuth } from "./oauth-params";
@@ -58,6 +60,11 @@ async function refreshOAuthAccessTokenLocked(
   return withOAuthRefreshLock(provider, home, async () => {
     const stored = readOAuthToken(provider, home);
     if (!stored?.refreshToken) return undefined;
+    // Re-check after acquiring the cross-process lock: if another process already
+    // refreshed the token with a fresh expiry, return it without a redundant exchange.
+    if (stored.expiresAt !== undefined && !oauthAccessExpiring(stored)) {
+      return credentialFromStore(provider, home);
+    }
     const body = new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: stored.refreshToken,
@@ -90,12 +97,17 @@ async function refreshOAuthAccessTokenLocked(
       obtainedAt: new Date().toISOString(),
       refreshToken: typeof tok.refresh_token === "string" ? tok.refresh_token : stored.refreshToken,
     };
+    const accountId = extractOAuthAccountId(tok.access_token);
+    if (stored.accountId && accountId && stored.accountId !== accountId) return undefined;
+    if (accountId) next.accountId = accountId;
+    else if (stored.accountId !== undefined) next.accountId = stored.accountId;
     if (typeof tok.expires_in === "number" && Number.isFinite(tok.expires_in)) {
       next.expiresAt = new Date(Date.now() + tok.expires_in * 1000).toISOString();
     } else if (stored.expiresAt) {
       next.expiresAt = stored.expiresAt;
     }
-    await writeOAuthToken(next, home);
+    const refused = await writeOAuthToken(next, home);
+    if (refused !== undefined) throw new Error(refused);
     notifyOAuthAccountRotated({ providerId: provider, reason: "retryable_failures" });
     return credentialFromStore(provider, home);
   });
@@ -107,13 +119,14 @@ export async function refreshOAuthAccessToken(
   home: string = homedir(),
   fetcher: typeof fetch = fetch,
 ): Promise<Credential | undefined> {
-  const inFlight = pendingByProvider.get(provider);
+  const key = `${path.resolve(home)}\0${provider}`;
+  const inFlight = pendingByProvider.get(key);
   if (inFlight) return inFlight;
   const work = refreshOAuthAccessTokenLocked(provider, endpoints, home, fetcher);
-  pendingByProvider.set(provider, work);
+  pendingByProvider.set(key, work);
   try {
     return await work;
   } finally {
-    if (pendingByProvider.get(provider) === work) pendingByProvider.delete(provider);
+    if (pendingByProvider.get(key) === work) pendingByProvider.delete(key);
   }
 }

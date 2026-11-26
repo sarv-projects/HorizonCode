@@ -12,7 +12,7 @@ import type { Runtime } from "../../src/contracts";
 import { createRuntime } from "../../src/core/index";
 import { createScriptedProvider } from "../../src/core/providers/scripted";
 import { createServer } from "../../src/core/server";
-import { tools } from "../../src/tools";
+import { exposureOf, tools } from "../../src/tools";
 import { describeTools, exitLine } from "../../src/tui/interactive";
 
 const MAIN = path.resolve(import.meta.dir, "../../src/main.ts");
@@ -161,16 +161,20 @@ describe("P4: server.hello reports a real kernelMode before any session", () => 
 
 describe("P5: /files buckets reconcile with the registry", () => {
   const rt = (model: string, providerName: string) => ({ model, providerName, sessionId: "s1-files" }) as unknown as Runtime;
-  test("visible + deferred + routed equals every registered tool", () => {
+  const nonHiddenCount = tools.filter((t) => {
+    const exp = exposureOf(t);
+    return exp !== "hidden" && exp !== "code_mode_only";
+  }).length;
+  test("visible + deferred + routed equals every non-hidden registered tool", () => {
     const r = describeTools(rt("claude-sonnet-4-5", "anthropic"));
-    expect(r?.total).toBe(tools.length);
+    expect(r?.total).toBe(nonHiddenCount);
     expect(r?.deferred).toContain("preview");
     expect(r?.visible).not.toContain("preview");
     expect(r?.routed).toEqual([]);
   });
   test("a GPT-family model moves routing-disabled tools into the hidden bucket", () => {
     const r = describeTools(rt("gpt-5-codex", "openai"));
-    expect(r?.total).toBe(tools.length);
+    expect(r?.total).toBe(nonHiddenCount);
     expect(r?.routed).toContain("edit");
     expect(r?.visible).not.toContain("edit");
   });

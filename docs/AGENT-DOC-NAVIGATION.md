@@ -20,7 +20,7 @@ Do **not** maintain parallel queues in HANDOFF or MASTER — those files redirec
 ## 2. Authority (conflicts)
 
 1. Git + test output  
-2. `28-implementation-status.md` §3 rulings (**342**)  
+2. `28-implementation-status.md` §3 rulings (through **970**)  
 3. `FULL-BACKLOG-2026-11-13.md`  
 4. `GOAL-PROGRESS.md`  
 5. `30-steal-list.md` (evidence; mirrored in FULL §R)
@@ -54,7 +54,7 @@ Pins: [`research/upstream-pins.md`](research/upstream-pins.md)
 ## 5. After each shipped slice
 
 - [ ] Tests green  
-- [ ] New ruling in `28` §3 (**343+**)  
+- [ ] New ruling in `28` §3 (**971+**)  
 - [ ] Update `GOAL-PROGRESS` + FULL §C/§R if §7 status changed  
 - [ ] Never claim shell-net `enforced`
 

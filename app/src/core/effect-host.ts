@@ -46,6 +46,26 @@ export function createEffectId(): string {
   return randomUUID();
 }
 
+/**
+ * Create a scoped view over a parent `EffectHost` that records every `effectId`
+ * started via `begin()` into `collector`. Prevents concurrent subagents sharing
+ * a parent `EffectHost` from cross-contaminating `childEffectIds` via set diffs.
+ */
+export function createScopedEffectHost(parent: EffectHost, collector: string[]): EffectHost {
+  return new Proxy(parent, {
+    get(target, prop) {
+      if (prop === "begin") {
+        return (effectId: string, tool: string, callId: string): void => {
+          collector.push(effectId);
+          target.begin(effectId, tool, callId);
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 export class EffectHost {
   private readonly records = new Map<string, EffectRecord>();
 

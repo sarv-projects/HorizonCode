@@ -12,13 +12,22 @@
  * explicitly chosen one. Ollama needs no key at all: it is a local server.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { metricContract } from "./metrics";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
 import { credentialFromStore } from "./auth/store";
-import { catalogDefaultModel, catalogModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
+import {
+  catalogDefaultModel,
+  catalogModel,
+  loadCatalog,
+  SUPPORTED_CATALOG_PROTOCOLS,
+  type CatalogProvider,
+  type CatalogProviderProtocol,
+  type LoadedCatalog,
+} from "./catalog/catalog";
 import { stateRoot, userConfigDir } from "./paths";
 import { maskSecrets } from "./compaction";
 import type { PermissionMode } from "./permission-mode";
@@ -196,14 +205,11 @@ export interface McpConfig {
 }
 
 /**
- * The wire protocol a registered provider speaks. v1 ships one — `openai-chat`,
- * the OpenAI /v1/chat/completions shape served by DeepSeek / Groq / Together /
- * OpenRouter / xAI / vLLM / NVIDIA-NIM / etc. The field exists so later
- * additive codecs (anthropic-compatible, responses-compatible) extend the
- * registry rather than changing its shape; an unknown value is rejected with a
- * readable reason, never silently coerced.
+ * The wire protocol a registered or catalog-backed provider speaks.
+ * User `config.providers[]` v1 accepts `openai-chat`; catalog-backed providers
+ * and `makeProvider()` dispatch across all five supported protocols additively.
  */
-export type ProviderProtocol = "openai-chat";
+export type ProviderProtocol = CatalogProviderProtocol;
 
 /**
  * One user-declared provider (docs/15 §3.1 ProviderContributionV1: "endpoint +
@@ -228,6 +234,10 @@ export interface ProviderRegistryEntry {
   toolFormat?: ToolFormat;
   /** OAuth PKCE endpoints for `hzcode login <id>` (user config only). */
   oauth?: ProviderOAuthEndpoints;
+  /** V-15: vendor tool-id length limit (data, never vendor-id string matching). */
+  toolIdMaxLength?: number;
+  /** V-15: prefix kept when shortening tool ids; default empty. */
+  toolIdPrefix?: string;
 }
 
 export interface ProviderOAuthEndpoints {
@@ -283,15 +293,21 @@ export interface ProviderRegistry {
  * key source at all (a local vLLM).
  */
 export interface ResolvedProvider {
-  /** The registered id; becomes the adapter's Provider.name. */
+  /** The registered or catalog id; becomes the adapter's Provider.name. */
   name: string;
   baseUrl: string;
   protocol: ProviderProtocol;
   credential: Credential;
-  /** Whether the entry declared a key source at all (apiKey/envKey/HZ_API_KEY). */
+  /** Whether the entry declared a key source at all (apiKey/envKey/HZ_API_KEY/catalog env[]). */
   wantsKey: boolean;
+  /** Candidate environment variable names (e.g. from catalog `provider.env[]`). */
+  envKeys?: string[];
+  /** Optional extra HTTP headers from catalog/model metadata. */
+  headers?: Record<string, string>;
   toolFormat?: ToolFormat;
   oauth?: ProviderOAuthEndpoints;
+  toolIdMaxLength?: number;
+  toolIdPrefix?: string;
 }
 
 /** One configured language server (stdio only). */
@@ -410,6 +426,81 @@ export interface LoadUserEnvOptions {
   platform?: NodeJS.Platform;
   /** Override the config directory (tests); defaults to the documented user config dir. */
   configDir?: string;
+  /** Injectable `icacls` runner for Windows ACL verification (tests). */
+  icaclsRunner?: (filePath: string) => string;
+}
+
+const WIN32_BROAD_PRINCIPALS = new Set([
+  "everyone",
+  "builtin\\users",
+  "nt authority\\authenticated users",
+  "authenticated users",
+  "users",
+  "builtin\\guests",
+  "guests",
+  "guest",
+  "nt authority\\anonymous logon",
+  "anonymous logon",
+]);
+
+/**
+ * Parse `icacls <file>` output and return any broad (world/group-readable)
+ * principals that hold a non-DENY ACE.
+ */
+export function parseIcaclsUnsafePrincipals(output: string): string[] {
+  const unsafe: string[] = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || /^Successfully processed/i.test(line)) continue;
+    // First line may be `<path> <PRINCIPAL>:<PERMS>`; continuation lines are `<PRINCIPAL>:<PERMS>`.
+    const colon = line.lastIndexOf(":");
+    if (colon <= 0) continue;
+    const perms = line.slice(colon + 1).trim().toUpperCase();
+    // Skip explicit DENY or no-access ACEs.
+    if (perms.includes("(DENY)") || perms === "(N)") continue;
+    const left = line.slice(0, colon).trim();
+    // Extract the principal token at the end of `left` (accounting for spaces in e.g. `NT AUTHORITY\Authenticated Users`).
+    let principal = left;
+    const lowerLeft = left.toLowerCase();
+    for (const candidate of WIN32_BROAD_PRINCIPALS) {
+      if (lowerLeft === candidate || lowerLeft.endsWith(` ${candidate}`) || lowerLeft.endsWith(`\t${candidate}`)) {
+        principal = left.slice(left.length - candidate.length);
+        break;
+      }
+    }
+    if (WIN32_BROAD_PRINCIPALS.has(principal.toLowerCase())) {
+      unsafe.push(principal);
+    }
+  }
+  return unsafe;
+}
+
+function checkWindowsEnvAcl(
+  file: string,
+  statMode: number,
+  icaclsRunner?: (filePath: string) => string,
+): string | undefined {
+  if (icaclsRunner !== undefined || process.platform === "win32") {
+    let output: string;
+    try {
+      output = icaclsRunner
+        ? icaclsRunner(file)
+        : execFileSync("icacls", [file], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 3000 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `cannot verify Windows ACL via icacls: ${msg}`;
+    }
+    const unsafe = parseIcaclsUnsafePrincipals(output);
+    if (unsafe.length > 0) {
+      return `Windows ACL grants access to broad principal (${unsafe.join(", ")}); restrict ${file} with icacls`;
+    }
+    return undefined;
+  }
+  // Best-effort mode check when `platform: "win32"` is simulated on a non-Windows host without `icacls`.
+  if ((statMode & 0o077) !== 0) {
+    return "permissions are wider than 0600 on Windows fallback check";
+  }
+  return undefined;
 }
 
 function insideDir(dir: string, file: string): boolean {
@@ -448,6 +539,16 @@ export function loadUserEnvFile(opts: LoadUserEnvOptions = {}): UserEnvLoad {
   // lstat semantics: a symlink is not a regular file here. Following one could
   // point back into the workspace, which is exactly what this boundary forbids.
   if (!stat.isFile()) return { path: file, loaded: [], skipped: "not a regular file (symlinks are refused)" };
+  if (opts.workspace !== undefined) {
+    try {
+      const real = realpathSync(file);
+      if (insideDir(opts.workspace, real)) {
+        return { path: file, loaded: [], skipped: "the env file resolves inside the workspace" };
+      }
+    } catch {
+      return { path: file, loaded: [], skipped: `cannot resolve realpath for ${file}` };
+    }
+  }
   if (platform !== "win32") {
     if ((stat.mode & 0o077) !== 0) {
       return { path: file, loaded: [], skipped: "permissions are wider than 0600 (chmod 600 it)" };
@@ -455,6 +556,11 @@ export function loadUserEnvFile(opts: LoadUserEnvOptions = {}): UserEnvLoad {
     const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
     if (uid !== undefined && stat.uid !== uid) {
       return { path: file, loaded: [], skipped: `not owned by this user (uid ${stat.uid})` };
+    }
+  } else {
+    const winReason = checkWindowsEnvAcl(file, stat.mode, opts.icaclsRunner);
+    if (winReason !== undefined) {
+      return { path: file, loaded: [], skipped: winReason };
     }
   }
 
@@ -936,11 +1042,27 @@ export function parseProviderEntry(value: unknown, index: number): ProviderRegis
     }
     toolFormat = raw.toolFormat as ToolFormat;
   }
+  let toolIdMaxLength: number | undefined;
+  if (raw.toolIdMaxLength !== undefined) {
+    if (!Number.isInteger(raw.toolIdMaxLength) || (raw.toolIdMaxLength as number) < 4 || (raw.toolIdMaxLength as number) > 128) {
+      return `${where}.toolIdMaxLength must be an integer between 4 and 128`;
+    }
+    toolIdMaxLength = raw.toolIdMaxLength as number;
+  }
+  let toolIdPrefix: string | undefined;
+  if (raw.toolIdPrefix !== undefined) {
+    if (typeof raw.toolIdPrefix !== "string" || !/^[A-Za-z0-9_-]*$/.test(raw.toolIdPrefix)) {
+      return `${where}.toolIdPrefix must match [A-Za-z0-9_-]*`;
+    }
+    toolIdPrefix = raw.toolIdPrefix;
+  }
   const entry: ProviderRegistryEntry = { id, baseUrl, protocol };
   if (envKey !== undefined) entry.envKey = envKey;
   if (apiKey !== undefined) entry.apiKey = apiKey;
   if (models !== undefined) entry.models = models;
   if (toolFormat !== undefined) entry.toolFormat = toolFormat;
+  if (toolIdMaxLength !== undefined) entry.toolIdMaxLength = toolIdMaxLength;
+  if (toolIdPrefix !== undefined) entry.toolIdPrefix = toolIdPrefix;
   const oauth = parseProviderOAuth(raw.oauth, where);
   if (typeof oauth === "string") return oauth;
   if (oauth !== undefined) entry.oauth = oauth;
@@ -1108,6 +1230,112 @@ function providerKey(provider: ProviderName, env: EnvLike): string | undefined {
   return undefined;
 }
 
+const LOCAL_KEYLESS_PROVIDER_PRESETS: Readonly<
+  Record<string, CatalogProvider & { protocol: ProviderProtocol; baseUrl: string }>
+> = {
+  vllm: {
+    id: "vllm",
+    name: "vLLM",
+    protocol: "openai-chat",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    env: ["VLLM_API_KEY"],
+    defaultModel: "default",
+    models: {},
+  },
+  lmstudio: {
+    id: "lmstudio",
+    name: "LM Studio",
+    protocol: "openai-chat",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    env: ["LMSTUDIO_API_KEY"],
+    defaultModel: "default",
+    models: {},
+  },
+};
+
+function isLocalhostUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(\/|$)/i.test(url.trim());
+}
+
+function isLocalKeylessProvider(
+  providerId: string,
+  baseUrl: string | undefined,
+  protocol: ProviderProtocol | undefined,
+): boolean {
+  const id = providerId.trim().toLowerCase();
+  return protocol === "ollama" || id === "ollama" || id === "lmstudio" || id === "vllm" || isLocalhostUrl(baseUrl);
+}
+
+/**
+ * Expand `${VAR}` templates in models.dev v2 provider base URLs (e.g. Azure
+ * `${AZURE_RESOURCE_NAME}`, Cloudflare `${CLOUDFLARE_ACCOUNT_ID}`/`${CLOUDFLARE_GATEWAY_ID}`,
+ * Vertex `${GOOGLE_VERTEX_PROJECT}`/`${GOOGLE_VERTEX_LOCATION}`, Bedrock `${AWS_REGION}`).
+ */
+export function expandBaseUrlTemplate(template: string, env: EnvLike): string {
+  if (!template.includes("${")) return template;
+  return template.replace(/\$\{([A-Za-z0-9_]+)\}/g, (match, varName: string) => {
+    const direct = str(env[varName]);
+    if (direct !== undefined) return direct;
+    if (varName === "AWS_REGION") {
+      return str(env.AWS_DEFAULT_REGION) ?? "us-east-1";
+    }
+    if (varName === "GOOGLE_VERTEX_ENDPOINT") {
+      const loc = str(env.GOOGLE_VERTEX_LOCATION);
+      if (loc && loc !== "global") return `${loc}-aiplatform.googleapis.com`;
+      return "aiplatform.googleapis.com";
+    }
+    return match;
+  });
+}
+
+function resolveCatalogProviderCredential(
+  provider: CatalogProvider & { protocol: ProviderProtocol; baseUrl: string },
+  env: EnvLike,
+  fileApiKey: string | undefined,
+  home: string,
+): { credential: Credential; wantsKey: boolean; apiKeySource?: HzConfig["sources"]["apiKey"] } {
+  const fromHz = str(env.HZ_API_KEY);
+  if (fromHz !== undefined) return { credential: { kind: "apiKey", value: fromHz }, wantsKey: true, apiKeySource: "env" };
+  if (fileApiKey !== undefined) {
+    return { credential: { kind: "apiKey", value: fileApiKey }, wantsKey: true, apiKeySource: "file" };
+  }
+  for (const envName of provider.env ?? []) {
+    const val = str(env[envName]);
+    if (val !== undefined) return { credential: { kind: "apiKey", value: val }, wantsKey: true, apiKeySource: "env" };
+  }
+  const fromStore = credentialFromStore(provider.id, home);
+  if (fromStore !== undefined) {
+    return {
+      credential: fromStore,
+      wantsKey: true,
+      apiKeySource: fromStore.kind === "apiKey" ? "file" : undefined,
+    };
+  }
+  const keyless = isLocalKeylessProvider(provider.id, provider.baseUrl, provider.protocol);
+  const wantsKey = !keyless && (provider.env?.length ?? 0) > 0;
+  return { credential: { kind: "none" }, wantsKey };
+}
+
+function catalogProviderIfSupported(
+  catalog: LoadedCatalog,
+  id: string | undefined,
+  overrideBaseUrl: string | undefined,
+  env: EnvLike,
+): (CatalogProvider & { protocol: ProviderProtocol; baseUrl: string }) | undefined {
+  if (id === undefined) return undefined;
+  const key = id.trim().toLowerCase();
+  const candidate = catalog.providers[key] ?? LOCAL_KEYLESS_PROVIDER_PRESETS[key];
+  if (!candidate) return undefined;
+  const protocol = candidate.protocol;
+  if (protocol === undefined || !SUPPORTED_CATALOG_PROTOCOLS.includes(protocol)) return undefined;
+  const rawBaseUrl = overrideBaseUrl ?? candidate.baseUrl;
+  if (rawBaseUrl === undefined) return undefined;
+  const baseUrl = expandBaseUrlTemplate(rawBaseUrl, env);
+  if (!/^https?:\/\//i.test(baseUrl)) return undefined;
+  return { ...candidate, protocol, baseUrl };
+}
+
 /** Resolve the effective configuration (pure; the environment is injectable). */
 export function loadConfig(
   env: EnvLike = process.env,
@@ -1119,11 +1347,17 @@ export function loadConfig(
     workspace !== undefined && workspace.trim() !== "" ? readWorkspaceConfigFile(workspace) : {},
   );
   const registry = parseProviderRegistry(fromFile.providers);
+  const catalogHome = str(env.HOME) ?? homeFromConfigPath(file) ?? homedir();
+  const catalog = loadCatalog(env, catalogHome);
+
+  const envBase = str(env.HZ_BASE_URL);
+  const fileBase = str(fromFile.baseUrl);
+  const fileKey = str(fromFile.apiKey);
 
   // Built-ins resolve FIRST (a registered id may not collide with one anyway);
-  // then the registry, by the raw id the user asked for. Anything else is left
-  // for the built-in path (an unknown id still falls back to mock here, exactly
-  // as before — makeProvider owns the fail-loud default when handed one).
+  // then user `config.providers[]`; then catalog-backed providers (when present
+  // in the loaded catalog with a supported protocol + http(s) baseUrl). Anything
+  // else keeps the exact unknown-provider fail-loud path in `makeProvider`.
   const rawEnvProvider = str(env.HZ_PROVIDER);
   const rawFileProvider = str(fromFile.provider);
   const envProvider = normalizeProvider(rawEnvProvider);
@@ -1136,33 +1370,46 @@ export function loadConfig(
   const fileRegistered = envProvider || envRegistered ? undefined : registered(rawFileProvider);
   const selectedEntry = envRegistered ?? fileRegistered;
 
+  const envCatalogProvider =
+    envProvider || envRegistered ? undefined : catalogProviderIfSupported(catalog, rawEnvProvider, envBase ?? fileBase, env);
+  const fileCatalogProvider =
+    envProvider || envRegistered || envCatalogProvider || fileProvider || fileRegistered
+      ? undefined
+      : catalogProviderIfSupported(catalog, rawFileProvider, envBase ?? fileBase, env);
+  const selectedCatalogProvider = envCatalogProvider ?? fileCatalogProvider;
+
   const unknownEnvId =
-    rawEnvProvider && !envProvider && !envRegistered ? rawEnvProvider.trim().toLowerCase() : undefined;
+    rawEnvProvider && !envProvider && !envRegistered && !envCatalogProvider
+      ? rawEnvProvider.trim().toLowerCase()
+      : undefined;
   const unknownFileId =
-    !unknownEnvId && rawFileProvider && !fileProvider && !fileRegistered
+    !unknownEnvId && rawFileProvider && !fileProvider && !fileRegistered && !fileCatalogProvider
       ? rawFileProvider.trim().toLowerCase()
       : undefined;
 
   const provider: HzConfig["provider"] =
     envProvider ??
     envRegistered?.id ??
+    envCatalogProvider?.id ??
     fileProvider ??
     fileRegistered?.id ??
+    fileCatalogProvider?.id ??
     unknownEnvId ??
     unknownFileId ??
     detected ??
     "mock";
-  const providerSource: HzConfig["sources"]["provider"] = envProvider || envRegistered
+  const providerSource: HzConfig["sources"]["provider"] = envProvider || envRegistered || envCatalogProvider
     ? "env"
-    : fileProvider || fileRegistered
+    : fileProvider || fileRegistered || fileCatalogProvider
       ? "file"
       : detected
         ? "detected"
         : "default";
 
-  // A registered provider carries its own endpoint, default model and
-  // credential; it reuses the openai-compatible adapter (makeProvider).
+  // A registered or catalog-backed provider carries its own endpoint, protocol,
+  // and credential; `makeProvider` dispatches on `resolved.protocol`.
   let resolved: ResolvedProvider | undefined;
+  let catalogApiKeySource: HzConfig["sources"]["apiKey"] | undefined;
   if (selectedEntry) {
     const { credential, wantsKey } = resolveRegistryCredential(selectedEntry, env);
     resolved = {
@@ -1173,6 +1420,26 @@ export function loadConfig(
       wantsKey,
       toolFormat: selectedEntry.toolFormat,
       oauth: selectedEntry.oauth,
+      toolIdMaxLength: selectedEntry.toolIdMaxLength,
+      toolIdPrefix: selectedEntry.toolIdPrefix,
+    };
+  } else if (selectedCatalogProvider) {
+    const { credential, wantsKey, apiKeySource } = resolveCatalogProviderCredential(
+      selectedCatalogProvider,
+      env,
+      fileKey,
+      catalogHome,
+    );
+    catalogApiKeySource = apiKeySource;
+    resolved = {
+      name: selectedCatalogProvider.id,
+      baseUrl: selectedCatalogProvider.baseUrl,
+      protocol: selectedCatalogProvider.protocol,
+      credential,
+      wantsKey,
+      ...(selectedCatalogProvider.env && selectedCatalogProvider.env.length > 0
+        ? { envKeys: selectedCatalogProvider.env }
+        : {}),
     };
   }
 
@@ -1194,42 +1461,48 @@ export function loadConfig(
   if (envFormats.has(envToolFormat)) toolFormat = envToolFormat as ToolFormat;
   else if (resolved?.toolFormat !== undefined) toolFormat = resolved.toolFormat;
 
-  // The default model for a built-in provider goes THROUGH the catalog
-  // (FEAT-003): `builtinDefaultModel` returns the catalog's default when it
-  // knows the provider and falls back to DEFAULT_MODELS when it does not. The
-  // curated snapshot carries the same ids, so the resolved default equals the
-  // historical constant; a catalog miss (offline/curated-gap) still yields it.
-  // A registered entry that declares no model (and has no HZ_MODEL/file model)
-  // MUST NOT inherit the mock's default id: forwarding "mock-1" to a real host
-  // is the opaque-400 silent-wrong-thing the fail-loud default exists to kill,
-  // one layer up. Such an entry resolves `model` to the empty-string sentinel
-  // ("" = no model configured), which `makeProvider` surfaces as a readable
-  // error. A built-in with no explicit model still gets the catalog default
-  // (falling back to DEFAULT_MODELS), exactly as before.
-  const catalogHome = str(env.HOME) ?? homeFromConfigPath(file) ?? homedir();
-  const catalog = loadCatalog(env, catalogHome);
   const envModel = str(env.HZ_MODEL);
   const fileModel = str(fromFile.model);
   const registryModel = selectedEntry?.models?.[0];
-  const builtinModel = selectedEntry ? "" : builtinDefaultModel(provider as ProviderName, catalog);
-  const model = envModel ?? fileModel ?? registryModel ?? builtinModel ?? builtinDefaultModel("mock", catalog);
+  const catalogModelDefault = selectedCatalogProvider?.defaultModel;
+  const builtinModel =
+    selectedEntry || selectedCatalogProvider ? "" : builtinDefaultModel(provider as ProviderName, catalog);
+  const model =
+    envModel ?? fileModel ?? registryModel ?? catalogModelDefault ?? builtinModel ?? builtinDefaultModel("mock", catalog);
 
-  if (toolFormat === undefined && model !== "") {
-    toolFormat = toolFormatForCatalogModel(catalog, selectedEntry?.id ?? provider, model);
+  if (selectedCatalogProvider && resolved && model !== "") {
+    const modelRecord = selectedCatalogProvider.models[model];
+    if (modelRecord) {
+      if (modelRecord.protocol && SUPPORTED_CATALOG_PROTOCOLS.includes(modelRecord.protocol)) {
+        resolved = { ...resolved, protocol: modelRecord.protocol };
+      }
+      if (!envBase && !fileBase && modelRecord.baseUrl) {
+        const expanded = expandBaseUrlTemplate(modelRecord.baseUrl, env);
+        if (/^https?:\/\//i.test(expanded)) {
+          resolved = { ...resolved, baseUrl: expanded };
+        }
+      }
+      if (modelRecord.headers && Object.keys(modelRecord.headers).length > 0) {
+        resolved = { ...resolved, headers: { ...modelRecord.headers } };
+      }
+    }
   }
 
-  const envBase = str(env.HZ_BASE_URL);
-  const fileBase = str(fromFile.baseUrl);
+  if (toolFormat === undefined && model !== "") {
+    toolFormat = toolFormatForCatalogModel(catalog, selectedEntry?.id ?? selectedCatalogProvider?.id ?? provider, model);
+  }
+
   const defaultBase = selectedEntry
     ? selectedEntry.baseUrl
-    : provider === "mock"
-      ? undefined
-      : DEFAULT_BASE_URLS[provider as Exclude<ProviderName, "mock">];
+    : selectedCatalogProvider
+      ? (resolved?.baseUrl ?? selectedCatalogProvider.baseUrl)
+      : provider === "mock"
+        ? undefined
+        : DEFAULT_BASE_URLS[provider as Exclude<ProviderName, "mock">];
   const baseUrl = envBase ?? fileBase ?? defaultBase;
 
   const envKey = str(env.HZ_API_KEY);
-  const fileKey = str(fromFile.apiKey);
-  const detectedKey = selectedEntry ? undefined : providerKey(provider as ProviderName, env);
+  const detectedKey = selectedEntry || selectedCatalogProvider ? undefined : providerKey(provider as ProviderName, env);
   const registryKey = resolved?.credential.kind === "apiKey" ? resolved.credential.value : undefined;
   const apiKey = envKey ?? fileKey ?? detectedKey ?? registryKey;
 
@@ -1269,13 +1542,14 @@ export function loadConfig(
   const statusLine = parseStatusLine(fromFile.statusLine);
   const classFields = parseConfigClassFields(fromFile as Record<string, unknown>);
 
-  // Where the registry key came from, for the banner: an inline apiKey or the
-  // entry's envKey var read as "file"/"env"; HZ_API_KEY stays "env".
-  const registryKeySource: HzConfig["sources"]["apiKey"] | undefined = resolved?.credential.kind === "apiKey"
-    ? selectedEntry?.apiKey
-      ? "file"
-      : "env"
-    : undefined;
+  // Where the registry or catalog key came from, for the banner.
+  const registryKeySource: HzConfig["sources"]["apiKey"] | undefined = selectedEntry
+    ? resolved?.credential.kind === "apiKey"
+      ? selectedEntry.apiKey
+        ? "file"
+        : "env"
+      : undefined
+    : catalogApiKeySource;
 
   return {
     provider,
@@ -1457,6 +1731,8 @@ export function augmentConfigWithTrustedWorkspace(
       credential,
       wantsKey,
       toolFormat: entry.toolFormat,
+      toolIdMaxLength: entry.toolIdMaxLength,
+      toolIdPrefix: entry.toolIdPrefix,
     };
   }
   return { ...config, mcp, providers, resolved };
@@ -1473,7 +1749,7 @@ export function missingKey(config: HzConfig): string | null {
   // not find. A keyless entry (no apiKey/envKey) runs without a key.
   if (config.resolved) {
     if (config.resolved.credential.kind !== "none") return null;
-    return config.resolved.wantsKey ? "HZ_API_KEY" : null;
+    return config.resolved.wantsKey ? (config.resolved.envKeys?.[0] ?? "HZ_API_KEY") : null;
   }
   if (config.provider === "mock" || config.provider === "ollama") return null;
   if (config.apiKey) return null;
@@ -1620,7 +1896,17 @@ function isValidSchemaRef(value: string): boolean {
 const ENTRY_KEYS: Record<string, readonly string[]> = {
   "mcp.servers": ["id", "command", "args", "env", "cwd"],
   "lsp.servers": ["id", "command", "args", "env", "extensions", "rootMarkers"],
-  providers: ["id", "baseUrl", "protocol", "envKey", "apiKey", "models", "toolFormat"],
+  providers: [
+      "id",
+      "baseUrl",
+      "protocol",
+      "envKey",
+      "apiKey",
+      "models",
+      "toolFormat",
+      "toolIdMaxLength",
+      "toolIdPrefix",
+    ],
 };
 
 function unknownEntryKeys(list: unknown, label: string, out: string[]): void {

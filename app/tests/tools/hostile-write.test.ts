@@ -140,7 +140,7 @@ describe("hostile write fixtures (file symlink -> outside)", () => {
     expect(readFileSync(secret, "utf8")).toBe("TOP SECRET\n");
   });
 
-  test("apply_patch update is denied on the real target and leaves the outside file untouched", async () => {
+  test("apply_patch update is refused before guard when symlink escapes workspace and leaves the outside file untouched", async () => {
     const outside = realpathSync(tempRoot());
     const secret = writeFixture(outside, "secret.txt", "TOP SECRET\n");
     const ws = makeWorkspace({});
@@ -153,12 +153,12 @@ describe("hostile write fixtures (file symlink -> outside)", () => {
     );
 
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("denied by policy");
-    expect(ctx.guardCalls[0]?.target).toBe(secret);
+    expect(r.error).toContain("escapes the workspace");
+    expect(ctx.guardCalls.length).toBe(0);
     expect(readFileSync(secret, "utf8")).toBe("TOP SECRET\n");
   });
 
-  test("apply_patch Add File through a directory symlink is denied on the real target", async () => {
+  test("apply_patch Add File through a directory symlink is refused before guard", async () => {
     const outside = realpathSync(tempRoot());
     const ws = makeWorkspace({});
     symlinkSync(outside, path.join(ws, "dirlink"));
@@ -170,8 +170,8 @@ describe("hostile write fixtures (file symlink -> outside)", () => {
     );
 
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("denied by policy");
-    expect(ctx.guardCalls[0]?.target).toBe(path.join(outside, "new.txt"));
+    expect(r.error).toContain("escapes the workspace");
+    expect(ctx.guardCalls.length).toBe(0);
     expect(existsSync(path.join(outside, "new.txt"))).toBe(false);
   });
 

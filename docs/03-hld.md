@@ -37,7 +37,7 @@
 | Document | Relationship |
 |---|---|
 | [`01-vision-and-superset.md`](./01-vision-and-superset.md) | The principles (P1–P10) this shape must make *enforceable*, not aspirational. |
-| [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-016 are binding. Where this document appears to contradict one, the ADR wins and this document is wrong. |
+| [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-017 (ADR-017 ratifies `app/` + `kernel/` build topology) are binding. Where this document appears to contradict one, the ADR wins and this document is wrong. |
 | [`_conventions.md`](./_conventions.md) | Canonical names: `hzcode`, `hzk`, `.hz/`, `~/.config/horizon/`, `hz://`, `@horizoncode/*`, `hz_*`, `HZ_ABI=1`/`HZ_PROTO=1`, plane names, capability IDs, event names, `<Name>V<major>` schemas, status levels. |
 | [`04-lld.md`](./04-lld.md) | The same system at module and signature granularity. The HLD is allowed to say "the session engine"; the LLD must name `SessionEngine.admit()`. |
 

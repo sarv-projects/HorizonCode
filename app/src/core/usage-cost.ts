@@ -109,13 +109,12 @@ export function resolveRates(
 ): { rates: ModelRateTable; revision: string } {
   const fromCatalog = ratesForModelFromCatalog(catalog ?? registeredCatalog, provider, model, contextTokens);
   if (fromCatalog) {
-    const fallback = ratesForModel(provider, model);
     return {
       rates: {
         inputPerM: fromCatalog.inputPerM,
         outputPerM: fromCatalog.outputPerM,
-        cacheReadPerM: fromCatalog.cacheReadPerM ?? fallback.cacheReadPerM,
-        cacheWritePerM: fromCatalog.cacheWritePerM ?? fallback.cacheWritePerM,
+        cacheReadPerM: fromCatalog.cacheReadPerM ?? 0,
+        cacheWritePerM: fromCatalog.cacheWritePerM ?? 0,
       },
       revision: catalogPriceTableRevision(provider, model),
     };
@@ -187,8 +186,10 @@ function enrichUsageCostWithRates(
   const output = usage.outputTokens ?? 0;
   const cacheWrite = usage.cacheWriteInputTokens ?? usage.cacheCreationInputTokens ?? 0;
   const cacheRead = usage.cacheReadInputTokens ?? 0;
-  const hasTokens = input > 0 || output > 0 || cacheWrite > 0 || cacheRead > 0;
-  const billableInput = Math.max(0, input - cacheWrite - cacheRead);
+  const nonCached = usage.nonCachedInputTokens;
+  const hasTokens = input > 0 || output > 0 || cacheWrite > 0 || cacheRead > 0 || (nonCached ?? 0) > 0;
+  const billableInput =
+    nonCached !== undefined ? Math.max(0, nonCached) : Math.max(0, input - cacheWrite - cacheRead);
 
   const inputUsd = (billableInput / 1_000_000) * rates.inputPerM;
   const outputUsd = (output / 1_000_000) * rates.outputPerM;

@@ -29,7 +29,11 @@ HOST_ADDR="${HZ_SANDBOX_VETH_HOST_ADDR:-10.199.0.2/30}"
 
 ip link del "$HOST" 2>/dev/null || true
 ip link del "$PEER" 2>/dev/null || true
-trap 'ip link del "'"$HOST"'" 2>/dev/null || true; ip link del "'"$PEER"'" 2>/dev/null || true' EXIT
+cleanup() {
+  ip link del "$HOST" 2>/dev/null || true
+  ip link del "$PEER" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 if ! command -v nsenter >/dev/null 2>&1; then
   echo "nsenter missing — ADDR plumb may fail; never enforced" >&2
@@ -44,10 +48,10 @@ case "$CHILD_PROXY" in
 esac
 
 CONNECT_PY='
-import socket
-bridge="'"${BRIDGE_HOST}"'"
-port='"${PROXY_PORT}"'
-authority="'"${CONNECT_AUTHORITY}"'"
+import os, socket
+bridge = os.environ["BRIDGE_HOST"]
+port = int(os.environ["PROXY_PORT"])
+authority = os.environ["CONNECT_AUTHORITY"]
 s=socket.socket(); s.settimeout(8)
 s.connect((bridge, port))
 req=("CONNECT "+authority+" HTTP/1.1\r\nHost: "+authority+"\r\n\r\n").encode("latin1")
@@ -65,6 +69,9 @@ echo "wrapped exec-create CONNECT probe (advisory): bridge=${BRIDGE_HOST}"
 
 OUT="$(
   env \
+    BRIDGE_HOST="$BRIDGE_HOST" \
+    PROXY_PORT="$PROXY_PORT" \
+    CONNECT_AUTHORITY="$CONNECT_AUTHORITY" \
     HZ_SANDBOX_CHILD_NET=off \
     HZ_SANDBOX_VETH_CREATE=1 \
     HZ_SANDBOX_VETH_HOST="$HOST" \

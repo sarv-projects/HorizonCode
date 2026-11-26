@@ -66,7 +66,7 @@ export function wrapXmlToolProvider(inner: Provider): Provider {
         yield call;
       }
       const stopReason = toolCallCount > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
-      yield { type: "done", stopReason, usage: doneEvent?.usage };
+      yield { type: "done", stopReason, usage: doneEvent?.usage, ...(doneEvent?.thinking !== undefined ? { thinking: doneEvent.thinking } : {}) };
     },
   };
 }

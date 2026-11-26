@@ -171,6 +171,39 @@ export function pickBestOfNAttempt(attempts: readonly BestOfNAttempt[]): BestOfN
   })[0];
 }
 
+export type BestOfNVarianceStats = {
+  scores: number[];
+  min: number;
+  max: number;
+  mean: number;
+  variance: number;
+  stdDev: number;
+  spread: number;
+};
+
+export function calculateBestOfNVariance(attempts: readonly BestOfNAttempt[]): BestOfNVarianceStats | undefined {
+  if (attempts.length === 0) return undefined;
+  const scores = attempts.map(scoreBestOfNAttempt);
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  const sum = scores.reduce((acc, s) => acc + s, 0);
+  const mean = Number((sum / scores.length).toFixed(2));
+  const variance = Number(
+    (scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / scores.length).toFixed(2),
+  );
+  const stdDev = Number(Math.sqrt(variance).toFixed(2));
+  const spread = max - min;
+  return {
+    scores,
+    min,
+    max,
+    mean,
+    variance,
+    stdDev,
+    spread,
+  };
+}
+
 export type BestOfNRaceResult = {
   winner: BestOfNAttempt | undefined;
   attempts: BestOfNAttempt[];
@@ -178,6 +211,8 @@ export type BestOfNRaceResult = {
   parallel: boolean;
   /** Non-fatal teardown notes when `worktreeHooks` provisioned trees. */
   cleanupNotes?: string[];
+  /** Variance and distribution across scored attempts. */
+  variance?: BestOfNVarianceStats;
 };
 
 export type BestOfNRaceOptions = {
@@ -271,11 +306,13 @@ export async function runBestOfNRace(opts: BestOfNRaceOptions): Promise<BestOfNR
         provisionBySlot,
       );
     }
+    const variance = calculateBestOfNVariance(collected);
     return {
       winner,
       attempts: collected,
       n,
       parallel: isParallel,
+      ...(variance !== undefined ? { variance } : {}),
       ...(cleanupNotes !== undefined && cleanupNotes.length > 0 ? { cleanupNotes } : {}),
     };
   };
@@ -311,6 +348,11 @@ export function formatBestOfNRaceOutput(race: BestOfNRaceResult): string {
     const verify = a.verifiedCommand ? ` verified=${JSON.stringify(a.verifiedCommand)}` : "";
     lines.push(
       ` ${tag} slot ${a.slot + 1}: ${a.exitClass} ok=${a.result.ok}${verify} decision=${a.decision.kind}`,
+    );
+  }
+  if (race.variance !== undefined && race.attempts.length > 1) {
+    lines.push(
+      ` score distribution: min=${race.variance.min} max=${race.variance.max} mean=${race.variance.mean} stdDev=${race.variance.stdDev} spread=${race.variance.spread}`,
     );
   }
   const body = race.winner.result.output.trim();

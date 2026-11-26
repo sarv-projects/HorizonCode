@@ -30,9 +30,11 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
-import { textFromChatContent } from "../chat-content";
+import { extractBase64Images, textFromChatContent } from "../chat-content";
+import { maskSecrets } from "../compaction";
 import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
+import { fetchWithRetry } from "./retry";
 import { maybeDumpProviderRequest } from "./request-dump";
 import {
   DEFAULT_RETRY_ATTEMPTS,
@@ -79,6 +81,8 @@ export interface OllamaSettings {
   timeouts?: ProviderTimeoutOptions;
   /** H-4: optional config-selected formatter; absent → native converter. */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
 }
 
 export interface ReadNdjsonOptions {
@@ -89,6 +93,7 @@ export interface ReadNdjsonOptions {
 export interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  images?: string[];
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
   tool_name?: string;
 }
@@ -104,7 +109,12 @@ export function toOllamaMessages(messages: ChatMsg[]): OllamaMessage[] {
   for (const msg of messages) {
     if (!msg) continue;
     if (msg.role === "system" || msg.role === "user") {
-      out.push({ role: msg.role, content: textFromChatContent(msg.content) });
+      const images = msg.role === "user" ? extractBase64Images(msg.content) : [];
+      out.push({
+        role: msg.role,
+        content: textFromChatContent(msg.content),
+        ...(images.length > 0 ? { images } : {}),
+      });
       continue;
     }
     if (msg.role === "assistant") {
@@ -142,6 +152,7 @@ export async function* readNdjson(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const idleMs = resolveIdleTimeoutMs(options.idleTimeoutMs);
+  const MAX_NDJSON_BUFFER_CHARS = 16 * 1024 * 1024;
   let buffer = "";
   try {
     for (;;) {
@@ -155,6 +166,9 @@ export async function* readNdjson(
         buffer = buffer.slice(index + 1);
         if (line !== "") yield line;
         index = buffer.indexOf("\n");
+      }
+      if (buffer.length > MAX_NDJSON_BUFFER_CHARS) {
+        throw new Error(`NDJSON stream buffer exceeded maximum size (${MAX_NDJSON_BUFFER_CHARS} chars)`);
       }
     }
     buffer += decoder.decode();
@@ -373,7 +387,12 @@ async function* streamOllama(
   await maybeDumpProviderRequest("ollama", body);
 
   const url = `${baseUrl}/api/chat`;
-  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/x-ndjson" };
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(settings.headers ?? {})) {
+    headers[k.toLowerCase()] = v;
+  }
+  headers["content-type"] = "application/json";
+  headers.accept = "application/x-ndjson";
   if (settings.apiKey && settings.apiKey.trim() !== "") headers.authorization = `Bearer ${settings.apiKey}`;
   const init: RequestInit = { method: "POST", headers, body: JSON.stringify(body), signal: deadline.signal };
   const transport: FetchLike = settings.fetch ?? ((target, options) => fetch(target, options));
@@ -383,14 +402,19 @@ async function* streamOllama(
   let response: Response;
   const retries: string[] = [];
   try {
-    response = await requestOllama(
-      transport,
-      url,
-      init,
-      policy,
-      (info) => retries.push(retryNotice("ollama", info, attempts)),
-      timeouts.requestMs,
-    );
+    response = await fetchWithRetry(url, init, {
+      ...policy,
+      fetch: transport,
+      timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
+      breakerRoute: `ollama@${baseUrl}`,
+      shouldRetryError: (err) =>
+        !/ECONNREFUSED|ConnectionRefused|Unable to connect/i.test(
+          err instanceof Error
+            ? `${err.name} ${err.message} ${(err as NodeJS.ErrnoException).code ?? ""}`
+            : String(err),
+        ),
+      onRetry: (info) => retries.push(retryNotice("ollama", info, attempts)),
+    });
     deadline.headersReceived();
   } catch (err) {
     const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
@@ -408,7 +432,7 @@ async function* streamOllama(
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = maskSecrets(await response.text().catch(() => ""));
     const expired = deadline.timedOut();
     if (expired) {
       yield providerTimeoutEvent("ollama", expired, "request");

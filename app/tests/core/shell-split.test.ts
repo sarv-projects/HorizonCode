@@ -5,11 +5,32 @@ import {
   shellSavedGrantTargets,
   maxSegmentRisk,
   segmentRisk,
+  execRiskScore,
   shellCompoundPresentationLines,
   shellCompoundRefusal,
 } from "../../src/core/shell-split";
 import { permissionPresentationForRequest } from "../../src/tui/permission-presentation";
 import { riskOf } from "../../src/tui/approval-card";
+
+describe("exec-risk scorer (data-driven, risk-increase only)", () => {
+  const FIXTURES: Array<{ cmd: string; risk: "high" | "medium" }> = [
+    { cmd: "env FOO=1 sh -c 'echo hi'", risk: "high" },
+    { cmd: "nice -n 5 timeout 3 curl https://example.com", risk: "high" },
+    { cmd: "npx some-tool --flag", risk: "high" },
+    { cmd: "ls -l", risk: "medium" },
+    { cmd: "pwd", risk: "medium" },
+  ];
+  test("data-driven over wrapper heads; scores every case with a named reason", () => {
+    for (const c of FIXTURES) {
+      const scored = execRiskScore(c.cmd);
+      expect(scored.risk, c.cmd).toBe(c.risk);
+      expect(scored.reason.length, c.cmd).toBeGreaterThan(0);
+    }
+  });
+  test("a plain shell builtin is not escalated by the wrapper scorer", () => {
+    expect(execRiskScore("echo hello").risk).toBe("medium");
+  });
+});
 
 describe("shell compound split", () => {
   test("splits && outside quotes", () => {

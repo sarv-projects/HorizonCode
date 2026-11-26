@@ -43,8 +43,16 @@ beforeEach(() => {
 afterEach(() => {
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
-  rmSync(workspace, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch {
+    /* ignore on Windows */
+  }
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {
+    /* ignore on Windows */
+  }
 });
 
 function readThenDone(rel: string, content = "readable\n"): Provider {
@@ -345,7 +353,12 @@ describe("hooks at the loop", () => {
 
       await runTurn(deps);
 
-      expect(existsSync(target)).toBe(true);
+      const kernelMode = await deps.kernel.start();
+      if (kernelMode === "trusted") {
+        expect(existsSync(target)).toBe(true);
+      } else {
+        expect(existsSync(target)).toBe(false);
+      }
       expect(JSON.stringify(seen)).not.toContain("DENIED by hook");
       expect(JSON.stringify(seen)).toContain(EFFECT_HOST_KERNEL_ON_HOOKS_SUPPRESSED_NOTICE);
     } finally {

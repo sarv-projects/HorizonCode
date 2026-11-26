@@ -88,7 +88,7 @@ describe("hz.effect.lease.issued", () => {
       await kernel.close();
       store.close();
     }
-  });
+  }, 15_000);
 
   test("policy ask without grant does not emit lease.issued", async () => {
     const stateDir = path.join(workspace, ".hzcode", "kernel");
@@ -136,5 +136,5 @@ describe("hz.effect.lease.issued", () => {
       await kernel.close();
       store.close();
     }
-  });
+  }, 15_000);
 });

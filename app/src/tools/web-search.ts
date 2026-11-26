@@ -12,7 +12,8 @@
  */
 
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
-import { stripHtmlToText } from "./web-fetch";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
+import { checkDnsNotPrivate, isBlockedPrivateHost, readBodyCapped, stripHtmlToText } from "./web-fetch";
 import { truncate } from "./helpers";
 import { assessWebSearchBackend, webSearchBackendEnabled, type WebSearchBackend } from "./web-search-posture";
 
@@ -22,6 +23,39 @@ const DEFAULT_MAX_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_CHARS = 80_000;
+const MAX_REDIRECT_HOPS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const AUTH_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "x-api-key",
+  "x-subscription-token",
+]);
+
+function normalizeHttpsUrl(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol !== "https:") return undefined;
+    if (u.username !== "" || u.password !== "") return undefined;
+    if (process.env.HZ_ALLOW_PRIVATE_FETCH !== "1" && isBlockedPrivateHost(u.hostname)) {
+      return undefined;
+    }
+    return u.href;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripAuthHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (!AUTH_HEADER_NAMES.has(k.toLowerCase())) out[k] = v;
+  }
+  return out;
+}
 const DDG_HTML = "https://html.duckduckgo.com/html/";
 
 export interface WebSearchResult {
@@ -33,10 +67,73 @@ export interface WebSearchResult {
 export type WebSearchHttp = (url: string, init: RequestInit) => Promise<Response>;
 
 let httpFetch: WebSearchHttp = (url, init) => fetch(url, init);
+let usingCustomHttp = false;
 
 /** Test hook: replace the HTTP layer; pass `undefined` to restore Bun `fetch`. */
 export function __setWebSearchHttpForTests(impl: WebSearchHttp | undefined): void {
+  usingCustomHttp = impl !== undefined;
   httpFetch = impl ?? ((url, init) => fetch(url, init));
+}
+
+/* -------------------- query budget & rate metering -------------------- */
+
+export const DEFAULT_MAX_QUERIES_PER_TURN = 15;
+export const DEFAULT_MAX_RPM = 30;
+export const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 256;
+const MAX_SESSION_COUNTERS = 256;
+
+let rateLimiterState = {
+  turnQueryCounts: new Map<string, number>(),
+  timestamps: [] as number[],
+  cache: new Map<string, { result: ToolResult; expiresAt: number }>(),
+};
+
+function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
+  if (!map.has(key) && map.size >= cap) {
+    const oldest = map.keys().next();
+    if (!oldest.done) map.delete(oldest.value);
+  }
+  map.set(key, value);
+}
+
+/** Reset only the per-turn query counter (preserving RPM window and result cache). */
+export function resetWebSearchTurnBudget(sessionId?: string): void {
+  if (sessionId !== undefined) {
+    rateLimiterState.turnQueryCounts.delete(sessionId);
+  } else {
+    rateLimiterState.turnQueryCounts.clear();
+  }
+}
+
+/** Reset query budget, rate limiter timestamps, and query cache (used in tests and turn boundaries). */
+export function __resetWebSearchBudgetForTests(): void {
+  rateLimiterState = {
+    turnQueryCounts: new Map(),
+    timestamps: [],
+    cache: new Map(),
+  };
+}
+
+export function getWebSearchBudgetStats(sessionId?: string): {
+  turnQueryCount: number;
+  recentRpm: number;
+  cachedEntries: number;
+} {
+  const now = Date.now();
+  const windowStart = now - 60_000;
+  const recent = rateLimiterState.timestamps.filter((t) => t >= windowStart).length;
+  let turnQueryCount = 0;
+  if (sessionId !== undefined) {
+    turnQueryCount = rateLimiterState.turnQueryCounts.get(sessionId) ?? 0;
+  } else {
+    for (const c of rateLimiterState.turnQueryCounts.values()) turnQueryCount += c;
+  }
+  return {
+    turnQueryCount,
+    recentRpm: recent,
+    cachedEntries: rateLimiterState.cache.size,
+  };
 }
 
 function fail(error: string): ToolResult {
@@ -227,16 +324,36 @@ export const webSearchTool: Tool = {
         ? Math.min(MAX_TIMEOUT_MS, Math.max(1000, Math.floor(timeoutRaw)))
         : DEFAULT_TIMEOUT_MS;
 
-    const url = backend.requestUrlForQuery(query);
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "https:") return fail("search endpoint must be https");
-    } catch {
-      return fail("invalid search URL");
-    }
+    const rawUrl = backend.requestUrlForQuery(query);
+    const url = normalizeHttpsUrl(rawUrl);
+    if (url === undefined) return fail("search endpoint must be a valid public https:// URL (no userinfo or private host)");
 
     const denied = await checkNetFetch(ctx, url);
     if (denied) return fail(denied);
+
+    const cacheKey = `${backend.kind}:${query.toLowerCase()}:${count}`;
+    const now = Date.now();
+    const cached = rateLimiterState.cache.get(cacheKey);
+    if (cached && now < cached.expiresAt) {
+      return cached.result;
+    }
+
+    const sessionKey = ctx.sessionId || "_default";
+    const sessionCount = rateLimiterState.turnQueryCounts.get(sessionKey) ?? 0;
+    const maxTurnQueries = Number(process.env.HZ_WEB_SEARCH_MAX_QUERIES) || DEFAULT_MAX_QUERIES_PER_TURN;
+    if (sessionCount >= maxTurnQueries) {
+      return fail(`web search budget exceeded: limit of ${maxTurnQueries} queries per turn reached`);
+    }
+
+    const maxRpm = Number(process.env.HZ_WEB_SEARCH_RPM) || DEFAULT_MAX_RPM;
+    const windowStart = now - 60_000;
+    rateLimiterState.timestamps = rateLimiterState.timestamps.filter((t) => t >= windowStart);
+    if (rateLimiterState.timestamps.length >= maxRpm) {
+      return fail(`web search rate limit exceeded: max ${maxRpm} queries per minute reached`);
+    }
+
+    rateLimiterState.timestamps.push(now);
+    setBoundedMap(rateLimiterState.turnQueryCounts, sessionKey, sessionCount + 1, MAX_SESSION_COUNTERS);
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
@@ -252,22 +369,56 @@ export const webSearchTool: Tool = {
     }
 
     try {
-      const res = await httpFetch(url, {
-        method: "GET",
-        redirect: "follow",
-        signal: controller.signal,
-        headers,
-      });
+      let currentUrl = url;
+      let currentHeaders: Record<string, string> = { ...headers };
+      let res: Response;
+      let hops = 0;
+      for (;;) {
+        const dnsErr = await checkDnsNotPrivate(currentUrl, { customFetchInjected: usingCustomHttp });
+        if (dnsErr !== null) return fail(dnsErr);
+        res = await httpFetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          signal: controller.signal,
+          headers: currentHeaders,
+        });
+        if (!REDIRECT_STATUSES.has(res.status)) break;
+        const location = res.headers.get("location");
+        if (!location) break;
+        try {
+          await res.body?.cancel();
+        } catch {
+          /* ignore */
+        }
+        hops += 1;
+        if (hops > MAX_REDIRECT_HOPS) {
+          return fail(`too many redirects (max ${MAX_REDIRECT_HOPS})`);
+        }
+        let nextRaw: string;
+        try {
+          nextRaw = new URL(location, currentUrl).href;
+        } catch {
+          return fail(`invalid redirect location: ${location.replace(/([?&](?:api[-_]?key|key|token|access[-_]?token|secret|auth|password|subscription[-_]?key)=)[^&#]*/gi, "$1[REDACTED]")}`);
+        }
+        const nextUrl = normalizeHttpsUrl(nextRaw);
+        if (nextUrl === undefined) {
+          return fail("redirect target must be a valid https:// URL (no userinfo)");
+        }
+        const redirectDenied = await checkNetFetch(ctx, nextUrl);
+        if (redirectDenied) return fail(redirectDenied);
+        if (new URL(nextUrl).origin !== new URL(currentUrl).origin) {
+          currentHeaders = stripAuthHeaders(currentHeaders);
+        }
+        currentUrl = nextUrl;
+      }
 
-      const buf = await res.arrayBuffer();
-      const bytes = buf.byteLength;
-      const slice = bytes > DEFAULT_MAX_BYTES ? buf.slice(0, DEFAULT_MAX_BYTES) : buf;
-      const body = new TextDecoder("utf-8", { fatal: false }).decode(slice);
+      const { text: body, bytes } = await readBodyCapped(res, DEFAULT_MAX_BYTES);
 
       if (!res.ok) {
+        const safeUrl = currentUrl.replace(/([?&](?:api[-_]?key|key|token|access[-_]?token|secret|auth|password|subscription[-_]?key)=)[^&#]*/gi, "$1[REDACTED]");
         return {
           ok: false,
-          output: truncate(`url: ${url}\nstatus: ${res.status}\nbytes: ${bytes}\n\n${body.slice(0, 4000)}`, MAX_OUTPUT_CHARS),
+          output: truncate(`url: ${safeUrl}\nstatus: ${res.status}\nbytes: ${bytes}\n\n${body.slice(0, 4000)}`, MAX_OUTPUT_CHARS),
           error: `HTTP ${res.status}`,
         };
       }
@@ -277,14 +428,22 @@ export const webSearchTool: Tool = {
       const formatted = formatResults(query, wireBackend, results);
       const output = truncate(formatted, MAX_OUTPUT_CHARS);
 
-      return {
+      const successResult: ToolResult = {
         ok: true,
         output:
           results.length === 0
             ? `${output}\n\n(no parseable results — response may use an unsupported layout)`
             : output,
       };
+      setBoundedMap(
+        rateLimiterState.cache,
+        cacheKey,
+        { result: successResult, expiresAt: Date.now() + CACHE_TTL_MS },
+        MAX_CACHE_ENTRIES,
+      );
+      return successResult;
     } catch (e) {
+      tunnelPermissionError(e);
       if (controller.signal.aborted) {
         const reason = ctx.signal.aborted ? "aborted" : "timeout";
         return fail(`search ${reason}`);

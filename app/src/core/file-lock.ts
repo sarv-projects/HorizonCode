@@ -130,8 +130,11 @@ function tryAcquire(lockPath: string, opts: Required<Omit<LockOptions, "isAlive"
       }
       return { kind: "busy", holderPid: undefined };
     }
-    if (code !== "EEXIST") return { kind: "unlockable" };
-    return reclaimIfStale(lockPath, opts);
+    if (code === "EEXIST") return reclaimIfStale(lockPath, opts);
+    if (code === "EBUSY" || (process.platform === "win32" && code === "EPERM")) {
+      return { kind: "busy", holderPid: undefined };
+    }
+    return { kind: "unlockable" };
   }
   try {
     writeSync(fd, `${process.pid}\n${token}\n`);

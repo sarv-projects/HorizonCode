@@ -57,6 +57,7 @@ import {
   applyEffectHostKernelFromUserConfig,
   applyEffectHostKernelRegulatedRequire,
   applyEffectHostKernelSandboxDefault,
+  applyEffectHostKernelTrustedDefault,
   applyEffectHostKernelTrustedRequire,
 } from "./effect-host-runtime";
 import { applyEngineeringBrainFromAutonomy } from "./engineering-viability";
@@ -98,6 +99,7 @@ import {
   streamFor,
   systemPrompt,
 } from "./loop";
+import type { EnvironmentInfo } from "./prompt";
 import { makeProvider } from "./providers";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): the runtime seam emits session.start/
 // session.end as OBSERVATION points (H4) alongside the existing event appends.
@@ -114,6 +116,18 @@ import {
   notifyLearnTrajectoryRecorded,
 } from "./learn-events";
 import { appendAnalyticsEvent } from "./analytics-log";
+import {
+  buildStartupMemoryMap,
+  maybeScheduleAutoDream,
+  runAutoDream,
+  shouldRunAutoDream,
+  type AutoDreamGateDecision,
+  type AutoDreamHandle,
+  type AutoDreamRunOptions,
+  type AutoDreamRunResult,
+  type AutoDreamScheduleOptions,
+  type StartupMemoryMapResult,
+} from "./memory/auto-dream";
 import { stateRoot, workspaceStateDir } from "./paths";
 // G-1: opt-in post-turn review fork (spec builder + runnable, fail-closed runner).
 import {
@@ -128,6 +142,7 @@ import { admitSpendLedgerWrite, SpendLedger, spendLimitMicroFromEnv } from "./sp
 import { ownerWorkerSuccessNotice } from "./owner-worker-ancestor-honesty";
 import { applyProductGuardG1WireDefault, guardEffectivelyAllows } from "./guard-g1-wire";
 import { guardG1WireStartupNotice } from "./guard-g1-wire-honesty";
+import { clearSessionPiiVault } from "./pii-vault";
 import { runOwnerWorkerForTurn } from "./owner-worker-spawn";
 import {
   appendMarkdownTranscriptEvent,
@@ -277,7 +292,7 @@ export interface HzRuntime extends Runtime {
   /** T-12: the receipt chain status for exports (verify + head hash). */
   receiptChain?(): Promise<ChainStatus>;
   /** Mid-turn steer into the active turn (C-9); no-op when idle. */
-  interject(text: string, opts?: { images?: readonly unknown[] }): {
+  interject(text: string, opts?: { images?: readonly unknown[]; mode?: "steer" | "interrupt" }): {
     accepted: boolean;
     reason?: "idle" | "empty" | "closed";
     imagesRefused?: true;
@@ -331,6 +346,8 @@ class HzRuntimeImpl implements HzRuntime {
   private readonly budget: RunBudget;
   /** Plan mode's per-session toggle (the TUI's /plan); off by default. */
   private planOn = false;
+  /** Codex incremental environment deltas: first-turn environment for this runtime. */
+  private readonly promptEnvironmentSlot: { current?: EnvironmentInfo; turns?: number } = {};
   /** The non-plan permission mode (default | accept-edits | read-only). */
   private mode: Exclude<PermissionMode, "plan"> = "default";
   /**
@@ -345,6 +362,8 @@ class HzRuntimeImpl implements HzRuntime {
   private modelsCatalogPollStop?: ModelsPollStop;
   /** Optional Anthropic cache keep-alive stub (`HZ_ANTHROPIC_CACHE_KEEPALIVE_MS`). */
   private anthropicCacheKeepaliveStop?: AnthropicCacheKeepaliveStop;
+  /** Optional non-blocking Auto-Dream idle consolidation timer handle. */
+  private autoDreamHandle?: AutoDreamHandle;
   /** Durable EffectHost ledger (ruling 224); shared across turns for this runtime. */
   private readonly effectHost: EffectHost;
   /**
@@ -387,6 +406,10 @@ class HzRuntimeImpl implements HzRuntime {
 
   beginAnthropicCacheKeepalive(stop: AnthropicCacheKeepaliveStop): void {
     this.anthropicCacheKeepaliveStop = stop;
+  }
+
+  beginAutoDreamIdleHook(handle: AutoDreamHandle): void {
+    this.autoDreamHandle = handle;
   }
 
   constructor(args: {
@@ -474,7 +497,7 @@ class HzRuntimeImpl implements HzRuntime {
         `goal update refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
       );
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       throw new Error(
         "goal update refused: unattended setGoal never self-approves; allow the path in policy",
       );
@@ -694,7 +717,14 @@ class HzRuntimeImpl implements HzRuntime {
 
   newSession(title = "New chat"): HzRuntime {
     const previous = this.session;
-    this.session = this.store.createSession(title, { permissionMode: this.permissionMode() });
+    const next = this.store.createSession(title, { permissionMode: this.permissionMode() });
+    const nextOwner = acquireOwnedSession(this.store, next.id);
+    const previousOwner = this.sessionOwner;
+    this.session = next;
+    this.sessionOwner = nextOwner;
+    previousOwner.release();
+    this.transcriptWriteAdmit = "unset";
+    this.transcriptWriteRefuseReason = "";
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
     void this.logSessionStart();
@@ -753,6 +783,8 @@ class HzRuntimeImpl implements HzRuntime {
         this.sessionOwner = acquireOwnedSession(this.store, next.id);
       }
       this.session = next;
+      this.transcriptWriteAdmit = "unset";
+      this.transcriptWriteRefuseReason = "";
       if (next.permissionMode !== undefined) this.setPermissionMode(next.permissionMode);
       this.leases.length = 0;
       void this.logSessionEnd(previous.id);
@@ -775,6 +807,8 @@ class HzRuntimeImpl implements HzRuntime {
     this.session = next;
     this.sessionOwner = nextOwner;
     previousOwner.release();
+    this.transcriptWriteAdmit = "unset";
+    this.transcriptWriteRefuseReason = "";
     if (next.permissionMode !== undefined) this.setPermissionMode(next.permissionMode);
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
@@ -1504,7 +1538,7 @@ class HzRuntimeImpl implements HzRuntime {
     return this.controller !== undefined && !this.closed;
   }
 
-  interject(text: string, opts?: { images?: readonly unknown[] }): {
+  interject(text: string, opts?: { images?: readonly unknown[]; mode?: "steer" | "interrupt" }): {
     accepted: boolean;
     reason?: "idle" | "empty" | "closed";
     imagesRefused?: true;
@@ -1583,7 +1617,7 @@ class HzRuntimeImpl implements HzRuntime {
           ? `admission halted (blocked by ${next.blockedBy})`
           : "admission could not begin (queue busy or already settled)";
       emit(cb, { type: "error", message: reason });
-      queue.settle(admissionId, "failed", reason);
+      queue.settle(admissionId, "failed", reason, this.session.id);
       if (this.controller === controller) this.controller = undefined;
       if (this.active === cb) this.active = undefined;
       if (this.turnInterjection === interjection) this.turnInterjection = undefined;
@@ -1777,6 +1811,7 @@ class HzRuntimeImpl implements HzRuntime {
           approve: this.instanceApproval ?? getApprovalHandler(),
           askUser: this.instanceAskUser ?? getAskUserHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
+          promptEnvironmentSlot: this.promptEnvironmentSlot,
           ledger,
           effectHost: this.effectHost,
           trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
@@ -1953,7 +1988,7 @@ class HzRuntimeImpl implements HzRuntime {
         },
         true,
       );
-      queue.settle(admissionId, settlement, outcome.exit.detail ?? outcome.exit.terminal);
+      queue.settle(admissionId, settlement, outcome.exit.detail ?? outcome.exit.terminal, this.session.id);
       return outcome;
     } catch (err) {
       try {
@@ -1984,7 +2019,7 @@ class HzRuntimeImpl implements HzRuntime {
       } catch {
         /* audit chain already broken */
       }
-      queue.settle(admissionId, "unknown", errorMessage(err));
+      queue.settle(admissionId, "unknown", errorMessage(err), this.session.id);
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
       emit(cb, { type: "turn.done" });
       // Every outcome carries an exit (plan-mode turns included), so a caller
@@ -2035,6 +2070,8 @@ class HzRuntimeImpl implements HzRuntime {
     this.modelsCatalogPollStop = undefined;
     this.anthropicCacheKeepaliveStop?.();
     this.anthropicCacheKeepaliveStop = undefined;
+    this.autoDreamHandle?.cancel();
+    this.autoDreamHandle = undefined;
     await this.mcp?.stop();
     // Previews are process-global (tools/preview.ts): stop every live one, from
     // any session, so no dev server outlives the runtime that started it.
@@ -2043,6 +2080,7 @@ class HzRuntimeImpl implements HzRuntime {
     // Free the session only after the last transcript/event write above; the
     // exit hook is the safety net when close() never runs.
     this.sessionOwner.release();
+    clearSessionPiiVault(this.session.id);
     await this.kernel.close();
     this.store.close();
   }
@@ -2096,6 +2134,36 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     onModeChange: (_mode, reason) => impl?.note(`kernel: ${reason}`),
   });
   const kernelMode = await kernel.start();
+  let cachedReconcileBarrier =
+    process.env.HZ_R170_SQLITE_BARRIER === "1"
+      ? await kernel.checkReconcileBarrier()
+      : { blocked: false, unresolvedCount: 0, unresolvedIds: [] as string[] };
+  let barrierRefreshInFlight: Promise<void> | undefined;
+  const refreshReconcileBarrier = (): void => {
+    if (process.env.HZ_R170_SQLITE_BARRIER !== "1" || barrierRefreshInFlight !== undefined) return;
+    barrierRefreshInFlight = kernel
+      .checkReconcileBarrier()
+      .then((status) => {
+        cachedReconcileBarrier = status;
+      })
+      .catch((err) => {
+        if (process.env.HZ_R170_SQLITE_BARRIER === "1") {
+          cachedReconcileBarrier = {
+            blocked: true,
+            unresolvedCount: 0,
+            unresolvedIds: [],
+            reason: `reconcile.gate refresh error: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      })
+      .finally(() => {
+        barrierRefreshInFlight = undefined;
+      });
+  };
+  store.setReconcileBarrierCheck(() => {
+    refreshReconcileBarrier();
+    return cachedReconcileBarrier;
+  });
   // An absent, crashed or pin-rejected kernel is UNTRUSTED: guard decisions
   // still run (contract-identical), but there is no OS-level process boundary.
   // Unless the caller explicitly opted in, the only honest posture is
@@ -2171,6 +2239,11 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     await kernelEnforcesProcessSandbox(kernel),
   );
   if (effectHostSandboxDefault.notice) startupNotices.push(effectHostSandboxDefault.notice);
+  const effectHostTrustedDefault = applyEffectHostKernelTrustedDefault(
+    process.env,
+    kernelMode === "trusted",
+  );
+  if (effectHostTrustedDefault.notice) startupNotices.push(effectHostTrustedDefault.notice);
   const productNetnsDefault = applyProductNetnsCapableDefault(process.env, {
     kernelTrusted: kernelMode === "trusted",
   });
@@ -2321,6 +2394,7 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
       },
     }),
   );
+  impl.beginAutoDreamIdleHook(maybeScheduleAutoDream(workspace, { env: process.env }));
   const savedGrants = await hydrateSavedGrants(kernel, workspace, session.id, SESSION_LEASE_TTL_MS);
   if (savedGrants > 0) {
     impl.note(
@@ -2397,3 +2471,15 @@ export type { BudgetStop, BudgetCountdown } from "./loop";
 export { listSkills, getSkill, skillsPromptSection, resolveSkillForMessage, activeSkillSection } from "./skills";
 export { runNested, SUBAGENT_SYSTEM_PROMPT, clampSteps } from "./subagent";
 export type { Skill } from "./skills";
+export {
+  buildStartupMemoryMap,
+  maybeScheduleAutoDream,
+  runAutoDream,
+  shouldRunAutoDream,
+  type AutoDreamGateDecision,
+  type AutoDreamHandle,
+  type AutoDreamRunOptions,
+  type AutoDreamRunResult,
+  type AutoDreamScheduleOptions,
+  type StartupMemoryMapResult,
+};

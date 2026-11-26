@@ -369,10 +369,50 @@ function metaFor(msg: ChatMsg): string | null {
   return Object.keys(meta).length > 0 ? JSON.stringify(meta) : null;
 }
 
+/** R170 reconcile barrier callback checked before mutating SQLite writes. */
+export type ReconcileBarrierCheckFn = () => { blocked: boolean; unresolvedIds?: string[]; reason?: string };
+
+let activeReconcileBarrierCheck: ReconcileBarrierCheckFn | undefined;
+
+/** Register or clear the process-wide R170 reconcile barrier check used by direct SQLite writers. */
+export function setGlobalReconcileBarrierCheck(fn: ReconcileBarrierCheckFn | undefined): void {
+  activeReconcileBarrierCheck = fn;
+}
+
+/**
+ * Enforce the R170 SQLite reconcile barrier before any direct SQLite write.
+ * When `HZ_R170_SQLITE_BARRIER=1`, fails closed if no barrier check is registered
+ * or if the registered check reports `{ blocked: true }`.
+ */
+export function assertSqliteReconcileBarrierClear(
+  operation: string,
+  checkOverride?: ReconcileBarrierCheckFn,
+): void {
+  if (process.env.HZ_R170_SQLITE_BARRIER !== "1") return;
+  const check = checkOverride ?? activeReconcileBarrierCheck;
+  if (!check) {
+    throw new Error(
+      `HZ_R170_LATCH_BLOCKED: SQLite mutation '${operation}' refused because HZ_R170_SQLITE_BARRIER=1 is set with no reconcile barrier check registered`,
+    );
+  }
+  const status = check();
+  if (status?.blocked) {
+    const ids =
+      Array.isArray(status.unresolvedIds) && status.unresolvedIds.length > 0
+        ? ` (unresolved: ${status.unresolvedIds.join(", ")})`
+        : "";
+    const reason = typeof status.reason === "string" && status.reason !== "" ? ` (${status.reason})` : "";
+    throw new Error(
+      `HZ_R170_LATCH_BLOCKED: SQLite mutation '${operation}' refused while reconcile barrier is latched UNKNOWN${ids}${reason}`,
+    );
+  }
+}
+
 /** The session store: create sessions, append messages, read history back. */
 export class SessionStore {
   readonly workspace: string;
   readonly dbPath: string;
+  private reconcileBarrierCheck?: ReconcileBarrierCheckFn;
   /**
    * The shared SQLite handle. Public so additive stores in this directory can
    * use the same database — the NF-071 admission FIFO (`admission.ts`) reads
@@ -400,64 +440,66 @@ export class SessionStore {
     setOwnerOnly(dir, STATE_DIR_MODE);
 
     let recovered: SessionRecovery | null = null;
-    // A present-but-empty file is the silent-loss shape: SQLite would treat it
-    // as a brand-new database, so nothing downstream could tell the transcript
-    // was lost. Quarantine it before opening. A missing file is the normal
-    // fresh-create path and is left to `new Database(..., { create: true })`.
-    if (existsSync(this.dbPath) && statSync(this.dbPath).size === 0) {
-      recovered = { quarantined: quarantineDatabase(this.dbPath) };
-    }
-
-    let db: Database | undefined;
-    try {
-      db = new Database(this.dbPath, { create: true });
-      // The single integrity probe at open: the empty-file shape was handled
-      // above; every other corrupt shape surfaces here (SQLite validates the
-      // header and reads page 1 / the schema table). A healthy open pays one
-      // cheap query.
-      db.exec("SELECT count(*) FROM sqlite_master;");
-    } catch (err) {
-      if (!isCorruptDatabaseError(err)) throw err;
-      try {
-        db?.close();
-      } catch {
-        /* the handle never opened */
-      }
-      db = undefined;
-      recovered = { quarantined: quarantineDatabase(this.dbPath) };
-    }
-    this.db = db ?? new Database(this.dbPath, { create: true });
-    this.recovered = recovered;
-
-    // Two hzcode windows may share a workspace: wait instead of failing.
-    try {
-      this.db.exec("PRAGMA busy_timeout = 5000;");
-      // RC-16(e) / docs/12 §4.3: strict durability is the default. WAL keeps
-      // readers unblocked beside the writer; synchronous=FULL fsyncs every
-      // commit, so a committed transcript survives a crash. Both are set on
-      // every open (migration-safe: an existing rollback-journal database is
-      // converted in place; a database already in WAL stays there).
-      this.db.exec("PRAGMA journal_mode = WAL;");
-      this.db.exec("PRAGMA synchronous = FULL;");
-    } catch {
-      /* pragma support is best-effort */
-    }
-    // Cross-process: two hzcode processes opening one fresh/old database must not
-    // race the schema + ALTER TABLE migration (file-lock.ts). SQLite serializes
-    // individual statements; this serializes the check-then-ALTER sequence.
+    let openedDb!: Database;
+    // Cross-process: serialize 0-byte quarantine, corrupt-DB recovery, and schema
+    // migration under one lock so a concurrent opener never mistakes a fresh
+    // process's newly-created 0-byte file for corruption.
     withFileLockSync(`${this.dbPath}.migrate.lock`, () => {
-      this.db.exec(SCHEMA);
+      // A present-but-empty file is the silent-loss shape: SQLite would treat it
+      // as a brand-new database, so nothing downstream could tell the transcript
+      // was lost. Quarantine it before opening. A missing file is the normal
+      // fresh-create path and is left to `new Database(..., { create: true })`.
+      if (existsSync(this.dbPath) && statSync(this.dbPath).size === 0) {
+        recovered = { quarantined: quarantineDatabase(this.dbPath) };
+      }
+
+      let db: Database | undefined;
+      try {
+        db = new Database(this.dbPath, { create: true });
+        // The single integrity probe at open: the empty-file shape was handled
+        // above; every other corrupt shape surfaces here (SQLite validates the
+        // header and reads page 1 / the schema table). A healthy open pays one
+        // cheap query.
+        db.exec("SELECT count(*) FROM sqlite_master;");
+      } catch (err) {
+        if (!isCorruptDatabaseError(err)) throw err;
+        try {
+          db?.close();
+        } catch {
+          /* the handle never opened */
+        }
+        db = undefined;
+        recovered = { quarantined: quarantineDatabase(this.dbPath) };
+      }
+      openedDb = db ?? new Database(this.dbPath, { create: true });
+
+      // Two hzcode windows may share a workspace: wait instead of failing.
+      try {
+        openedDb.exec("PRAGMA busy_timeout = 5000;");
+        // RC-16(e) / docs/12 §4.3: strict durability is the default. WAL keeps
+        // readers unblocked beside the writer; synchronous=FULL fsyncs every
+        // commit, so a committed transcript survives a crash. Both are set on
+        // every open (migration-safe: an existing rollback-journal database is
+        // converted in place; a database already in WAL stays there).
+        openedDb.exec("PRAGMA journal_mode = WAL;");
+        openedDb.exec("PRAGMA synchronous = FULL;");
+      } catch {
+        /* pragma support is best-effort */
+      }
+      openedDb.exec(SCHEMA);
       // Fork lineage columns: additive, nullable, migration-safe (an older
       // database gains them in place; a session that is not a fork keeps NULLs).
       const have = new Set(
-        (this.db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
+        (openedDb.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
       );
-      if (!have.has("forked_from")) this.db.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
-      if (!have.has("fork_index")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
-      if (!have.has("fork_seq")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
-      if (!have.has("permission_mode")) this.db.exec("ALTER TABLE sessions ADD COLUMN permission_mode TEXT");
-      migrateSessionDb(this.db);
+      if (!have.has("forked_from")) openedDb.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
+      if (!have.has("fork_index")) openedDb.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
+      if (!have.has("fork_seq")) openedDb.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
+      if (!have.has("permission_mode")) openedDb.exec("ALTER TABLE sessions ADD COLUMN permission_mode TEXT");
+      migrateSessionDb(openedDb);
     });
+    this.db = openedDb;
+    this.recovered = recovered;
 
     // Owner-only state, applied after the schema and WAL pragmas so the file
     // and any sidecar they created are covered. Re-applied on every open, so a
@@ -467,7 +509,27 @@ export class SessionStore {
     setOwnerOnly(`${this.dbPath}-shm`, STATE_FILE_MODE);
   }
 
+  /**
+   * Register an optional R170 reconcile barrier check. When
+   * `process.env.HZ_R170_SQLITE_BARRIER === "1"` and this check returns
+   * `{ blocked: true }`, mutating SQLite writes throw `HZ_R170_LATCH_BLOCKED`.
+   */
+  setReconcileBarrierCheck(fn: ReconcileBarrierCheckFn | undefined): void {
+    this.reconcileBarrierCheck = fn;
+    setGlobalReconcileBarrierCheck(fn);
+  }
+
+  /** Public barrier guard hook for companion SQLite writers sharing this store. */
+  guardWrite(operation: string): void {
+    this.assertReconcileBarrierClear(operation);
+  }
+
+  private assertReconcileBarrierClear(operation: string): void {
+    assertSqliteReconcileBarrierClear(operation, this.reconcileBarrierCheck);
+  }
+
   createSession(title = "New chat", opts: { permissionMode?: PermissionMode } = {}): SessionInfo {
+    this.assertReconcileBarrierClear("createSession");
     const session: SessionInfo = {
       id: newId(),
       title,
@@ -518,6 +580,7 @@ export class SessionStore {
     parentId: string,
     opts: { at?: number; parentSeq?: number; title?: string; permissionMode?: PermissionMode } = {},
   ): SessionInfo {
+    this.assertReconcileBarrierClear("forkSession");
     const parent = this.getSession(parentId);
     if (!parent) throw new Error(`no session ${parentId} in this workspace`);
     const rows = this.db
@@ -571,6 +634,7 @@ export class SessionStore {
 
   /** Retitle a session (the chat loop names it from the first user message). */
   touchSession(id: string, title?: string): void {
+    this.assertReconcileBarrierClear("touchSession");
     const updated = nowIso();
     if (title !== undefined) {
       this.db.run("UPDATE sessions SET updated = ?, title = ? WHERE id = ?", [updated, title, id]);
@@ -581,6 +645,7 @@ export class SessionStore {
   }
 
   appendMessage(sessionId: string, msg: ChatMsg): string {
+    this.assertReconcileBarrierClear("appendMessage");
     const id = newId();
     const ts = nowIso();
     const stored = contentForStorage(msg.content);
@@ -627,6 +692,7 @@ export class SessionStore {
 
   /** Best-effort FTS upsert; search failures must never break the transcript. */
   refreshSearchIndex(sessionId: string): void {
+    this.assertReconcileBarrierClear("refreshSearchIndex");
     const info = this.getSession(sessionId);
     if (!info) return;
     try {
@@ -672,6 +738,7 @@ export class SessionStore {
    * process is writing.
    */
   repairDanglingToolCalls(sessionId: string): { repaired: number; calls: string[] } {
+    this.assertReconcileBarrierClear("repairDanglingToolCalls");
     const rows = this.db
       .query("SELECT id, role, content, ts, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
       .all(sessionId) as RepairRow[];
@@ -776,6 +843,7 @@ export class SessionStore {
    * call with the same (already-reached) boundary removes nothing.
    */
   truncateMessages(sessionId: string, keepCount: number): { removed: number; keptCount: number; adjustedTo: number } {
+    this.assertReconcileBarrierClear("truncateMessages");
     const roleRows = this.db
       .query("SELECT id, role, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
       .all(sessionId) as Array<{ id: string; role: string; meta: string | null }>;
@@ -807,11 +875,65 @@ export class SessionStore {
     return { removed, keptCount: adjustedTo, adjustedTo };
   }
 
+  /** Fold session_event rows into the derived session_lifecycle projection (V-12). */
+  foldLifecycleEvents(
+    sessionId: string,
+    manifest: ProjectorManifest = SESSION_LIFECYCLE_PROJECTOR,
+  ): { applied: number; throughSeq: number } {
+    this.assertReconcileBarrierClear("foldLifecycleEvents");
+    return foldSessionEvents(this.db, sessionId, manifest);
+  }
+
+  /** Read the derived lifecycle view for a session (V-12). */
+  lifecycleView(sessionId: string): SessionLifecycleView {
+    return sessionLifecycle(this.db, sessionId);
+  }
+
+  /** Scan the workspace for leftover temporary, scratch, or debug-log artifacts. */
+  scanWorkspaceCleanState(): CleanStateScanReport {
+    return scanCleanState(this.workspace);
+  }
+
   close(): void {
+    if (this.reconcileBarrierCheck !== undefined && activeReconcileBarrierCheck === this.reconcileBarrierCheck) {
+      activeReconcileBarrierCheck = undefined;
+    }
     try {
       this.db.close();
     } catch {
       /* already closed */
     }
   }
+}
+
+import { scanReverseJsonlRecords } from "./reverse-jsonl-scanner";
+import {
+  foldSessionEvents,
+  SESSION_LIFECYCLE_PROJECTOR,
+  sessionLifecycle,
+  type ProjectorManifest,
+  type SessionLifecycleView,
+} from "./session-projection";
+import { scanCleanState, type CleanStateFinding, type CleanStateScanReport } from "./clean-state-scanner";
+
+export {
+  foldSessionEvents,
+  scanCleanState,
+  SESSION_LIFECYCLE_PROJECTOR,
+  sessionLifecycle,
+  type CleanStateFinding,
+  type CleanStateScanReport,
+  type ProjectorManifest,
+  type SessionLifecycleView,
+};
+
+/**
+ * Scan recent NDJSON records in reverse order (newest-first).
+ * Seam for rollout replay and fast tail inspection.
+ */
+export function scanRecentSessionRolloutRecords<T = unknown>(
+  ndjsonBlob: string,
+  maxRecords?: number,
+): T[] {
+  return scanReverseJsonlRecords<T>(ndjsonBlob, { maxRecords });
 }

@@ -16,6 +16,7 @@ import {
   runBestOfNRace,
 } from "../core/best-of-n";
 import { defaultBestOfNWorktreeHooks } from "../core/best-of-n-worktree";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { worktreePoolMaxFromEnv } from "../core/worktree-pool";
 
 const DEFAULT_STEPS = 12;
@@ -107,6 +108,7 @@ export const agentTool: Tool = {
       }
       return await ctx.delegate(task, steps, profile);
     } catch (e) {
+      tunnelPermissionError(e);
       return { ok: false, output: "", error: e instanceof Error ? e.message : String(e) };
     }
   },

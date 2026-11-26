@@ -94,9 +94,9 @@ impl PatternToken {
     fn matches(&self, arg: &str, canonical_matching: bool) -> bool {
         match self {
             PatternToken::Single(s) => token_eq(s, arg, canonical_matching),
-            PatternToken::Alts(alts) => {
-                alts.iter().any(|alt| token_eq(alt, arg, canonical_matching))
-            }
+            PatternToken::Alts(alts) => alts
+                .iter()
+                .any(|alt| token_eq(alt, arg, canonical_matching)),
         }
     }
 
@@ -122,6 +122,30 @@ fn token_eq(pattern: &str, arg: &str, canonical_matching: bool) -> bool {
     } else {
         pattern == arg
     }
+}
+
+/// Returns `true` if `command` contains any shell control metacharacter,
+/// quote, or escape that could chain, redirect, substitute, or split beyond
+/// the conservative whitespace-tokenized `execpolicy` prefix match.
+pub fn contains_shell_control_metachar(command: &str) -> bool {
+    command.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '`'
+                | '$'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | '\n'
+                | '\r'
+                | '\''
+                | '"'
+                | '\\'
+        )
+    })
 }
 
 /* ------------------------------ PrefixPattern ------------------------------ */
@@ -306,6 +330,8 @@ pub fn normalize_network_rule_host(input: &str) -> Result<String, String> {
             s = &s[..idx];
         }
     }
+    // strip a single trailing FQDN root dot; reject empty labels / `..`
+    let s = s.strip_suffix('.').unwrap_or(s);
     if s.is_empty() {
         return Err("host is empty after normalization".to_string());
     }
@@ -314,6 +340,9 @@ pub fn normalize_network_rule_host(input: &str) -> Result<String, String> {
     }
     if s.chars().any(char::is_whitespace) {
         return Err(format!("host {:?} contains whitespace", input));
+    }
+    if s.starts_with('.') || s.ends_with('.') || s.contains("..") {
+        return Err(format!("host {:?} contains an empty label", input));
     }
     Ok(s.to_ascii_lowercase())
 }
@@ -406,6 +435,7 @@ pub enum AllowlistError {
     Shape(String),
     Rule { index: usize, detail: String },
     Example { index: usize, detail: String },
+    Hardlinked(String),
 }
 
 impl std::fmt::Display for AllowlistError {
@@ -430,6 +460,11 @@ impl std::fmt::Display for AllowlistError {
                 f,
                 "HZ_PRECONDITION_FAILED: allowlist rule {} failed its own example: {}",
                 index, detail
+            ),
+            AllowlistError::Hardlinked(path) => write!(
+                f,
+                "HZ_PRECONDITION_FAILED: {}: allowlist.json must have exactly one link (metadata nlink > 1); refusing to serve an allowlist another name can rewrite",
+                path
             ),
         }
     }
@@ -456,6 +491,14 @@ pub fn load(state_dir: &Path) -> Result<Option<ExecPolicy>, AllowlistError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(AllowlistError::Unreadable(e.to_string())),
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(&path).map_err(|e| AllowlistError::Unreadable(e.to_string()))?;
+        if meta.nlink() > 1 {
+            return Err(AllowlistError::Hardlinked(path.display().to_string()));
+        }
+    }
     parse_policy(&text).map(Some)
 }
 
@@ -552,7 +595,11 @@ fn parse_prefix_rule(index: usize, item: &Value) -> Result<PrefixRule, Allowlist
     let canonical_matching = match obj.get("canonicalMatching") {
         None => true, // caseless by default (the stronger, safer form)
         Some(Value::Bool(b)) => *b,
-        Some(_) => return Err(invalid("\"canonicalMatching\" must be a boolean".to_string())),
+        Some(_) => {
+            return Err(invalid(
+                "\"canonicalMatching\" must be a boolean".to_string(),
+            ))
+        }
     };
 
     let rest = match obj.get("args") {
@@ -596,13 +643,16 @@ fn parse_pattern_token(
         Value::Array(items) => {
             let mut alts = Vec::with_capacity(items.len());
             for alt in items {
-                let s = alt.as_str().ok_or_else(|| {
-                    invalid(format!("args[{}] alts must be strings", tok_index))
-                })?;
+                let s = alt
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("args[{}] alts must be strings", tok_index)))?;
                 alts.push(s.to_string());
             }
             if alts.is_empty() {
-                return Err(invalid(format!("args[{}] alts must be non-empty", tok_index)));
+                return Err(invalid(format!(
+                    "args[{}] alts must be non-empty",
+                    tok_index
+                )));
             }
             Ok(PatternToken::Alts(alts))
         }
@@ -638,7 +688,10 @@ fn parse_examples(
             }
             Ok(out)
         }
-        Some(_) => Err(invalid(format!("\"{}\" must be an array of argv arrays", field))),
+        Some(_) => Err(invalid(format!(
+            "\"{}\" must be an array of argv arrays",
+            field
+        ))),
     }
 }
 
@@ -656,8 +709,9 @@ fn parse_network_rule(index: usize, item: &Value) -> Result<NetworkRule, Allowli
 
     let protocol = match obj.get("protocol") {
         None => NetworkProtocol::Https, // https by default
-        Some(Value::String(s)) => NetworkProtocol::parse(s)
-            .ok_or_else(|| invalid(format!("unknown protocol {:?}", s)))?,
+        Some(Value::String(s)) => {
+            NetworkProtocol::parse(s).ok_or_else(|| invalid(format!("unknown protocol {:?}", s)))?
+        }
         Some(_) => return Err(invalid("\"protocol\" must be a string".to_string())),
     };
 
@@ -704,10 +758,7 @@ pub fn amend_allow_prefix_rule(
 
 /// Append a network rule to the on-disk allowlist, dedup-by-content, under the
 /// advisory lock.
-pub fn amend_network_rule(
-    state_dir: &Path,
-    rule: &NetworkRule,
-) -> Result<bool, AllowlistError> {
+pub fn amend_network_rule(state_dir: &Path, rule: &NetworkRule) -> Result<bool, AllowlistError> {
     with_lock(state_dir, |policy| {
         if policy.network_rules.iter().any(|existing| existing == rule) {
             return false;
@@ -758,7 +809,11 @@ fn policy_to_value(policy: &ExecPolicy) -> Value {
             rules.push(prefix_rule_to_value(rule));
         }
     }
-    let nets: Vec<Value> = policy.network_rules.iter().map(network_rule_to_value).collect();
+    let nets: Vec<Value> = policy
+        .network_rules
+        .iter()
+        .map(network_rule_to_value)
+        .collect();
     json!({ "rules": rules, "networkRules": nets })
 }
 
@@ -927,7 +982,10 @@ mod tests {
             from_matches([Decision::Allow, Decision::Ask]),
             Some(Decision::Ask)
         );
-        assert_eq!(from_matches([Decision::Allow, Decision::Allow]), Some(Decision::Allow));
+        assert_eq!(
+            from_matches([Decision::Allow, Decision::Allow]),
+            Some(Decision::Allow)
+        );
         assert_eq!(from_matches(std::iter::empty()), None);
 
         // the same through evaluate_command: a deny and an allow on the same
@@ -939,8 +997,14 @@ mod tests {
         policy
             .add_prefix_rule(prefix_rule("rm", vec![single("-rf")], Decision::Deny))
             .unwrap();
-        assert_eq!(policy.evaluate_command(&argv(&["rm", "-rf"])), Some(Decision::Deny));
-        assert_eq!(policy.evaluate_command(&argv(&["rm", "file"])), Some(Decision::Allow));
+        assert_eq!(
+            policy.evaluate_command(&argv(&["rm", "-rf"])),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            policy.evaluate_command(&argv(&["rm", "file"])),
+            Some(Decision::Allow)
+        );
         assert_eq!(policy.evaluate_command(&argv(&["ls"])), None);
     }
 
@@ -958,7 +1022,11 @@ mod tests {
         b.add_prefix_rule(prefix_rule("git", vec![single("status")], Decision::Allow))
             .unwrap();
 
-        assert_eq!(a.fingerprint(), b.fingerprint(), "order must not change the fingerprint");
+        assert_eq!(
+            a.fingerprint(),
+            b.fingerprint(),
+            "order must not change the fingerprint"
+        );
         assert!(canon::is_hash(&a.fingerprint()));
 
         // a changed rule changes the hash
@@ -972,7 +1040,10 @@ mod tests {
 
     #[test]
     fn normalize_host_accepts_and_rejects() {
-        assert_eq!(normalize_network_rule_host("Example.COM").unwrap(), "example.com");
+        assert_eq!(
+            normalize_network_rule_host("Example.COM").unwrap(),
+            "example.com"
+        );
         assert_eq!(
             normalize_network_rule_host("https://example.com:443/path?q=1").unwrap(),
             "example.com"
@@ -1003,7 +1074,11 @@ mod tests {
         )
         .unwrap();
         let err = load(&dir).unwrap_err();
-        assert!(matches!(err, AllowlistError::Rule { index: 0, .. }), "{:?}", err);
+        assert!(
+            matches!(err, AllowlistError::Rule { index: 0, .. }),
+            "{:?}",
+            err
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1018,19 +1093,31 @@ mod tests {
     #[test]
     fn example_validation_refuses_a_bad_prefix_rule() {
         // a rule whose match example does NOT match the pattern is refused
-        let doc = r#"[{"program":"git","args":["status"],"decision":"allow","match":[["git","push"]]}]"#;
+        let doc =
+            r#"[{"program":"git","args":["status"],"decision":"allow","match":[["git","push"]]}]"#;
         let err = parse_policy(doc).unwrap_err();
-        assert!(matches!(err, AllowlistError::Example { index: 0, .. }), "{:?}", err);
+        assert!(
+            matches!(err, AllowlistError::Example { index: 0, .. }),
+            "{:?}",
+            err
+        );
 
         // a rule whose notMatch example DOES match is refused
         let doc2 = r#"[{"program":"git","args":["status"],"decision":"allow","notMatch":[["git","status"]]}]"#;
         let err2 = parse_policy(doc2).unwrap_err();
-        assert!(matches!(err2, AllowlistError::Example { index: 0, .. }), "{:?}", err2);
+        assert!(
+            matches!(err2, AllowlistError::Example { index: 0, .. }),
+            "{:?}",
+            err2
+        );
 
         // a well-formed rule with passing examples loads
         let good = r#"[{"program":"git","args":["status"],"decision":"allow","match":[["git","status","-s"]],"notMatch":[["git","push"]]}]"#;
         let policy = parse_policy(good).unwrap();
-        assert_eq!(policy.evaluate_command(&argv(&["git", "status"])), Some(Decision::Allow));
+        assert_eq!(
+            policy.evaluate_command(&argv(&["git", "status"])),
+            Some(Decision::Allow)
+        );
     }
 
     #[test]
@@ -1045,7 +1132,10 @@ mod tests {
 
         // a reload sees exactly one copy and it evaluates
         let policy = load(&dir).unwrap().expect("policy present after amend");
-        assert_eq!(policy.evaluate_command(&argv(&["git", "status"])), Some(Decision::Allow));
+        assert_eq!(
+            policy.evaluate_command(&argv(&["git", "status"])),
+            Some(Decision::Allow)
+        );
         let total: usize = policy.rules_by_program.values().map(Vec::len).sum();
         assert_eq!(total, 1, "dedup must keep exactly one copy");
 
@@ -1081,5 +1171,36 @@ mod tests {
         assert_eq!(p1.fingerprint(), p2.fingerprint());
         let _ = fs::remove_dir_all(&dir1);
         let _ = fs::remove_dir_all(&dir2);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod track1_hardening_tests {
+    use super::*;
+
+    #[test]
+    fn allowlist_load_rejects_hardlinked_allowlist_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "hz-allowlist-nlink-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let allowlist_file = dir.join(ALLOWLIST_FILE);
+        fs::write(&allowlist_file, "[]").unwrap();
+        assert!(load(&dir).unwrap().is_some());
+
+        let hardlink = dir.join("allowlist-hardlink.json");
+        fs::hard_link(&allowlist_file, &hardlink).unwrap();
+        let err = load(&dir).unwrap_err();
+        assert!(
+            matches!(err, AllowlistError::Hardlinked(_)),
+            "expected Hardlinked error, got {err:?}"
+        );
+        assert!(err.to_string().contains("nlink > 1"), "{err}");
+
+        fs::remove_file(&hardlink).unwrap();
+        assert!(load(&dir).unwrap().is_some());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

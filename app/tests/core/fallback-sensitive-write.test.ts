@@ -33,7 +33,8 @@ describe("LocalKernel sensitive-write mirror", () => {
         { kind: "fs.write", target: path.join(root, "src/index.ts") },
         "workspace",
       );
-      expect(normal.decision).toBe("allow");
+      expect(normal.decision).toBe("ask");
+      expect(typeof normal.leaseId === "string" && normal.leaseId.length > 0).toBe(true);
       expect(isSensitiveWriteTarget(path.join(root, "src/index.ts"))).toBe(false);
     } finally {
       await kernel.close();
@@ -53,7 +54,7 @@ describe("LocalKernel sensitive-write mirror", () => {
 
       const exact = await kernel.makeLease("fs.write", target, 60_000);
       const allowed = await kernel.checkGuard({ kind: "fs.write", target }, "workspace");
-      expect(allowed.decision).toBe("allow");
+      expect(allowed.decision).toBe("ask");
       expect(allowed.leaseId).toBe(exact.leaseId);
       expect(allowed.reason ?? "").toContain("exact");
 

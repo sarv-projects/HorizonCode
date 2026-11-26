@@ -183,6 +183,20 @@ describe("product-default CREATE hermetic prove path (ruling 656)", () => {
     expect(assessNetnsSpawnRoutedProxyWiring(merged).wired).toBe(true);
   });
 
+  test("explicit veth CREATE=0 opt-out is preserved by product defaults", () => {
+    const input = {
+      HZ_SANDBOX_EXEC: "1",
+      HZ_SANDBOX_NETNS: "1",
+      HZ_SANDBOX_VETH_CREATE: "0",
+      HZ_EGRESS_PROXY: "http://127.0.0.1:4317",
+    };
+    const merged = mergeSandboxNetnsProductDefaultSpawnEnv(input, { sandboxWrapped: true, spawnPid: 94601 });
+    expect(merged.HZ_SANDBOX_VETH_CREATE).toBe("0");
+    expect(merged.HZ_SANDBOX_VETH_HOST).toBeUndefined();
+    expect(merged.HZ_SANDBOX_VETH_PEER).toBeUndefined();
+    expect(merged.HZ_SANDBOX_VETH_PEER_ADDR).toBeUndefined();
+    expect(merged.HZ_SANDBOX_VETH_DEFAULT_ROUTE).toBeUndefined();
+  });
   test("attemptNetnsSpawnProductDefaultConnectEgress refuses when product routing off", async () => {
     const result = await attemptNetnsSpawnProductDefaultConnectEgress(
       { HZ_SANDBOX_EXEC: "1", HZ_EGRESS_PROXY: "http://127.0.0.1:9" },

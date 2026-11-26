@@ -98,7 +98,7 @@ describe("H-5 google tool args through utils", () => {
     expect(toolCallsOf(result.events)[0]!.arguments).toBe('{"path":"a.ts"}');
   });
 
-  test("a malformed / truncated arg string fails closed to {} instead of throwing", async () => {
+  test("a malformed / truncated arg string attaches toolInputError instead of throwing", async () => {
     const frame = geminiFrame({
       candidates: [
         {
@@ -114,7 +114,9 @@ describe("H-5 google tool args through utils", () => {
     );
     await result.done;
     expect(result.thrown).toBeNull();
-    expect(toolCallsOf(result.events)[0]!.arguments).toBe("{}");
+    const call = toolCallsOf(result.events)[0]!;
+    expect(call.toolInputError?.code).toBe("tool_input_error");
+    expect(call.toolInputError?.message).toContain("Invalid JSON");
   });
 });
 

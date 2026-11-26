@@ -4,15 +4,24 @@
 //! Windows: non-blocking `LockFileEx` (`LOCKFILE_EXCLUSIVE_LOCK|FAIL_IMMEDIATELY`).
 //! Other targets: unsupported (caller fails closed).
 
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 /// Held exclusive OS file lock. Dropping unlocks (process exit also releases).
-#[derive(Debug)]
+/// `Debug` is implemented manually because Windows OVERLAPPED is not Debug.
 pub struct ExclusiveOsFileLock {
     file: File,
     #[cfg(windows)]
     overlapped: Box<windows_sys::Win32::System::IO::OVERLAPPED>,
+}
+
+impl fmt::Debug for ExclusiveOsFileLock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExclusiveOsFileLock")
+            .field("file", &self.file)
+            .finish()
+    }
 }
 
 impl ExclusiveOsFileLock {
@@ -42,7 +51,8 @@ impl ExclusiveOsFileLock {
         use windows_sys::Win32::Storage::FileSystem::{
             LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
         };
-        let mut overlapped = Box::new(unsafe { std::mem::zeroed() });
+        use windows_sys::Win32::System::IO::OVERLAPPED;
+        let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         let handle = file.as_raw_handle() as HANDLE;
         let ok = unsafe {
             LockFileEx(
@@ -68,6 +78,17 @@ impl ExclusiveOsFileLock {
     pub fn file(&self) -> &File {
         &self.file
     }
+
+    /// Write the holder PID directly through the already-open locked handle so
+    /// Windows mandatory `LockFileEx` never self-collides with `ERROR_LOCK_VIOLATION`.
+    pub fn write_pid(&self, pid: u32) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = &self.file;
+        f.set_len(0)?;
+        f.seek(SeekFrom::Start(0))?;
+        f.write_all(format!("{pid}\n").as_bytes())?;
+        f.flush()
+    }
 }
 
 impl Drop for ExclusiveOsFileLock {
@@ -86,13 +107,7 @@ impl Drop for ExclusiveOsFileLock {
             use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
             let handle = self.file.as_raw_handle() as HANDLE;
             unsafe {
-                let _ = UnlockFileEx(
-                    handle,
-                    0,
-                    u32::MAX,
-                    u32::MAX,
-                    self.overlapped.as_mut(),
-                );
+                let _ = UnlockFileEx(handle, 0, u32::MAX, u32::MAX, self.overlapped.as_mut());
             }
         }
     }
@@ -135,6 +150,23 @@ mod tests {
         drop(first);
         let third = ExclusiveOsFileLock::try_acquire(&path).expect("after release");
         drop(third);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_pid_through_locked_handle_succeeds_without_lock_collision() {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = isolated_lock_path("write-pid");
+        let lock = ExclusiveOsFileLock::try_acquire(&path).expect("acquire");
+        lock.write_pid(424242).expect("write pid through locked handle");
+        lock.write_pid(std::process::id())
+            .expect("overwrite shorter/different pid through locked handle");
+        let mut f = lock.file();
+        f.seek(SeekFrom::Start(0)).expect("seek");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents).expect("read");
+        assert_eq!(contents, format!("{}\n", std::process::id()));
+        drop(lock);
         let _ = fs::remove_file(&path);
     }
 }

@@ -6,8 +6,8 @@
  * approval in `loop.ts`. One-step Add/exact-Update/Delete/Move,
  * same-file exact multi-hunk Update collapsed into one whole-file write,
  * and structural `ast_edit` one/multiple complete matches may kernel-route.
- * Multi-file/ambiguous/Bun-only-first-hit fuzz remain unsupported. Ineligible or disabled routes may use Bun in non-strict mode; a
- * Rust refusal or uncertain kernel transport result NEVER falls back to Bun.
+ * Multi-file/ambiguous/Bun-only-first-hit fuzz remain unsupported. Eligible projections that cannot run may use Bun in non-strict mode;
+ * shape-ineligible write/edit/apply_patch/ast_edit are refused by the loop. A Rust refusal or uncertain kernel transport result NEVER falls back to Bun.
  * Kernel still owns the routed write bytes; TS
  * records the change journal after settled write/edit (**281**); kernel owns
  * temp+rename atomic write under sandboxRoot (**283**). Since ruling **349**,
@@ -48,6 +48,7 @@ import {
   applyPatchArgsEligibleForKernelRoute,
   applyPatchKernelProjections,
   applyPatchProjectionMissRequireDetail,
+  astEditArgsEligibleForKernelRoute,
   astEditKernelProjection,
   astEditKernelAtomicMultiProjection,
   refreshApplyPatchFileCache,
@@ -64,16 +65,20 @@ import { kernelFsMutationSuccessOutput } from "./effect-evidence";
 
 const KERNEL_ROUTE_TAG = "[effect-host-kernel]";
 
-/** A kernel refusal is final: it may represent an OwnerLog UNKNOWN or a
- * denied policy decision. Treating it as an unavailable route and running Bun
- * instead would make the kernel's authority advisory. Transport UNKNOWN is
- * surfaced as KernelRefusal by KernelClient.rpc for the same reason. */
+/** A thrown kernel error is final. Returning undefined would let the loop treat
+ * the attempt as "not routed" and run ambient Bun. KernelRefusal covers an
+ * OwnerLog UNKNOWN or a denied policy decision; any other throw (transport
+ * down, unexpected failure) is the same class of miss (**958**). */
 function refusedKernelRoute(
   error: unknown,
   journalSkipped: boolean,
-): KernelMutationRouteOutcome | undefined {
-  if (!(error instanceof KernelRefusal)) return undefined;
-  const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: kernel mutation refused — ${error.message}`;
+): KernelMutationRouteOutcome {
+  const reason = error instanceof KernelRefusal
+    ? error.message
+    : error instanceof Error
+      ? error.message
+      : String(error);
+  const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: kernel mutation refused — ${reason}`;
   return {
     journalSkipped,
     kernelObserve: {},
@@ -186,23 +191,27 @@ export function shellKernelRouteMissRequireDetail(
   }
 }
 
-/** Shape classes that must not Bun-fallback when EffectHost is on (ruling **652**). */
+/** Shape classes named in the no-ambient shell detail (ruling **652** / **957**). */
 const SHELL_NO_AMBIENT_MISS = new Set<ShellKernelRouteMissReason>([
   "compound",
   "unparsed",
   "metachar",
   "inline_env",
   "interpreter",
+  "timeout_arg",
+  "empty",
 ]);
 
 export const EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE =
   "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL on: refused — compound/interpreter shell cannot ambient Bun-fallback";
 
 /**
- * P0-1 / ruling **652**: when EffectHost mutation routing is on (`=1`/`=default`/
- * `=require`), refuse compound/interpreter/metachar shell instead of ambient Bun
- * fallback. `timeoutMs` and kernel-unavailable simple argv still Bun under
- * non-require (require already refuses those via **649**).
+ * P0-1 / rulings **652** / **957** / **958**: when EffectHost is `=1` or
+ * `=default`, an unrouted shell does not run in ambient Bun. That covers
+ * compound/interpreter/metachar, `timeoutMs`, an empty command, and a
+ * shape-eligible argv whose kernel route returned no outcome (cwd escape or
+ * a throw that was not yet final). `=require` names these through its own
+ * refusal, so this helper stays inert there.
  */
 export function effectHostNoAmbientCompoundShellRefusal(
   tool: string,
@@ -212,15 +221,16 @@ export function effectHostNoAmbientCompoundShellRefusal(
 ): string | undefined {
   if (!effectHostKernelMutationEnabled(env)) return undefined;
   if (tool !== "shell" || kernelRouted) return undefined;
+  const mode = effectHostKernelMode(env);
+  if (mode === "require") return undefined;
   const command = typeof args.command === "string" ? args.command : "";
   const miss = classifyShellKernelRouteMiss(command, { timeoutMs: args.timeoutMs });
-  if (miss === undefined || !SHELL_NO_AMBIENT_MISS.has(miss.reason)) return undefined;
-  const mode = effectHostKernelMode(env);
-  if (mode === "require") {
-    // require path already names these via effectHostKernelRequireRefusal
-    return undefined;
-  }
-  return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE} (${shellKernelRouteMissRequireDetail(miss).replace(/ under require$/, " when EffectHost is on")})`;
+  const detail = miss === undefined
+    ? "shell kernel route unavailable"
+    : SHELL_NO_AMBIENT_MISS.has(miss.reason)
+      ? shellKernelRouteMissRequireDetail(miss).replace(/ under require$/, " when EffectHost is on")
+      : "shell kernel route unavailable";
+  return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE} (${detail})`;
 }
 
 export const EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE =
@@ -228,8 +238,8 @@ export const EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE =
 
 /**
  * P0-1 / ruling **667**: when EffectHost mutation routing is on (`=1`/`=default`),
- * refuse write/edit/apply_patch that cannot kernel-route at the args shape
- * instead of ambient Bun fallback (require uses **649** preflight/refusal).
+ * refuse write/edit/apply_patch/ast_edit that cannot kernel-route at the args
+ * shape instead of ambient Bun fallback (require uses **649** preflight/refusal).
  * Eligible shapes that miss kernel transport still Bun-fallback under non-require.
  */
 export function effectHostNoAmbientShapeIneligibleMutationRefusal(
@@ -250,6 +260,9 @@ export function effectHostNoAmbientShapeIneligibleMutationRefusal(
   }
   if (tool === "apply_patch" && !applyPatchArgsEligibleForKernelRoute(args)) {
     return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE} (${applyPatchProjectionMissRequireDetail("shape_ineligible")})`;
+  }
+  if (tool === "ast_edit" && !astEditArgsEligibleForKernelRoute(args)) {
+    return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE} (ast_edit args ineligible for kernel fs.edit)`;
   }
   return undefined;
 }

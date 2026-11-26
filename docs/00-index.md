@@ -2,9 +2,9 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Goal: NOT COMPLETE** (prototype trust spine / P0 bars open). LICENSE deferred. Never claim shell-net egress **`enforced`**.
 >
-> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Authoritative status: [`28-implementation-status.md`](28-implementation-status.md) §3 (rulings through **739**); honesty: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); stop-of-day: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md); competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md). Design set ratified through **RC-18** (RC-1…RC-17 plus event-map discipline); much of docs/01–25 remains **DESIGNED** ahead of code.
+> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Authoritative status: [`28-implementation-status.md`](28-implementation-status.md) §3 (rulings through **970**); honesty: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); stop-of-day: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md); competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md). Design set ratified through **RC-18** (RC-1…RC-17 plus event-map discipline); much of docs/01–25 remains **DESIGNED** ahead of code.
 >
-> **Gates note:** `bash ops/gates.sh` **8/8** re-verified 2026-11-19 (ruling **648** follow-up) — that is repository-gate VERIFIED, **not** P0/EffectHost/R170/egress done and **not** RELEASED. Historical 2026-11-10 suite counts in older banners are archive only. Build/commands: [`33-handoff.md`](33-handoff.md).
+> **Gates note:** `bash ops/gates.sh` **9/9** re-verified 2026-11-25 (Waves 1-3 audit remediation) — that is repository-gate VERIFIED, **not** P0/EffectHost/R170/egress done and **not** RELEASED. Historical 2026-11-10 suite counts in older banners are archive only. Build/commands: [`33-handoff.md`](33-handoff.md).
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.
 
@@ -23,7 +23,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 32 | [`32-plan-files.md`](./32-plan-files.md) | The `.hz/plans/` plan-file convention and the built-in `execute-plan` skill |
 | 33 | [`33-handoff.md`](./33-handoff.md) | Hand-off for the next coding agent: repo map, build/test/gate commands and gotchas, invariants, PR history #1 to #28, the full deferred backlog (one entry per item with upstream URLs, design, files, priority), known gaps, where the research lives |
 | 01 | [`01-vision-and-superset.md`](./01-vision-and-superset.md) | Why it exists; the eight references grilled; what is inherited, superseded and new |
-| 02 | [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-016 — every binding architectural decision, incl. **terminal-first vs web** |
+| 02 | [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-017 — every binding architectural decision, incl. **terminal-first vs web** |
 | 03 | [`03-hld.md`](./03-hld.md) | High-level design: planes, processes, trust boundaries, interfaces, targets |
 | 04 | [`04-lld.md`](./04-lld.md) | Low-level design: packages, crates, modules, function signatures, invariants |
 | 05 | [`05-domain-and-schemas.md`](./05-domain-and-schemas.md) | Domain model and every schema (`*V1`) |
@@ -59,7 +59,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 6. **Workspace config may only narrow user config.**
 7. **Self-improvement never widens authority.**
 
-(Normative form: `01-vision-and-superset.md` §1.1 P1–P10; binding form: ADR-001…ADR-016 in `02-decisions.md`. Wording here changes only when those change.)
+(Normative form: `01-vision-and-superset.md` §1.1 P1–P10; binding form: ADR-001…ADR-017 in `02-decisions.md`. Wording here changes only when those change.)
 
 ---
 

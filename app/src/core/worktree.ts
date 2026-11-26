@@ -35,3 +35,9 @@ export function worktreeAddCommand(repoRoot: string, name: string): string {
 export function worktreeRemoveCommand(dest: string): string {
   return `git worktree remove ${shellQuote(dest)} --force`;
 }
+
+/** Guarded shell command: clean/reset working tree to HEAD before slot reuse. */
+export function worktreeResetCommand(dest: string): string {
+  return `git -C ${shellQuote(dest)} reset --hard HEAD && git -C ${shellQuote(dest)} clean -fd`;
+}
+

@@ -21,12 +21,13 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { ReceiptInput, Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, ReceiptInput, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { canonicalJson, sha256Hex } from "../core/canon";
 import { loadConfig, type LspConfig } from "../core/config";
 import { DiagnosticsLedger } from "../core/diagnostics-ledger";
 import { workspaceDiagnostics } from "../core/lsp";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget } from "./helpers";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -37,14 +38,37 @@ function msg(e: unknown): string {
 }
 
 /**
+ * D-1: admit the file this tool is about to read, on its REAL path. The loop's
+ * coarse admission is lexical, so a symlinked file could otherwise be read
+ * through a link whose real target policy never saw.
+ */
+async function admitFileRead(ctx: ToolContext, target: string, rel: string): Promise<string | null> {
+  const action: GuardAction = { kind: "fs.read", target };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return `denied by policy${decision.reason ? `: ${decision.reason}` : ""}`;
+  }
+  if (decision.decision === "ask") {
+    const ok = await ctx.approve({ title: `Read ${rel}`, detail: target, kind: "fs.read" }, action);
+    if (!ok) return "declined by user";
+  }
+  return null;
+}
+
+/**
  * One DiagnosticsLedger per session, so fresh-only de-charging is scoped to the
  * session (like edit.ts's reflections Map). Process-global, keyed by sessionId.
  */
+const MAX_LEDGERS = 256;
 const ledgers = new Map<string, DiagnosticsLedger>();
 
 function ledgerFor(sessionId: string): DiagnosticsLedger {
   let ledger = ledgers.get(sessionId);
   if (ledger === undefined) {
+    if (ledgers.size >= MAX_LEDGERS) {
+      const oldest = ledgers.keys().next();
+      if (!oldest.done) ledgers.delete(oldest.value);
+    }
     ledger = new DiagnosticsLedger();
     ledgers.set(sessionId, ledger);
   }
@@ -96,8 +120,11 @@ export const lspTool: Tool = {
       if (op !== "diagnostics") return fail(`unsupported op: ${op} (v1 supports 'diagnostics')`);
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
 
-      const resolved = resolvePath(ctx.cwd, args.path);
+      const resolved = resolveRealTarget(ctx.cwd, args.path, ctx.workspace).real;
       const rel = relPath(ctx.cwd, resolved);
+
+      const denied = await admitFileRead(ctx, resolved, rel);
+      if (denied !== null) return fail(denied);
 
       let content: string;
       try {
@@ -147,6 +174,7 @@ export const lspTool: Tool = {
 
       return { ok: true, output };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

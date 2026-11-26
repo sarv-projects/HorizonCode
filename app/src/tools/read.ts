@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { ARTIFACT_MAX_BYTES, isArtifactUri, isContained, parseArtifactUri, resolveArtifactPath } from "../core/artifact-uri";
 import { blobBodyPath } from "../core/blobs";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { blobsDir, spillDir } from "../core/paths";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { anchorAt } from "./hashline";
@@ -14,6 +16,7 @@ import { renderStructuralSummary, structuralSummary } from "./read-summary";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 200 * 1024;
+const MAX_BATCH_PATHS = 20;
 /** Refuse to load files bigger than this whole; the output cap is far smaller. */
 const MAX_FILE_BYTES = 32 * 1024 * 1024;
 
@@ -32,7 +35,7 @@ async function checkAccess(ctx: ToolContext, resolved: string, rel: string): Pro
   if (decision.decision === "deny") {
     return `denied by policy${decision.reason ? `: ${decision.reason}` : ""}`;
   }
-  if (decision.decision === "ask") {
+  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
     const ok = await ctx.approve({ title: `Read ${rel}`, detail: resolved, kind: "fs.read" }, action);
     if (!ok) return "declined by user";
   }
@@ -64,7 +67,12 @@ function resolveArtifactForRead(workspace: string, uri: string): string | undefi
   return undefined;
 }
 
-async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, pathArg: string): Promise<ToolResult> {
+async function readOnePath(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  pathArg: string,
+  maxBytes: number = MAX_BYTES,
+): Promise<ToolResult> {
   try {
     if (pathArg === "") return fail("path is required");
     let effectivePath = pathArg;
@@ -78,7 +86,8 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       // Resolve symlinks BEFORE Guard: the guard must see the path whose bytes
       // will actually be read. Guarding the lexical path while `readFile`
       // follows a symlink is an escape (workspace/link -> /etc/...).
-      let resolved = resolvePath(ctx.cwd, effectivePath);
+      const lexical = resolvePath(ctx.cwd, effectivePath);
+      let resolved = lexical;
       try {
         resolved = await realpath(resolved);
       } catch {
@@ -88,6 +97,20 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
 
       const denied = await checkAccess(ctx, resolved, rel);
       if (denied) return fail(denied);
+
+      // Re-verify realpath after checkAccess (guard/approve) so a symlink swap
+      // during the approval window cannot redirect the read.
+      try {
+        const afterAccess = await realpath(lexical);
+        if (afterAccess !== resolved) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: read refused: ${lexical} now resolves to ${afterAccess} ` +
+              `(the approved target was ${resolved}); nothing was read`,
+          );
+        }
+      } catch {
+        return fail(`file not found: ${rel}`);
+      }
 
       let st;
       try {
@@ -149,7 +172,7 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
           ? `${anchorAt(anchorLines as string[], i)}| ${line}`
           : `${String(i + 1).padStart(6, " ")}| ${line}`;
         const size = Buffer.byteLength(rendered, "utf8") + 1;
-        const remaining = MAX_BYTES - bytes;
+        const remaining = maxBytes - bytes;
         if (size > remaining) {
           // the byte budget ran out; emit part of this line when there is room
           const cut = Buffer.from(rendered, "utf8").subarray(0, Math.max(0, remaining - 1)).toString("utf8");
@@ -168,9 +191,9 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       const shown = start + out.length;
       let body = out.join("\n");
       if (cutMid) {
-        body += `\n[truncated: reached the ${MAX_BYTES} byte limit mid-line]`;
+        body += `\n[truncated: reached the ${maxBytes} byte limit mid-line]`;
       } else if (byteLimited) {
-        body += `\n[truncated: reached the ${MAX_BYTES} byte limit at line ${shown}]`;
+        body += `\n[truncated: reached the ${maxBytes} byte limit at line ${shown}]`;
       } else if (shown < all.length) {
         body += `\n[truncated: lines ${start + 1}-${shown} of ${all.length}; use offset/limit to continue]`;
       }
@@ -187,6 +210,7 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       noteRead(ctx, resolved);
       return { ok: true, output: body };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
 }
@@ -232,13 +256,28 @@ export const readTool: Tool = {
     const hasBatch = batchPaths !== undefined && batchPaths.length > 0;
     if (hasPath && hasBatch) return fail("set either path or paths, not both");
     if (hasBatch) {
+      if (batchPaths!.length > MAX_BATCH_PATHS) {
+        return fail(`batch read supports at most ${MAX_BATCH_PATHS} paths (got ${batchPaths!.length})`);
+      }
       const items: ReadBatchItem[] = [];
+      let remainingBytes = MAX_BYTES;
       for (const entry of batchPaths!) {
         if (typeof entry !== "string" || entry === "") {
           items.push({ path: String(entry), ok: false, error: "invalid path entry" });
           continue;
         }
-        const one = await readOnePath(args, ctx, entry);
+        if (remainingBytes <= 0) {
+          items.push({
+            path: entry,
+            ok: false,
+            error: `batch byte budget (${MAX_BYTES} bytes) exhausted`,
+          });
+          continue;
+        }
+        const one = await readOnePath(args, ctx, entry, remainingBytes);
+        if (one.ok) {
+          remainingBytes = Math.max(0, remainingBytes - Buffer.byteLength(one.output, "utf8"));
+        }
         items.push({
           path: entry,
           ok: one.ok,

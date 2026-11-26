@@ -29,4 +29,15 @@ const x = target;
     const text = `obj.target();\nfoo?.target ( );`;
     expect(countStructuralCallSites(text, "target")).toBe(2);
   });
+
+  test("counts optional calls, newline-separated calls, and template interpolations", () => {
+    const text = [
+      "target?.();",
+      "target",
+      "(1);",
+      "const label = `saved ${target(2)}`;",
+      "const plain = `target()`;",
+    ].join("\n");
+    expect(countStructuralCallSites(text, "target")).toBe(3);
+  });
 });

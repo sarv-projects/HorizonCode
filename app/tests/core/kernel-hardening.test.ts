@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import type { GuardAction, Lease, Provider, RuntimeEvent } from "../../src/contracts";
+import { guardEffectivelyAllows } from "../../src/core/guard-g1-wire";
 import { KernelClient, LocalKernel, loadPolicy, patternMatches, protectedPathRefusal } from "../../src/core/kernel";
 import {
   GuardGate,
@@ -256,7 +257,7 @@ describe("lexical symlink-chain resolution (finding 2)", () => {
     // Default policy allows fs.write in the workspace scope: the link resolves
     // inside the workspace, so it is still an allow — protection did not widen.
     const decision = await local.checkGuard({ kind: "fs.write", target: insideLink }, "workspace");
-    expect(decision.decision).toBe("allow");
+    expect(guardEffectivelyAllows(decision)).toBe(true);
     await local.close();
 
     if (!hasRustKernel) return;
@@ -265,7 +266,7 @@ describe("lexical symlink-chain resolution (finding 2)", () => {
       const trusted = new KernelClient({ workspace, stateDir });
       expect(await trusted.start()).toBe("trusted");
       const trustedDecision = await trusted.checkGuard({ kind: "fs.write", target: insideLink }, "workspace");
-      expect(trustedDecision.decision).toBe("allow");
+      expect(guardEffectivelyAllows(trustedDecision)).toBe(true);
       await trusted.close();
     } finally {
       setEnv({ HZ_KERNEL_BIN: missingBinary });
@@ -284,7 +285,7 @@ describe("lease owner scoping (finding 3)", () => {
     expect((parent as Lease & { owner?: string }).owner).toBe("session-parent");
 
     const forParent = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], "session-parent");
-    expect(forParent.decision).toBe("allow");
+    expect(guardEffectivelyAllows(forParent)).toBe(true);
     expect(forParent.leaseId).toBe(parent.leaseId);
 
     // The child session is a different session: the parent's "always" is not
@@ -306,7 +307,7 @@ describe("lease owner scoping (finding 3)", () => {
       const minted = await client.makeLease("fs.write", TARGET, 60_000);
       expect((minted as Lease & { owner?: string }).owner).toBeUndefined();
       const decision = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], session);
-      expect(decision.decision, `legacy lease for session ${String(session)}`).toBe("allow");
+      expect(guardEffectivelyAllows(decision), `legacy lease for session ${String(session)}`).toBe(true);
       expect(decision.leaseId).toBe(minted.leaseId);
     }
     // ...and each of those mints is spent by its single allow: a repeat asks.
@@ -335,7 +336,7 @@ describe("lease owner scoping (finding 3)", () => {
 
     const parentGate = new GuardGate(gateWorkspace, client, [], () => noApproval, "session-parent");
     const parentCheck = await parentGate.check(action);
-    expect(parentCheck.decision).toBe("allow");
+    expect(guardEffectivelyAllows(parentCheck)).toBe(true);
     expect(parentCheck.leaseId).toBeDefined();
 
     const childGate = new GuardGate(gateWorkspace, client, [], () => noApproval, "session-child");
@@ -357,7 +358,7 @@ describe("lease owner scoping (finding 3)", () => {
       const parent = await client.makeLease("fs.write", TARGET, 60_000, "session-parent");
 
       const forParent = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], "session-parent");
-      expect(forParent.decision).toBe("allow");
+      expect(guardEffectivelyAllows(forParent)).toBe(true);
       expect(forParent.leaseId).toBe(parent.leaseId);
       const forChild = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], "session-child");
       expect(forChild.decision).toBe("ask");
@@ -365,7 +366,7 @@ describe("lease owner scoping (finding 3)", () => {
       const legacy = await client.makeLease("fs.write", TARGET, 60_000);
       expect((legacy as Lease & { owner?: string }).owner).toBeUndefined();
       const legacyForChild = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], "session-child");
-      expect(legacyForChild.decision).toBe("allow");
+      expect(guardEffectivelyAllows(legacyForChild)).toBe(true);
       await client.close();
     } finally {
       setEnv({ HZ_KERNEL_BIN: missingBinary });
@@ -393,7 +394,7 @@ describe("guard gate cache key (finding 4)", () => {
     expect(asked).toBe(1);
 
     // The same command in the same cwd stays cached — the fix must not double-ask.
-    expect((await gate.check(actionA)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(actionA))).toBe(true);
     expect(asked).toBe(1);
 
     // The same command in a DIFFERENT cwd must ask again: the finding was it
@@ -404,7 +405,7 @@ describe("guard gate cache key (finding 4)", () => {
     // And a digest-less tool-level check riding its own loop call is answered by
     // that call's admission, not by another cwd's cache entry.
     const toolLevel: GuardAction = { kind: "shell.exec", target: "npm run dev" };
-    expect((await gate.check(toolLevel, actionA)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(toolLevel, actionA))).toBe(true);
     expect((await gate.check(toolLevel, actionB)).decision).toBe("ask");
     await client.close();
   });
@@ -418,8 +419,8 @@ describe("guard gate cache key (finding 4)", () => {
     await gate.approve({ kind: "shell.exec", title: "run make" }, actionA);
     await gate.check(actionB);
     await gate.approve({ kind: "shell.exec", title: "run make" }, actionB);
-    expect((await gate.check(actionA)).decision).toBe("allow");
-    expect((await gate.check(actionB)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(actionA))).toBe(true);
+    expect(guardEffectivelyAllows(await gate.check(actionB))).toBe(true);
     const actionC: GuardAction = { kind: "shell.exec", target: "make", detail: { cwd: "/ws/c" } };
     expect((await gate.check(actionC)).decision).toBe("ask");
     await client.close();
@@ -739,7 +740,7 @@ describe("a hardlinked policy is refused (finding 10)", () => {
     writeFileSync(path.join(fx.stateDir, "policy.json"), policy, "utf8");
     const client = await fallback(fx);
     const target = path.join(fx.workspace, "x.txt");
-    expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
 
     const link = path.join(fx.workspace, "pol-link.json");
     // hard_link is not exposed by node:fs's sync API in the same spelling, so
@@ -754,7 +755,7 @@ describe("a hardlinked policy is refused (finding 10)", () => {
     expect(readFileSync(path.join(fx.stateDir, "policy.json"), "utf8")).toBe(before);
 
     rmSync(link);
-    expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
     await client.close();
   });
 
@@ -772,7 +773,7 @@ describe("a hardlinked policy is refused (finding 10)", () => {
       const client = new KernelClient({ workspace: fx.workspace, stateDir: fx.stateDir });
       expect(await client.start()).toBe("trusted");
       const target = path.join(fx.workspace, "x.txt");
-      expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+      expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
 
       const link = path.join(fx.workspace, "pol-link.json");
       linkSync(path.join(fx.stateDir, "policy.json"), link);
@@ -780,7 +781,7 @@ describe("a hardlinked policy is refused (finding 10)", () => {
         /must have exactly one link/,
       );
       rmSync(link);
-      expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+      expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
       await client.close();
     } finally {
       setEnv({ HZ_KERNEL_BIN: missingBinary });
@@ -805,14 +806,14 @@ describe("digest-less checks never inherit an approval (finding 11)", () => {
     expect((await gate.check(withArgsA)).decision).toBe("ask");
     expect(await gate.approve({ kind: "fs.write", title: "write A" }, withArgsA)).toBe(true);
     // The exact same intent is cached — no double prompt.
-    expect((await gate.check(withArgsA)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(withArgsA))).toBe(true);
 
     // The digest-less check is NOT satisfied by A's approval: it re-enters the
     // guard/ask path (the finding was that it ran with no ask at all).
     expect((await gate.check(withoutArgs)).decision).toBe("ask");
     // ...and once IT is approved, its own exact (digest-less) context is cached.
     expect(await gate.approve({ kind: "fs.write", title: "write B" }, withoutArgs)).toBe(true);
-    expect((await gate.check(withoutArgs)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(withoutArgs))).toBe(true);
     await client.close();
   });
 
@@ -826,7 +827,7 @@ describe("digest-less checks never inherit an approval (finding 11)", () => {
     };
     expect((await gate.check(parent)).decision).toBe("ask");
     expect(await gate.approve({ kind: "fs.write", title: "write parent" }, parent)).toBe(true);
-    expect((await gate.check(parent)).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await gate.check(parent))).toBe(true);
 
     // "Ride the parent" is only for the action the loop actually admitted:
     // same kind, same target. A check for another target or another kind is
@@ -846,7 +847,7 @@ describe("policy hot reload (finding 12)", () => {
     const fx = fixture("hz-reload-ts-");
     const client = await fallback(fx);
     const target = path.join(fx.workspace, "a.txt");
-    expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
 
     writeFileSync(
       path.join(fx.stateDir, "policy.json"),
@@ -856,7 +857,7 @@ describe("policy hot reload (finding 12)", () => {
     expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("deny");
 
     rmSync(path.join(fx.stateDir, "policy.json"));
-    expect((await client.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "workspace"))).toBe(true);
     await client.close();
   });
 });
@@ -950,7 +951,7 @@ describe("protocol and env hardening (finding 15)", () => {
     // A kernel-issued lease for the same surface IS authority.
     const issued = await client.makeLease("fs.write", target, 60_000);
     const allowed = await client.checkGuard({ kind: "fs.write", target }, "outside");
-    expect(allowed.decision).toBe("allow");
+    expect(guardEffectivelyAllows(allowed)).toBe(true);
     expect(allowed.leaseId).toBe(issued.leaseId);
     await client.close();
 
@@ -963,7 +964,7 @@ describe("protocol and env hardening (finding 15)", () => {
       expect((await trusted.checkGuard({ kind: "fs.write", target }, "outside", [fabricated])).decision).toBe("ask");
       const minted = await trusted.makeLease("fs.write", target, 60_000);
       const decision = await trusted.checkGuard({ kind: "fs.write", target }, "outside");
-      expect(decision.decision).toBe("allow");
+      expect(guardEffectivelyAllows(decision)).toBe(true);
       expect(decision.leaseId).toBe(minted.leaseId);
       await trusted.close();
     } finally {
@@ -977,10 +978,10 @@ describe("protocol and env hardening (finding 15)", () => {
     // The runtime's newSession() switches to a fresh session id; a grant made
     // for the old one is owner-scoped and must not answer the new session.
     const old = await client.makeLease("fs.write", target, 60_000, "session-old");
-    expect((await client.checkGuard({ kind: "fs.write", target }, "outside", [], "session-old")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "outside", [], "session-old"))).toBe(true);
     expect((await client.checkGuard({ kind: "fs.write", target }, "outside", [], "session-new")).decision).toBe("ask");
     await client.makeLease("fs.write", target, 60_000, "session-new");
-    expect((await client.checkGuard({ kind: "fs.write", target }, "outside", [], "session-new")).decision).toBe("allow");
+    expect(guardEffectivelyAllows(await client.checkGuard({ kind: "fs.write", target }, "outside", [], "session-new"))).toBe(true);
     expect(old.owner).toBe("session-old");
     await client.close();
   });
@@ -1026,7 +1027,7 @@ describe("shell.exec grants are exact commands (finding 16)", () => {
     expect(granted.pattern).toBe("echo harmless");
 
     const allowed = await client.checkGuard({ kind: "shell.exec", target: "echo harmless" }, "*", [], "session-1");
-    expect(allowed.decision).toBe("allow");
+    expect(guardEffectivelyAllows(allowed)).toBe(true);
     expect(allowed.leaseId).toBe(granted.leaseId);
 
     // The three variants the audit names must all re-ask: a wider command, an

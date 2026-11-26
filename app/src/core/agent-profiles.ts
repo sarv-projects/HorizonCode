@@ -19,7 +19,7 @@
  * widening file is refused and listed; it never reaches a child.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { tools as registeredTools } from "../tools";
@@ -285,7 +285,7 @@ export function loadPresets(workspace: string, opts: PresetOptions = {}): Preset
       const file = path.join(dir, entry);
       let result: AgentPreset | string;
       try {
-        if (!statSync(file).isFile()) continue;
+        if (!lstatSync(file).isFile()) continue;
         result = parsePresetFile(readFileSync(file, "utf8"), path.basename(entry, ".md"), source, ceiling);
       } catch {
         result = "unreadable";

@@ -42,7 +42,7 @@ export function sandboxWrapActiveForEffectHost(
 }
 
 export type ApplyEffectHostKernelResult = {
-  applied?: "config" | "sandbox-default" | "trusted-require";
+  applied?: "config" | "sandbox-default" | "trusted-require" | "trusted-default";
   mode?: EffectHostKernelMode;
   notice?: string;
 };
@@ -100,6 +100,25 @@ export function applyEffectHostKernelSandboxDefault(
     mode: "default",
     notice:
       "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL=default (runtime: Linux + sandbox wrap active; env was unset — prototype spine; `hzcode doctor` still reports off without export)",
+  };
+}
+
+/** Apply `=default` on any platform when trusted Rust kernel is active and env still unset (P0-1 cross-platform). */
+export function applyEffectHostKernelTrustedDefault(
+  env: EnvLike,
+  kernelTrusted: boolean,
+): ApplyEffectHostKernelResult {
+  const rec = env as Record<string, string | undefined>;
+  if (!effectHostKernelEnvUnset(rec)) return {};
+  if (!kernelTrusted) return {};
+  env.HZ_EFFECT_HOST_KERNEL = "default";
+  return {
+    // D-13(d): report what was actually applied. This path sets `default`;
+    // `trusted-require` is the separate require composition above.
+    applied: "trusted-default",
+    mode: "default",
+    notice:
+      "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL=default (runtime: trusted Rust kernel active; env was unset — prototype spine; not full EffectHost)",
   };
 }
 

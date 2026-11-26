@@ -45,6 +45,7 @@
 
 import { readFileSync } from "node:fs";
 import { type DarwinBirthReaders, readDarwinProcessFacts } from "./boot-birth-honesty";
+import { reconcileBirthAnchor } from "./monotonic-birth-anchor";
 
 /** A process birth identity: the pid and its starttime in clock ticks. */
 export interface ProcessIdentity {
@@ -197,6 +198,15 @@ export function recordIdentity(
 export interface IdentityVerdict {
   ok: boolean;
   reason?: string;
+  reAnchored?: boolean;
+}
+
+export interface MonotonicAnchorContext {
+  recordedMonotonicNs: bigint;
+  recordedWallMs: number;
+  currentMonotonicNs?: bigint;
+  currentWallMs?: number;
+  skewToleranceMs?: number;
 }
 
 /**
@@ -204,20 +214,25 @@ export interface IdentityVerdict {
  * Refusals carry a machine-readable reason (never prose the caller must parse
  * for meaning): the pid is gone, the pid was reused, the boot changed, or the
  * identity given was absent/malformed.
+ *
+ * When `monotonicCtx` is provided, reconciles sleep-wake drift through
+ * `reconcileBirthAnchor` and reports whether a re-anchor occurred.
  */
 export function verifyIdentity(
   identity: ProcessIdentity | null | undefined,
   readers?: BootProcReaders,
+  monotonicCtx?: MonotonicAnchorContext,
 ): IdentityVerdict {
   if (identity === null || identity === undefined) return { ok: false, reason: "no identity recorded" };
   if (!Number.isInteger(identity.pid) || identity.pid <= 0 || !Number.isInteger(identity.startTicks) || identity.startTicks <= 0) {
     return { ok: false, reason: "malformed identity" };
   }
+  let anchor: BootAnchor | undefined;
   if (identity.bootId !== undefined) {
     if (typeof identity.bootId !== "string" || identity.bootId.length === 0 || identity.bootId.includes(":")) {
       return { ok: false, reason: "malformed identity" };
     }
-    const anchor = resolveBootAnchor(readers);
+    anchor = resolveBootAnchor(readers);
     if (anchor === undefined) {
       return { ok: false, reason: "boot anchor unavailable (cannot verify boot-id birth token)" };
     }
@@ -241,7 +256,37 @@ export function verifyIdentity(
       reason: `pid ${identity.pid} was reused (startTicks ${facts.startTicks} does not match the recorded ${identity.startTicks})`,
     };
   }
+  if (monotonicCtx !== undefined) {
+    const verdict = reconcileBirthAnchor({
+      recorded: {
+        bootId: identity.bootId ?? "legacy",
+        startTicks: identity.startTicks,
+        monotonicNs: monotonicCtx.recordedMonotonicNs,
+        wallAtRecordMs: monotonicCtx.recordedWallMs,
+      },
+      observedBootId: anchor?.bootId ?? identity.bootId ?? "legacy",
+      observedStartTicks: facts.startTicks,
+      observedMonotonicNs: monotonicCtx.currentMonotonicNs ?? process.hrtime.bigint(),
+      observedWallMs: monotonicCtx.currentWallMs ?? Date.now(),
+      skewToleranceMs: monotonicCtx.skewToleranceMs,
+    });
+    if (verdict === "refuse") {
+      return {
+        ok: false,
+        reason: "clock skew or boot identity mismatch refused by monotonic anchor",
+      };
+    }
+    return { ok: true, reAnchored: verdict === "re-anchored" };
+  }
   return { ok: true };
+}
+
+export function verifyIdentityWithMonotonicAnchor(
+  identity: ProcessIdentity | null | undefined,
+  monotonicCtx: MonotonicAnchorContext,
+  readers?: BootProcReaders,
+): IdentityVerdict {
+  return verifyIdentity(identity, readers, monotonicCtx);
 }
 
 /**

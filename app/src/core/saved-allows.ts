@@ -12,6 +12,7 @@ import { canonicalJson, sha256Hex } from "./canon";
 import type { GuardKind } from "../contracts";
 import { metricContract } from "./metrics";
 import { sessionDbPath, stateRoot } from "./paths";
+import { mintHumanApprovalGrant } from "./human-approval-principal";
 import { Database } from "bun:sqlite";
 import type { KernelClient } from "./kernel";
 import { recordSessionGrantExpiry } from "./session-grant-clock";
@@ -22,6 +23,18 @@ import {
   upsertSavedAllowsSql,
 } from "./saved-allows-sql";
 import { shellSavedGrantTargets } from "./shell-split";
+export {
+  ARITY,
+  SHELL_ARITY,
+  deriveShellPermissionPatterns,
+  extractShellTargets,
+  shellCommandPrefix,
+  shellPermissionPatternForArgv,
+  type DeriveShellPermissionOptions,
+  type ShellPermissionEntry,
+  type ShellPermissionResult,
+  type ShellTargetsResult,
+} from "./shell-parse";
 
 export const SAVED_ALLOWS_FILE = "saved-allows.json";
 export const SAVED_ALLOWS_MAX = 64;
@@ -244,7 +257,11 @@ export async function hydrateSavedGrants(
   for (const row of loadSavedAllows(workspace)) {
     for (const t of shellSavedGrantTargets(row.kind, row.target)) {
       try {
-        const grant = await kernel.makeGrant(row.kind, t, ttlMs, sessionId);
+        // D-10: a saved allow is a recorded human decision, so replay it through
+        // the human-attested mint (principal:"human"). A raw makeGrant is refused
+        // under HZ_HUMAN_PRINCIPAL_STRICT=1, which used to disable every saved
+        // allow silently (the refusal was swallowed as a "stale row").
+        const grant = await mintHumanApprovalGrant(kernel, row.kind, t, sessionId, ttlMs);
         recordSessionGrantExpiry(sessionId, row.kind, t, grant.expiry);
         count += 1;
       } catch {

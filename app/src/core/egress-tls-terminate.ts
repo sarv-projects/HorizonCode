@@ -17,6 +17,14 @@ import {
   mintHermeticLeafCert,
 } from "./egress-tls-intercept-ca";
 import { egressTlsInterceptEnabled } from "./egress-tls-intercept";
+import { injectCredentialHeaders, type CredentialHeaderRule } from "./http-credential-inject";
+import type { CredentialBroker } from "./egress-credential-broker";
+
+/** ADDITIVE opt-in: scoped credential injection into the decrypted request. */
+export interface TlsCredentialInjection {
+  broker: CredentialBroker;
+  rules: readonly CredentialHeaderRule[];
+}
 
 const REQUEST_ACCUM_MAX = 16 * 1024;
 
@@ -81,8 +89,9 @@ function upstreamTlsOptions(
     try {
       base.ca = readFileSync(caPath, "utf8");
       base.rejectUnauthorized = true;
-    } catch {
-      base.rejectUnauthorized = false;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`HZ_EGRESS_TLS_UPSTREAM_CA unreadable (${caPath}): ${msg}`);
     }
   }
   return base;
@@ -105,6 +114,22 @@ function pipeBidirectional(a: tls.TLSSocket, b: tls.TLSSocket): void {
   });
 }
 
+/**
+ * Rewrite an HTTP/1.1 request header block to carry `Connection: close`
+ * (replacing any existing `Connection:` header) so a keep-alive connection
+ * cannot smuggle subsequent requests past first-request credential injection.
+ */
+export function enforceConnectionClose(request: string): string {
+  const terminator = request.indexOf("\r\n\r\n");
+  if (terminator < 0) return request;
+  const head = request.slice(0, terminator);
+  const rest = request.slice(terminator);
+  const lines = head.split("\r\n");
+  const filtered = lines.filter((line, idx) => idx === 0 || !/^connection\s*:/i.test(line));
+  filtered.push("Connection: close");
+  return filtered.join("\r\n") + rest;
+}
+
 function startUpstreamPipe(
   clientTls: tls.TLSSocket,
   pending: Buffer,
@@ -113,11 +138,38 @@ function startUpstreamPipe(
   env: Record<string, string | undefined>,
   onObserved: (obs: TlsTerminateObservation) => void,
   firstHttpLine: string | undefined,
+  credentialInjection?: TlsCredentialInjection,
 ): void {
-  const upstreamPlain = tls.connect(upstreamTlsOptions(target, servername, env), () => {
+  let opts: tls.ConnectionOptions;
+  try {
+    opts = upstreamTlsOptions(target, servername, env);
+  } catch {
+    clientTls.destroy();
+    return;
+  }
+  const upstreamPlain = tls.connect(opts, () => {
     onObserved({ servername, firstHttpLine, upstreamPiped: true });
     if (pending.length > 0) {
-      upstreamPlain.write(pending);
+      let text = pending.toString("latin1");
+      // ADDITIVE (opt-in): inject scoped credential headers into the DECRYPTED
+      // request before forwarding. Failure is fail-closed (destroy, no forward)
+      // so a broken injection never leaks a partially-rewritten request.
+      if (credentialInjection !== undefined) {
+        try {
+          text = injectCredentialHeaders(
+            text, target.host,
+            credentialInjection.broker, credentialInjection.rules,
+          );
+        } catch {
+          clientTls.destroy();
+          upstreamPlain.destroy();
+          return;
+        }
+      }
+      // Enforce Connection: close so subsequent keep-alive requests cannot
+      // bypass credential injection on the raw bidirectional pipe.
+      text = enforceConnectionClose(text);
+      upstreamPlain.write(Buffer.from(text, "latin1"));
     }
     pipeBidirectional(clientTls, upstreamPlain);
   });
@@ -137,6 +189,7 @@ export function terminateTlsOnConnectSocket(
   env: Record<string, string | undefined>,
   onObserved: (obs: TlsTerminateObservation) => void,
   upstream?: TlsTerminateUpstreamTarget,
+  credentialInjection?: TlsCredentialInjection,
 ): void {
   const caCertPath = env.HZ_EGRESS_TLS_INTERCEPT_CA?.trim();
   const caKeyPath = egressTlsInterceptCaKeyPath(env);
@@ -171,7 +224,7 @@ export function terminateTlsOnConnectSocket(
     if (!egressTlsTerminateUpstreamPipeEnabled(env)) return;
     upstreamStarted = true;
     tlsSocket.off("data", onData);
-    startUpstreamPipe(tlsSocket, buf, upstream, servername, env, onObserved, line);
+    startUpstreamPipe(tlsSocket, buf, upstream, servername, env, onObserved, line, credentialInjection);
   };
 
   const finishEcho = (firstHttpLine: string | undefined) => {
@@ -187,8 +240,15 @@ export function terminateTlsOnConnectSocket(
   const maybeDone = () => {
     const line = parseFirstHttpLine(buf);
     if (upstream && egressTlsTerminateUpstreamPipeEnabled(env)) {
-      if (line !== undefined) {
+      // Buffer full HTTP headers until `\r\n\r\n` before starting upstream pipe
+      // so split-packet headers are complete for credential injection & Connection: close.
+      if (buf.indexOf("\r\n\r\n") >= 0) {
         maybeStartUpstream(line);
+        return;
+      }
+      if (buf.length >= REQUEST_ACCUM_MAX) {
+        tlsSocket.off("data", onData);
+        tlsSocket.destroy();
       }
       return;
     }

@@ -18,6 +18,7 @@
 import type { RunExit, Runtime, RuntimeEvent } from "../contracts";
 import { exitCodeFor } from "../core/loop";
 import { formatProviderFailureMessage } from "../core/providers/failure-codes";
+import { setApprovalPrintMode } from "./approval";
 import { errorMessage, sanitizeText } from "./style";
 
 export type PrintFormat = "text" | "json" | "stream-json";
@@ -107,6 +108,7 @@ export async function runPrint(opts: PrintOptions): Promise<number> {
     if (opts.format === "stream-json") write(JSON.stringify(ev) + "\n");
   };
 
+  setApprovalPrintMode(true);
   try {
     const res = await opts.runtime.send(opts.prompt, { onEvent });
     text = res.text ?? "";
@@ -116,13 +118,15 @@ export async function runPrint(opts: PrintOptions): Promise<number> {
     process.stderr.write(`hzcode: request failed: ${errorMessage(err)}\n`);
     lastExit = { terminal: "failed", detail: "internal_error" };
   } finally {
+    setApprovalPrintMode(false);
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
   }
 
   const code = signal ?? exitCodeFor(lastExit);
   if (opts.format === "text") {
-    write(text.endsWith("\n") || text === "" ? text : text + "\n");
+    const outText = Boolean((process.stdout as { isTTY?: boolean } | undefined)?.isTTY) ? sanitizeText(text) : text;
+    write(outText.endsWith("\n") || outText === "" ? outText : outText + "\n");
   } else {
     const exit: PrintResult["exit"] = { terminal: lastExit?.terminal ?? "succeeded", code };
     if (lastExit?.detail !== undefined) exit.detail = lastExit.detail;

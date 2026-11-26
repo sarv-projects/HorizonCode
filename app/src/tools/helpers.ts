@@ -64,14 +64,45 @@ export function relPath(base: string, p: string): string {
   return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? p : rel;
 }
 
-/** Environment names that must never reach a child process. */
-const SECRET_ENV = /(key|token|secret|password)$/i;
+/** Standard benign environment variables that are always safe to inherit. */
+const SAFE_ENV_EXACT = new Set([
+  "PATH",
+  "HOME",
+  "TERM",
+  "LANG",
+  "TZ",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "NODE_ENV",
+  "PWD",
+  "OLDPWD",
+  "SHLVL",
+  "COLORTERM",
+  "FORCE_COLOR",
+  "NO_COLOR",
+  "CI",
+  "EDITOR",
+  "VISUAL",
+  "PAGER",
+  "MANPAGER",
+  "GIT_PAGER",
+  "LESS",
+  "HOSTNAME",
+  "DISPLAY",
+]);
+
+/** Environment names that must never reach a child process (segment-bounded or suffix). */
+const SECRET_ENV =
+  /(?:^|_)(?:key|keys|token|tokens|secret|secrets|password|passwords|passwd|pass|pwd|auth|credential|credentials|dsn|cookie|cookies|private_key|api_key|access_key|signing_key|connection_string|kubeconfig|bearer)(?:$|_)/i;
 /**
- * Names that are credentials by convention even though the suffix rule misses
- * them: `*_DSN`, `*_CREDENTIALS`, `*_PASS`, `*_PWD`, `*_CONNECTION_STRING`
- * (audit finding 17).
+ * Suffix rule catching compound credential names without underscores
+ * (e.g. `APIKEY`, `AUTHTOKEN`, `MYSECRET`, `KUBECONFIG`, `SESSIONCOOKIE`).
  */
-const SECRET_ENV_NAME = /(_dsn|_credentials|_pass|_passwd|_pwd|connection_string)$/i;
+const SECRET_ENV_NAME = /(?:key|token|secret|password|passwd|cookie|dsn|credentials|connection_string|kubeconfig)$/i;
 /**
  * A URL whose authority carries credentials: `scheme://user:password@host`.
  * This catches `DATABASE_URL`, `REDIS_URL` and friends WITHOUT dropping
@@ -85,14 +116,15 @@ const CREDENTIAL_IN_URL = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+:[^/@\s]*@/i;
  * this, so one code path cannot silently leak what another one scrubs.
  *
  * Three rules, because a suffix deny-list alone leaked the common modern
- * shapes: the name rule, the credential-name rule above, and the value rule
+ * shapes: the broadened segment rule, the suffix rule, and the value rule
  * for connection strings.
  */
 export function scrubEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
-    if (SECRET_ENV.test(k) || SECRET_ENV_NAME.test(k) || CREDENTIAL_IN_URL.test(v)) continue;
+    if (CREDENTIAL_IN_URL.test(v)) continue;
+    if (!SAFE_ENV_EXACT.has(k) && (SECRET_ENV.test(k) || SECRET_ENV_NAME.test(k))) continue;
     env[k] = v;
   }
   // NF-074 / docs/09 §2.10 item 3: env-taming defaults for the child — the
@@ -119,7 +151,7 @@ export const TAMING_ENV_DEFAULTS: Record<string, string> = {
  * width characters (U+200B-200D, U+2060, U+FEFF) and the line/paragraph
  * separators U+2028/U+2029. Shell commands containing any are refused.
  */
-export const INVISIBLE_UNICODE = /[\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/;
+export const INVISIBLE_UNICODE = /[\u061c\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/u;
 
 /** Clear refusal text for INVISIBLE_UNICODE, or undefined when the text is clean. */
 export function invisibleUnicodeError(text: string, what: string): string | undefined {

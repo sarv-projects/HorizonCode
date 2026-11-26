@@ -32,6 +32,7 @@ import type {
   RuntimeCallbacks,
   RuntimeEvent,
   ToolCall,
+  ToolChoice,
   ToolContext,
   ToolResult,
   ThinkingEcho,
@@ -48,7 +49,7 @@ import {
 import { assessVisionPosture, historyHasImages, visionHonestyNotice } from "./vision-posture";
 import { unpairedToolCallTail } from "./session";
 import { parseToolArguments, TRUNCATION_TOLERANT_TOOLS, type ToolArguments } from "./json-repair";
-import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
+import { executeToolWithDefectTunnel, exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { openTodos, todoUpdatedEventPayload, todoVersion } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
@@ -66,10 +67,12 @@ import {
 import { memoryDbPath, memoryDbPathForBank, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
 import { enrichUsageCost, estimateStepCostUsd, usageCostEventFields } from "./usage-cost";
+import { checkUsageInvariant, formatUsageInvariantNotice } from "./providers/usage-invariant";
 import { loadConfig } from "./config";
 import { createPostEditDiagnosticsNotice } from "./post-edit-diagnostics";
 import { admitSpendLedgerWrite, SpendLedger, SpendLimitError, spendLimitMicroFromEnv } from "./spend-ledger";
 import { negotiateReasoningEffort } from "./catalog/accepts-settings";
+import { createThinkingBudget, type ThinkingBudget } from "./thinking-budget";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
 import { canonicalJson, sha256Hex } from "./canon";
 import {
@@ -78,6 +81,7 @@ import {
   postimageObservationNotice,
   postimagePathForTool,
   receiptPostimageFields,
+  takeWorkspaceFsSnapshot,
   type KernelExecutePostimageObserve,
 } from "./receipt-postimage";
 import {
@@ -91,10 +95,12 @@ import {
   effectHostHooksSuppressedNotice,
   effectHostKernelRequirePreflight,
   effectHostKernelRequireRefusal,
+  effectHostNoAmbientFallbackRefusal,
   effectHostNoAmbientToolPreflight,
   effectHostRequireSuppressHooks,
 } from "./effect-host-posture";
 import {
+  astEditProjectionMissRequireDetail,
   classifyApplyPatchKernelProjectionMiss,
   classifyAstEditKernelProjectionMiss,
 } from "./effect-kernel-tool-projection";
@@ -111,6 +117,7 @@ import { frozenUnknownResourceKeys, r170ResourceGateRefusal } from "./effect-res
 import {
   EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE,
   editArgsEligibleForKernelRoute,
+  effectHostKernelMode,
   effectHostKernelMutationEnabled,
   effectHostKernelRequireMode,
   effectHostNoAmbientCompoundShellRefusal,
@@ -134,9 +141,11 @@ import {
 import { COMPACTION_EVENT, elidedPrefixForCompaction, maskSecrets, tokensIn } from "./compaction";
 import { compactHistoryWithTokenFit, tokenAwareHistoryLimit } from "./history-token-budget";
 import { CompactionHoldBuffer, compactionHoldEnabled } from "./compaction-hold";
+import { CompactionBreaker } from "./compaction-breaker";
 import { llmCompactionEnabled, resolveLlmCompactionSummariser } from "./compaction-llm";
 import {
   CONTEXT_WINDOW_COMPACTION_NOTICE,
+  EMERGENCY_SHRINK_LADDER,
   emergencyHistoryLimit,
   isContextWindowExceededCode,
 } from "./compaction-context-window";
@@ -145,7 +154,13 @@ import { freezeStablePrefix, ProviderHistorySync, resolveHistorySyncGate } from 
 import { sessionKernelReconcileNotice } from "./session-kernel-reconcile";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
-import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
+import {
+  buildSystemPrompt,
+  environmentRefreshDue,
+  makeEnvironmentInfo,
+  type EnvironmentInfo,
+  type PromptEnvironmentOverrides,
+} from "./prompt";
 import {
   instructionPrompt,
   LazyInstructions,
@@ -213,6 +228,14 @@ import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker"
 import { RepeatToolGuard } from "./guards/repeat-tool";
 import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
 import {
+  PermissionCorrectedError,
+  formatSteeringToolOutput,
+  isPermissionCorrectedError,
+  isPermissionDeclinedError,
+  normalizeApprovalOutcome,
+  type ApprovalOutcome,
+} from "./guards/defect-tunnel";
+import {
   assessEngineeringViability,
   engineeringBrainEnabled,
   formatViabilityInterrupt,
@@ -276,7 +299,7 @@ import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFro
 import { blobSpillEnabled, putBlobForWorkspace } from "./blobs";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
-import { drainFormatted, formatInterjection, type InterjectionBuffer } from "./interjection";
+import { drainFormattedWithRows, formatInterjection, type InterjectionBuffer } from "./interjection";
 import { interjectionLiveSteeringQueue, LiveSteeringChannel } from "./live-steering";
 import { backgroundSteerNotice } from "./shell-auto-background";
 import { recordHookAuditLine } from "./hook-handoff-capture";
@@ -292,6 +315,13 @@ export { resolvedInside, resolveSymlinkChain };
 
 /** Hard ceiling on provider calls inside a single send(). */
 export const MAX_PROVIDER_CALLS = 25;
+/**
+ * Track A (prompt-cache-safe maxSteps): concise final-step guidance injected
+ * at the tail of the message list when the step ceiling is reached, while
+ * keeping `tools` intact and setting `toolChoice: "none"`.
+ */
+export const MAX_STEPS_FINAL_PROMPT =
+  "Maximum steps reached for this turn. Tools are disabled for this final response. Do NOT call any tools. Summarize what has been accomplished so far, list any remaining work, and recommend next steps in plain text.";
 /** Messages replayed to the provider, newest last. */
 export const HISTORY_LIMIT = 80;
 export const SESSION_LEASE_TTL_MS = 15 * 60 * 1000;
@@ -550,8 +580,10 @@ export function systemPrompt(
   today: Date = new Date(),
   env?: PromptEnvironmentOverrides,
   memory = "",
+  /** First-turn environment, when the caller tracks one across dispatches. */
+  baseline?: EnvironmentInfo,
 ): string {
-  return buildSystemPrompt(workspace, today, env, memory);
+  return buildSystemPrompt(workspace, today, env, memory, baseline);
 }
 
 /**
@@ -568,6 +600,9 @@ export function parseArguments(raw: string, toolName?: string): ToolArguments {
 
 /** The parsed arguments of one tool call, repaired and schema-coerced. */
 function parseCall(call: ToolCall): ToolArguments {
+  if (call.toolInputError !== undefined) {
+    return { args: {}, error: call.toolInputError.message };
+  }
   return parseArguments(call.arguments, call.name);
 }
 
@@ -690,7 +725,12 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       // admission is a single `fs.write` keyed to the first file the patch
       // names (so the approval and the cache have a stable target), falling
       // back to a digest of the patch when no path can be read out.
-      const input = typeof args.input === "string" ? args.input : "";
+      const input =
+        typeof args.input === "string" && args.input !== ""
+          ? args.input
+          : typeof args.patch === "string"
+            ? args.patch
+            : "";
       const first = firstApplyPatchPath(input);
       return {
         kind: "fs.write",
@@ -903,6 +943,9 @@ export const SESSION_STATE_TOOLS: readonly string[] = [
   "shell_bg",
   "tool_search",
   "ask_user",
+  "ctx_inspect",
+  "history_snip_preview",
+  "code_mode_vm",
 ] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
@@ -950,7 +993,12 @@ export function admissionFor(name: string, args: Record<string, unknown>, worksp
       return spawn !== undefined ? { kind: "guard", action, also: [spawn] } : { kind: "guard", action };
     }
     if (name === "apply_patch" && action.kind === "fs.write") {
-      const input = typeof args.input === "string" ? args.input : "";
+      const input =
+        typeof args.input === "string" && args.input !== ""
+          ? args.input
+          : typeof args.patch === "string"
+            ? args.patch
+            : "";
       const paths = applyPatchPaths(input);
       if (paths.length > 1) {
         const also = paths.slice(1).map((p) => ({ kind: "fs.write" as const, target: path.resolve(workspace, p) }));
@@ -1134,7 +1182,10 @@ function normalizeToolResult(result: ToolResult | undefined | null): ToolResult 
 /** What the model sees as the tool's answer; `text` is the capped output. */
 function toolMessageContent(result: ToolResult, text: string): string {
   if (result.ok) return text === "" ? "(no output)" : text;
-  const reason = typeof result.error === "string" && result.error !== "" ? result.error : text;
+  const reason =
+    typeof result.error === "string" && result.error !== ""
+      ? planToolOutputCap(result.error).text
+      : text;
   return reason === "" ? "tool failed" : reason;
 }
 
@@ -1151,6 +1202,12 @@ export function partitionWireCompleteToolCalls(calls: readonly ToolCall[]): {
   const ready: ToolCall[] = [];
   const incomplete: ToolCall[] = [];
   for (const call of calls) {
+    if (call.toolInputError !== undefined) {
+      // Track A: preserve strict finish-parse errors so executeTool returns
+      // the structured self-correction tool result with exact error + raw snippet.
+      ready.push(call);
+      continue;
+    }
     const parsed = parseCall(call);
     // A truncated tail is refused for side-effecting tools, but the parser
     // deliberately allows the read-only allowlist (read/grep/glob/repo_map/
@@ -1315,7 +1372,7 @@ type ApprovalWithContext = (
   action?: GuardAction,
   kernel?: KernelClient,
   sessionId?: string,
-) => Promise<boolean>;
+) => Promise<ApprovalOutcome>;
 
 /**
  * The one place approvals are decided for a turn. Guessing twice about the same
@@ -1441,13 +1498,18 @@ export class GuardGate {
       if (cached) {
         if (action.kind === "fs.write" && cached.leaseId && !cached.consumed) {
           cached.consumed = true;
+          let recheck: GuardDecision;
           try {
-            await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
-          } catch {
-            /* ignore */
+            recheck = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
+          } catch (err) {
+            return { decision: "deny" as const, reason: `guard unavailable: ${errorMessage(err)}` };
+          }
+          if (!guardEffectivelyAllows(recheck)) {
+            if (recheck.decision === "ask") this.pending = action;
+            return recheck;
           }
         }
-        return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
+        return { decision: "ask" as const, g1: "ask" as const, reason: "already allowed in this turn", leaseId: cached.leaseId ?? "turn-cached" };
       }
       let decision: GuardDecision;
       try {
@@ -1518,8 +1580,28 @@ export class GuardGate {
       // The handler sees the action so an "always" answer can be scoped to its
       // target, and the kernel client so the lease is minted for THIS session:
       // a child session's checks never inherit it (docs/09 R-tools-32).
-      ok = await (this.handler() as unknown as ApprovalWithContext)(req, waiting, this.kernel, this.sessionId);
-    } catch {
+      const rawOutcome = await (this.handler() as unknown as ApprovalWithContext)(
+        req,
+        waiting,
+        this.kernel,
+        this.sessionId,
+      );
+      const outcome = normalizeApprovalOutcome(rawOutcome);
+      if (outcome.decision === "approved") {
+        ok = true;
+      } else if (outcome.decision === "rejected_with_steering") {
+        throw new PermissionCorrectedError(outcome.feedback, {
+          kind: waiting?.kind ?? req.kind,
+          target: waiting?.target ?? req.detail,
+        });
+      } else {
+        ok = false;
+      }
+    } catch (err) {
+      if (isPermissionDeclinedError(err) || isPermissionCorrectedError(err)) {
+        if (this.pending !== null && this.pending === waiting) this.pending = null;
+        throw err;
+      }
       ok = false;
     }
     if (ok && waiting) {
@@ -1555,6 +1637,30 @@ export class GuardGate {
       }
     }
   }
+}
+
+/**
+ * P0-1 (ruling 909): the admission for a hook PROCESS. A hook is user-configured
+ * (hooks.json is the human's standing authorization), so a policy ASK does not
+ * prompt for every hook; a policy DENY does stop it before any child exists.
+ * The decision is the kernel's, never the hook's own.
+ */
+export function hookSpawnAdmission(gate: GuardGate) {
+  return async (hook: { point: string; index: number; command: string; args: readonly string[] }) => {
+    const action: GuardAction = {
+      kind: "spawn",
+      target: `hook ${hook.point} ${hook.index} ${hook.command}`,
+    };
+    try {
+      const decision = await gate.check(action);
+      if (decision.decision === "deny") {
+        return { allow: false, reason: decision.reason ?? "denied by policy" };
+      }
+      return { allow: true };
+    } catch (err) {
+      return { allow: false, reason: `guard unavailable: ${errorMessage(err)}` };
+    }
+  };
 }
 
 /* --------------------- NF-073: the budget ceiling --------------------- */
@@ -1602,6 +1708,12 @@ export class BudgetLedger {
     return new BudgetLedger(limits, this, this.clock);
   }
 
+  private rootLedger(): BudgetLedger {
+    let cur: BudgetLedger = this;
+    while (cur.parent) cur = cur.parent;
+    return cur;
+  }
+
   private checkSync(): BudgetStop | undefined {
     if (this.parent) {
       const fromParent = this.parent.checkSync();
@@ -1616,27 +1728,45 @@ export class BudgetLedger {
     return undefined;
   }
 
+  private chargeStepSync(): void {
+    this.stepsUsed += 1;
+    if (this.parent) this.parent.chargeStepSync();
+  }
+
+  private chargeTokensSync(amount: number): void {
+    this.tokensUsed += amount;
+    if (this.parent) this.parent.chargeTokensSync(amount);
+  }
+
   /** The single sentinel check: consulted before every provider dispatch. */
   check(): Promise<BudgetStop | undefined> {
-    return this.serialize(() => this.checkSync());
+    return this.rootLedger().serialize(() => this.checkSync());
+  }
+
+  /** Atomically check the full parent->child chain and reserve one step (closes TOCTOU). */
+  tryReserveStep(): Promise<BudgetStop | undefined> {
+    return this.rootLedger().serialize(() => {
+      const stop = this.checkSync();
+      if (stop !== undefined) return stop;
+      this.chargeStepSync();
+      return undefined;
+    });
   }
 
   /** Charge one dispatch; a billed-but-failed turn is still charged. */
   async chargeStep(): Promise<void> {
-    await this.serialize(() => {
-      this.stepsUsed += 1;
+    await this.rootLedger().serialize(() => {
+      this.chargeStepSync();
     });
-    if (this.parent) await this.parent.chargeStep();
   }
 
   /** Charge reported usage; zero/absent usage adds nothing extra. */
   async chargeTokens(n: number): Promise<void> {
     const amount = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
     if (amount === 0) return;
-    await this.serialize(() => {
-      this.tokensUsed += amount;
+    await this.rootLedger().serialize(() => {
+      this.chargeTokensSync(amount);
     });
-    if (this.parent) await this.parent.chargeTokens(amount);
   }
 
   consumed(): { steps: number; tokens: number; wallMs: number } {
@@ -1652,9 +1782,15 @@ export class BudgetLedger {
     const out: BudgetCountdown = {};
     const remaining = (max: number | undefined, used: number): number | undefined =>
       max !== undefined && max > 0 ? Math.max(0, max - used) : undefined;
-    const steps = remaining(this.limits.maxSteps, this.stepsUsed);
-    const tokens = remaining(this.limits.maxTokens, this.tokensUsed);
-    const wall = remaining(this.limits.maxWallMs, this.clock() - this.startedAt);
+    const minDefined = (a: number | undefined, b: number | undefined): number | undefined => {
+      if (a === undefined) return b;
+      if (b === undefined) return a;
+      return Math.min(a, b);
+    };
+    const parentCountdown = this.parent?.countdown();
+    const steps = minDefined(remaining(this.limits.maxSteps, this.stepsUsed), parentCountdown?.steps);
+    const tokens = minDefined(remaining(this.limits.maxTokens, this.tokensUsed), parentCountdown?.tokens);
+    const wall = minDefined(remaining(this.limits.maxWallMs, this.clock() - this.startedAt), parentCountdown?.wallMs);
     if (steps !== undefined) out.steps = steps;
     if (tokens !== undefined) out.tokens = tokens;
     if (wall !== undefined) out.wallMs = wall;
@@ -1728,6 +1864,12 @@ export interface LoopDeps {
   approve?: ApprovalHandler;
   /** Extra system-prompt section for this run (skills). Appended after the base. */
   systemExtra?: string;
+  /**
+   * Codex incremental environment deltas: a per-runtime slot that remembers the
+   * first turn's environment. Later turns send only changed fields. Absent =
+   * legacy behaviour (full block on every dispatch).
+   */
+  promptEnvironmentSlot?: { current?: EnvironmentInfo; turns?: number };
   /** Replaces the base system prompt entirely (the subagent's focused prompt). */
   systemOverride?: string;
   /** Restricts which tools this run may see and call (the subagent excludes itself). */
@@ -1761,6 +1903,8 @@ export interface LoopDeps {
   contextWindowTokens?: number;
   /** C-11 reduced: explicit thinking effort for this turn (no auto classifier). */
   thinkingEffort?: ThinkingRung;
+  /** Group B/course (ruling 847 / ruling 855): bounded thinking-token accumulator. */
+  thinkingBudget?: ThinkingBudget;
   /**
    * H-1 / ruling 472: catalog `accepts_settings` for this model. When set
    * (including `[]`), unsupported optional params such as `reasoning_effort`
@@ -1809,17 +1953,22 @@ export interface LoopDeps {
 export function drainInterjectionsAtSafePoint(deps: LoopDeps, faults: RunFaults): boolean {
   const buffer = deps.interjection;
   if (buffer === undefined || buffer.isEmpty()) return false;
-  const drained = drainFormatted(buffer);
+  const drained = drainFormattedWithRows(buffer);
   if (drained.length === 0) return false;
   let delivered = false;
-  for (const row of drained) {
+  for (let i = 0; i < drained.length; i += 1) {
+    const { row } = drained[i]!;
     try {
-      deps.store.appendMessage(deps.sessionId, { role: "user", content: row.modelText });
+      if (deps.signal?.aborted) throw new Error("cancelled before transcript append");
+      deps.store.appendMessage(deps.sessionId, { role: "user", content: row.contentParts ?? row.modelText });
       delivered = true;
       emit(deps.callbacks, { type: "interjection.admitted", text: row.displayText });
     } catch (err) {
       faults.noteTranscript("interjection", err);
-      buffer.restoreFront([{ text: row.displayText }]);
+      // Restore the undelivered tail WITH original framing; already-delivered
+      // rows are never re-delivered.
+      buffer.restoreFront(drained.slice(i).map(({ entry }) => entry));
+      break;
     }
   }
   if (delivered) {
@@ -2324,6 +2473,10 @@ async function collectAssistant(
      * the stable prefix is never rewritten; never a user message.
      */
     nestedInstructions?: string;
+    /** ADDITIVE (Track A): optional toolChoice directive (e.g. `"none"` on final step). */
+    toolChoice?: ToolChoice;
+    /** ADDITIVE (Track A): transient final-step guidance appended to messages without mutating system/tools. */
+    finalStepPrompt?: string;
   },
 ): Promise<AssistantTurn> {
   // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
@@ -2344,15 +2497,37 @@ async function collectAssistant(
         : spec,
     );
   const turn: AssistantTurn = { text: "", thinkingText: "", toolCalls: [], stopReason: "end" };
+  const thinkingBudget =
+    deps.thinkingBudget ??
+    (process.env.HZ_THINKING_BUDGET_TOKENS &&
+    Number.isFinite(parseInt(process.env.HZ_THINKING_BUDGET_TOKENS, 10)) &&
+    parseInt(process.env.HZ_THINKING_BUDGET_TOKENS, 10) > 0
+      ? createThinkingBudget({ capTokens: parseInt(process.env.HZ_THINKING_BUDGET_TOKENS, 10) })
+      : undefined);
   const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
+  const now = new Date();
+  const envOverrides: PromptEnvironmentOverrides = {
+    tools: specs.map((spec) => spec.name),
+    kernelMode: typeof kernelMode === "string" ? kernelMode : "untrusted",
+    planMode: deps.planMode === true,
+  };
+  // Codex incremental environment deltas: capture the first turn once for this
+  // runtime, then send only changed fields on later dispatches.
+  const envSlot = deps.promptEnvironmentSlot;
+  let envBaseline = envSlot?.current;
+  if (envSlot !== undefined) {
+    envSlot.turns = (envSlot.turns ?? 0) + 1;
+    const refresh = environmentRefreshDue(envSlot.turns, process.env);
+    if (envBaseline === undefined || refresh) {
+      envSlot.current = makeEnvironmentInfo(deps.workspace, now, envOverrides);
+    }
+    // A periodic refresh resends the full block and starts a new baseline.
+    if (refresh) envBaseline = undefined;
+  }
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
       ? deps.systemOverride + (rails?.instructions ?? "")
-      : systemPrompt(deps.workspace, new Date(), {
-          tools: specs.map((spec) => spec.name),
-          kernelMode: typeof kernelMode === "string" ? kernelMode : "untrusted",
-          planMode: deps.planMode === true,
-        }, rails?.instructions ?? "");
+      : systemPrompt(deps.workspace, now, envOverrides, rails?.instructions ?? "", envBaseline);
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
   // system rail — in context on every step, never a history rewrite. The task
@@ -2419,12 +2594,16 @@ async function collectAssistant(
       emit(deps.callbacks, { type: "notice", message: visionHonestyNotice(visionPosture, "dispatch") });
     }
   }
+  if (rails?.finalStepPrompt !== undefined && rails.finalStepPrompt !== "") {
+    wireHistory = [...wireHistory, { role: "user", content: rails.finalStepPrompt }];
+  }
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
     maxTokens,
     messages: wireHistory,
     tools: specs,
+    ...(rails?.toolChoice !== undefined ? { toolChoice: rails.toolChoice } : {}),
     signal: providerStreamSignal(deps.signal, streamCut),
     ...(negotiatedEffort.effort !== undefined ? { reasoningEffort: negotiatedEffort.effort } : {}),
     ...(liveSteer !== undefined ? { liveSteering: liveSteer } : {}),
@@ -2441,17 +2620,34 @@ async function collectAssistant(
       } else if (event.type === "thinking") {
         // Display only for the transcript; accumulate for C-10 thinking-loop stalls.
         if (typeof event.text === "string" && event.text !== "") {
-          turn.thinkingText += event.text;
-          emit(deps.callbacks, { type: "assistant.thinking", text: event.text });
+          let chunk = event.text;
+          if (thinkingBudget !== undefined) {
+            const budgetRes = thinkingBudget.add(chunk);
+            if (!budgetRes.admitted) {
+              chunk = "";
+              if (budgetRes.reason !== undefined) {
+                emit(deps.callbacks, { type: "notice", message: budgetRes.reason });
+              }
+            } else if (budgetRes.clamped === true && budgetRes.reason !== undefined) {
+              emit(deps.callbacks, { type: "notice", message: budgetRes.reason });
+            }
+          }
+          if (chunk !== "") {
+            turn.thinkingText += chunk;
+            emit(deps.callbacks, { type: "assistant.thinking", text: chunk });
+          }
         }
       } else if (event.type === "tool_call") {
         const call: ToolCall = {
           id: event.id && event.id !== "" ? event.id : `call_${turn.toolCalls.length + 1}`,
           name: event.name,
           arguments: typeof event.arguments === "string" ? event.arguments : "",
+          ...(event.toolInputError !== undefined ? { toolInputError: event.toolInputError } : {}),
         };
         turn.toolCalls.push(call);
-        speculation?.noteToolCall(call, deps.workspace);
+        if (call.toolInputError === undefined) {
+          speculation?.noteToolCall(call, deps.workspace);
+        }
       } else if (event.type === "notice") {
         // A retry on the way in, or any other provider-side fact the human should
         // know: surface it rather than swallowing it into the transcript.
@@ -2519,7 +2715,8 @@ async function collectAssistant(
   // Record steers the provider accepted into the in-flight response; restore
   // anything it deferred so the next step-boundary drain can admit them.
   if (liveSteer !== undefined && deps.interjection !== undefined) {
-    for (const entry of liveSteer.accepted) {
+    for (let i = 0; i < liveSteer.accepted.length; i += 1) {
+      const entry = liveSteer.accepted[i]!;
       try {
         const modelText = formatInterjection(entry.text);
         deps.store.appendMessage(deps.sessionId, { role: "user", content: modelText });
@@ -2534,7 +2731,8 @@ async function collectAssistant(
         });
       } catch (err) {
         faults.noteTranscript("interjection", err);
-        deps.interjection.restoreFront([entry]);
+        deps.interjection.restoreFront(liveSteer.accepted.slice(i));
+        break;
       }
     }
     liveSteer.restoreDeferred(deps.interjection);
@@ -2601,13 +2799,19 @@ function projectChange(
   const file = argString(args, "path", "file_path", "file");
   if (file === undefined) return { ok: false, error: `${name} requires a path` };
   const resolved = path.resolve(workspace, file);
+  if (!pathInsideWorkspace(resolved, workspace)) {
+    return {
+      ok: false,
+      error: `${name}: path is outside workspace and cannot be read or staged in plan mode: ${resolved}`,
+    };
+  }
   let before: string | null = null;
   try {
     before = readFileSync(resolved).toString("utf8");
   } catch {
     before = null;
   }
-  const rel = pathInsideWorkspace(resolved, workspace) ? path.relative(path.resolve(workspace), resolved) : resolved;
+  const rel = path.relative(path.resolve(workspace), resolved);
   if (name === "write") {
     if (typeof args.content !== "string") return { ok: false, error: "write requires a string content" };
     return { ok: true, resolved, rel, before, after: args.content };
@@ -2695,6 +2899,20 @@ async function executeTool(
   kernelRouteObserve?: KernelExecutePostimageObserve;
   childEffectIds?: string[];
 }> {
+  if (call.toolInputError !== undefined) {
+    const err = call.toolInputError;
+    const output =
+      `Tool input error (${err.code}) for ${call.name}: ${err.message}\n` +
+      `Raw arguments received: ${err.rawInput}\n` +
+      `Please re-issue the tool call with a valid JSON object matching the tool's parameter schema.`;
+    return {
+      result: {
+        ok: false,
+        output,
+        error: output,
+      },
+    };
+  }
   if (parsed.error) {
     return {
       result: { ok: false, output: `Invalid arguments for ${call.name}: ${parsed.error}`, error: `invalid arguments: ${parsed.error}` },
@@ -2956,7 +3174,22 @@ async function executeTool(
         callId: call.id,
         tool: call.name,
       });
-      const approved = await gate.approve(asked, primary.action);
+      let approved = false;
+      let steeringFeedback: string | undefined;
+      let declinedError: unknown;
+      try {
+        approved = await gate.approve(asked, primary.action);
+      } catch (err) {
+        if (isPermissionCorrectedError(err)) {
+          approved = false;
+          steeringFeedback = err.feedback;
+        } else if (isPermissionDeclinedError(err)) {
+          approved = false;
+          declinedError = err;
+        } else {
+          approved = false;
+        }
+      }
       // I-4 / ruling 506 residual: `guard.decision` local analytics (terminal
       // is the closed decision token). No tool name / path / preview text is
       // copied — only scalar, content-free fields. Lazy import avoids a module
@@ -2978,7 +3211,8 @@ async function executeTool(
             callId: call.id,
             tool: call.name,
             kind: entry.action.kind,
-            decision: approved ? "approved" : "declined",
+            decision: approved ? "approved" : steeringFeedback !== undefined ? "corrected" : "declined",
+            ...(steeringFeedback !== undefined ? { steering: steeringFeedback } : {}),
             ...(resources.length > 1 ? { resources } : {}),
           },
           { kind: "human", id: "user" },
@@ -2988,9 +3222,12 @@ async function executeTool(
           callId: call.id,
           tool: call.name,
           action: entry.action,
-          decision: approved ? "allow" : "deny",
-          reason: approved ? "user_approved" : "user_declined",
+          decision: approved ? "ask" : "deny",
+          reason: approved ? "user_approved" : steeringFeedback !== undefined ? "user_corrected" : "user_declined",
         });
+      }
+      if (declinedError !== undefined) {
+        throw declinedError;
       }
       if (approved && toAdmit.length > 1) {
         // Atomic multi-resource leases (**682** / 577 residual): one yes plans a
@@ -3074,6 +3311,16 @@ async function executeTool(
         }
       }
       if (!approved) {
+        if (steeringFeedback !== undefined) {
+          return {
+            result: {
+              ok: false,
+              output: formatSteeringToolOutput(steeringFeedback),
+              error: steeringFeedback,
+            },
+            expected: true,
+          };
+        }
         return {
           result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" },
           expected: true,
@@ -3106,6 +3353,7 @@ async function executeTool(
     args: parsed.args,
     onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
     onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+    admit: hookSpawnAdmission(gate),
   });
   if (hookDecision.decision === "deny") {
     const denied = `DENIED by hook: ${hookDecision.reason}`;
@@ -3113,6 +3361,56 @@ async function executeTool(
   }
 
   deps.effectHost?.recordAllow(effectId, { leaseId });
+
+  // A default/opt-in KernelClient with no trusted Rust transport may execute
+  // through its local Bun fallback. Strict posture must refuse before route
+  // helpers can dispatch there, not only after an undefined route result.
+  const localFallbackRefusal = effectHostNoAmbientFallbackRefusal(call.name, false);
+  if (localFallbackRefusal && (await deps.kernel.start()) !== "trusted") {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: localFallbackRefusal, error: localFallbackRefusal }, expected: true, leaseId };
+  }
+
+  // An untrusted KernelClient executes fs.edit/fs.write locally. That is still
+  // ambient Bun. Refuse shape-eligible ast_edit before that route when
+  // EffectHost is on and the Rust kernel is not trusted.
+  const astHostMode = effectHostKernelMode();
+  if (
+    call.name === "ast_edit" &&
+    (astHostMode === "default" || astHostMode === "opt-in") &&
+    astEditArgsEligibleForKernelRoute(parsed.args) &&
+    (await deps.kernel.start()) !== "trusted"
+  ) {
+    const projectionMiss = await classifyAstEditKernelProjectionMiss(deps.workspace, parsed.args);
+    const detail = projectionMiss
+      ? astEditProjectionMissRequireDetail(projectionMiss)
+      : "kernel route unavailable for a shape-eligible ast_edit";
+    const refusal = `[effect-host-kernel] refused ast_edit: ${detail}; ambient fallback is blocked`;
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: refusal, error: refusal }, expected: true, leaseId };
+  }
+
+  // write/edit/apply_patch/shell/undo follow the same local KernelClient path.
+  // An untrusted kernel would mutate or spawn in-process; EffectHost-on
+  // refuses that instead of treating the local fallback as a route.
+  if (
+    (call.name === "write" || call.name === "edit" || call.name === "apply_patch" || call.name === "shell" || call.name === "undo") &&
+    (astHostMode === "default" || astHostMode === "opt-in") &&
+    (await deps.kernel.start()) !== "trusted"
+  ) {
+    const refusal = `[effect-host-kernel] refused ${call.name}: Rust kernel is not trusted; ambient fallback is blocked`;
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: refusal, error: refusal }, expected: true, leaseId };
+  }
 
   let kernelRouted = false;
   if (effectHostKernelMutationEnabled()) {
@@ -3200,6 +3498,40 @@ async function executeTool(
     }
   }
 
+  // Opt-in strict posture for default/opt-in modes: no silent ambient Bun
+  // fallback for mutations the kernel could not route. Keep this outside the
+  // require-only block; the helper intentionally handles only non-require modes.
+  const noAmbientFallback = effectHostNoAmbientFallbackRefusal(call.name, kernelRouted);
+  if (noAmbientFallback) {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: noAmbientFallback, error: noAmbientFallback }, expected: true, leaseId };
+  }
+
+  // Shape-eligible ast_edit that the kernel did not route must not fall
+  // through to ambient Bun. That covers invalid UTF-8, other projection
+  // misses, and a unique or multi-site plan the kernel could not execute.
+  const kernelMode = effectHostKernelMode();
+  if (
+    !kernelRouted &&
+    call.name === "ast_edit" &&
+    (kernelMode === "default" || kernelMode === "opt-in") &&
+    astEditArgsEligibleForKernelRoute(parsed.args)
+  ) {
+    const projectionMiss = await classifyAstEditKernelProjectionMiss(deps.workspace, parsed.args);
+    const detail = projectionMiss
+      ? astEditProjectionMissRequireDetail(projectionMiss)
+      : "kernel route unavailable for a shape-eligible ast_edit";
+    const refusal = `[effect-host-kernel] refused ast_edit: ${detail}; ambient fallback is blocked`;
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: refusal, error: refusal }, expected: true, leaseId };
+  }
+
   // P0-1 / ruling 652: compound/interpreter shell must not Bun-fallback under =default/=1.
   const noAmbientShell = effectHostNoAmbientCompoundShellRefusal(call.name, parsed.args, kernelRouted);
   if (noAmbientShell) {
@@ -3210,7 +3542,7 @@ async function executeTool(
     return { result: { ok: false, output: noAmbientShell, error: noAmbientShell }, expected: true, leaseId };
   }
 
-  // P0-1 / ruling 667: shape-ineligible write/edit/apply_patch must not Bun-fallback under =default/=1.
+  // P0-1 / rulings 667, 937: shape-ineligible write/edit/apply_patch/ast_edit must not Bun-fallback under =default/=1.
   const noAmbientShape = effectHostNoAmbientShapeIneligibleMutationRefusal(
     call.name,
     parsed.args,
@@ -3226,6 +3558,13 @@ async function executeTool(
 
   const rideParent = (a: GuardAction): GuardAction | undefined =>
     admittedBatch.find((x) => x.kind === a.kind && x.target === a.target) ?? admitted;
+  const toolGuard = async (a: GuardAction): Promise<GuardDecision> => {
+    const d = await gate.check(a, rideParent(a));
+    if (guardEffectivelyAllows(d)) {
+      return { ...d, decision: "allow" as GuardDecision["decision"] };
+    }
+    return d;
+  };
   const context: ToolContext = {
     cwd: deps.workspace,
     workspace: deps.workspace,
@@ -3235,7 +3574,7 @@ async function executeTool(
     contextWindowTokens: windowForModel(deps.model),
     // A tool-level check rides the loop decision for this call when it admits
     // the same kind+target — including multi-resource siblings (ruling 577).
-    guard: (a: GuardAction) => gate.check(a, rideParent(a)),
+    guard: toolGuard,
     approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
@@ -3250,7 +3589,7 @@ async function executeTool(
             workspace: deps.workspace,
             cwd: deps.workspace,
             hooks: {
-              guard: (a: GuardAction) => gate.check(a, rideParent(a)),
+              guard: toolGuard,
               approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
             },
             signal: deps.signal,
@@ -3261,7 +3600,12 @@ async function executeTool(
   };
 
   try {
-    const result = normalizeToolResult(await tool.execute(stripToolOutputContinuationArgs(parsed.args), context));
+    if (call.name === "shell" && (process.env.HZ_SHELL_SNAPSHOT_OBSERVE === "1" || deps.effectHost !== undefined)) {
+      parsed.args.__preSnapshot = takeWorkspaceFsSnapshot(deps.workspace);
+    }
+    const result = normalizeToolResult(
+      await executeToolWithDefectTunnel(tool, stripToolOutputContinuationArgs(parsed.args), context),
+    );
     const childEffectIds = result.childEffectIds?.length ? [...result.childEffectIds] : undefined;
     deps.effectHost?.recordExecute(
       effectId,
@@ -3272,6 +3616,28 @@ async function executeTool(
     );
     return { result, leaseId, ...(childEffectIds?.length ? { childEffectIds } : {}) };
   } catch (err) {
+    if (isPermissionDeclinedError(err)) {
+      deps.effectHost?.recordExecute(
+        effectId,
+        effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+      );
+      throw err;
+    }
+    if (isPermissionCorrectedError(err)) {
+      deps.effectHost?.recordExecute(
+        effectId,
+        effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+      );
+      return {
+        result: {
+          ok: false,
+          output: formatSteeringToolOutput(err.feedback),
+          error: err.feedback,
+        },
+        leaseId,
+        expected: true,
+      };
+    }
     const message = errorMessage(err);
     deps.effectHost?.recordExecute(
       effectId,
@@ -3520,16 +3886,29 @@ async function runToolCall(
 
   const todoVerBefore = todoVersion(deps.sessionId);
   const prefetched = speculation?.consume(call, deps.workspace);
-  const executed: Awaited<ReturnType<typeof executeTool>> =
-    prefetched !== undefined
-      ? (() => {
-          deps.effectHost?.recordExecute(
-            effectId,
-            effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: prefetched.ok }),
-          );
-          return { result: prefetched, leaseId: undefined };
-        })()
-      : await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
+  let executed: Awaited<ReturnType<typeof executeTool>>;
+  let permissionDeclined: unknown;
+  try {
+    executed =
+      prefetched !== undefined
+        ? (() => {
+            deps.effectHost?.recordExecute(
+              effectId,
+              effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: prefetched.ok }),
+            );
+            return { result: prefetched, leaseId: undefined };
+          })()
+        : await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
+  } catch (err) {
+    if (!isPermissionDeclinedError(err)) throw err;
+    permissionDeclined = err;
+    const declineMsg = errorMessage(err) || `permission declined for ${call.name}`;
+    executed = {
+      result: { ok: false, output: declineMsg, error: declineMsg },
+      leaseId: undefined,
+      expected: true,
+    };
+  }
   const result = executed.result;
   if (
     result.ok &&
@@ -3636,16 +4015,26 @@ async function runToolCall(
     // Uses the turn's GuardGate so ask can ride the same approve path as tools.
     const spillAction: GuardAction = { kind: "fs.write", target: path.resolve(plan.spill.file) };
     let spillDecision = await gate.check(spillAction);
-    if (spillDecision.decision === "ask") {
-      const approved = await gate.approve(approvalRequestFor("spill", spillAction, deps.workspace), spillAction);
+    if (spillDecision.decision === "ask" && !guardEffectivelyAllows(spillDecision)) {
+      let approved = false;
+      try {
+        approved = await gate.approve(approvalRequestFor("spill", spillAction, deps.workspace), spillAction);
+      } catch {
+        approved = false;
+      }
       if (approved) {
         gate.markAllowed(spillAction);
-        spillDecision = { decision: "allow", reason: "user_approved" };
+        spillDecision = {
+          decision: "ask",
+          g1: "ask",
+          leaseId: gate.leaseFor(spillAction) ?? "user-approved",
+          reason: "user_approved",
+        };
       } else {
-        spillDecision = { decision: "deny", reason: "user_declined" };
+        spillDecision = { decision: "deny", g1: "deny", reason: "user_declined" };
       }
     }
-    if (spillDecision.decision !== "allow") {
+    if (!guardEffectivelyAllows(spillDecision)) {
       const why =
         spillDecision.reason !== undefined && spillDecision.reason !== ""
           ? spillDecision.reason
@@ -3717,6 +4106,7 @@ async function runToolCall(
       ms: Date.now() - started,
       outputExcerpt: content,
       onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+      admit: hookSpawnAdmission(gate),
       onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
     });
     for (const fragment of postFragments) hookFragments.push(fragment);
@@ -3820,6 +4210,9 @@ async function runToolCall(
     effectId,
     ...(receipt ?? {}),
   });
+  if (permissionDeclined !== undefined) {
+    throw permissionDeclined;
+  }
   // The locally counted context cost of this message (NF-074(a) tail), plus
   // the outcome the mistake-tracker rail needs: a tool that returned ok:false
   // is a `tool_execution_failed` mistake, while a plan-mode staged call changed
@@ -4058,6 +4451,7 @@ export async function runTurn(
         detail,
         onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
         onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+        admit: hookSpawnAdmission(gate),
       });
       for (const fragment of fragments) hookFragments.push(fragment);
     };
@@ -4120,7 +4514,8 @@ export async function runTurn(
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
     let historyLimit = HISTORY_LIMIT;
-    let contextWindowRecoveryUsed = false;
+    let contextWindowRecoveryAttempts = 0;
+    let emergencyHistoryCap: number | undefined;
     let pendingCompactionTrigger: CompactionTrigger | undefined;
     const compactionHold = compactionHoldEnabled() ? new CompactionHoldBuffer() : undefined;
     // B-5 / rulings 482, 489: provider-facing history sync cursor (omp
@@ -4141,6 +4536,10 @@ export async function runTurn(
       currentPrefix: prefixParts,
     });
     let prefixInvalidationReported = false;
+    // Per-run compaction breaker: after repeated failed LLM compactions, skip
+    // further attempts (fall back to deterministic summariseElided) so a broken
+    // summariser cannot burn provider calls (compaction-llm, ruling 850).
+    const compactionBreaker = new CompactionBreaker({ threshold: 3 });
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
@@ -4177,7 +4576,11 @@ export async function runTurn(
         exit = { terminal: "interrupted", detail: "aborted" };
         break;
       }
-      const stop = await ledger.check();
+      if (drainInterjectionsAtSafePoint(deps, faults)) continue;
+      // Atomically check + reserve one step across the parent->child ledger
+      // chain before dispatching (closes subagent TOCTOU; never burns a step
+      // for a queued interjection that skipped the provider call above).
+      const stop = await ledger.tryReserveStep();
       if (stop) {
         exit = { terminal: stop === "wall_clock" ? "timeout" : "budget_exhausted", detail: stop };
         emit(deps.callbacks, {
@@ -4187,8 +4590,6 @@ export async function runTurn(
         break;
       }
       calls += 1;
-      // Charged before the call: a billed-but-failed turn still spends its step.
-      await ledger.chargeStep();
 
       // C-10 / 491: budget-exhaustion class — one soft nudge when the ledger
       // reports the run nearly out (≤2 steps or ≤30s wall), before the hard
@@ -4205,8 +4606,6 @@ export async function runTurn(
         }
       }
 
-      if (drainInterjectionsAtSafePoint(deps, faults)) continue;
-
       // The window is compacted, not sliced: the turn that stated the task, the
       // constraints later turns stated and a labelled summary of what left the
       // window ride with it (compaction.ts). The store is never rewritten — this
@@ -4219,7 +4618,7 @@ export async function runTurn(
       // to catch the missing argument; the pipeline now has one.)
       const rawHistory = deps.store.history(deps.sessionId);
       // Ruling 668: token-aware message window (not only fixed HISTORY_LIMIT=80).
-      historyLimit =
+      const baseLimit =
         process.env.HZ_TOKEN_AWARE_HISTORY === "0"
           ? HISTORY_LIMIT
           : tokenAwareHistoryLimit(
@@ -4227,9 +4626,11 @@ export async function runTurn(
               deps.contextWindowTokens ?? windowForModel(deps.model),
               { defaultLimit: HISTORY_LIMIT },
             );
+      historyLimit =
+        emergencyHistoryCap !== undefined ? Math.min(baseLimit, emergencyHistoryCap) : baseLimit;
       const llmCompactionActive = llmCompactionEnabled(deps);
       const elidedSummariser = llmCompactionActive
-        ? await resolveLlmCompactionSummariser(deps, rawHistory, historyLimit, compactionHold)
+        ? await resolveLlmCompactionSummariser(deps, rawHistory, historyLimit, compactionHold, compactionBreaker)
         : undefined;
       const compactionOptions = {
         limit: historyLimit,
@@ -4354,6 +4755,7 @@ export async function runTurn(
         }
       }
       let turn: Awaited<ReturnType<typeof collectAssistant>>;
+      const finalStepReached = ledger.countdown().steps === 0;
       try {
         turn = await collectAssistant(deps, faults, history, speculationLane, {
           pinned,
@@ -4369,6 +4771,7 @@ export async function runTurn(
           defaultHistoryLimit: HISTORY_LIMIT,
           ...(tokenFitCompaction ? { tokenFitCompaction: true } : {}),
           ...(llmCompactionActive ? { llmCompactionActive: true } : {}),
+          ...(finalStepReached ? { toolChoice: "none" as const, finalStepPrompt: MAX_STEPS_FINAL_PROMPT } : {}),
         });
       } catch (err) {
         if (spendLedger !== undefined && spendReservationId !== undefined) {
@@ -4423,10 +4826,18 @@ export async function runTurn(
           stepCount: calls,
           ...(costFields?.costMicroUsd !== undefined ? { costMicroUsd: costFields.costMicroUsd } : {}),
         });
+        // V-14 (ruling 913): impossible usage arithmetic is reported, never
+        // rewritten. One notice per dispatch; violations ride the existing usage
+        // event as an additive field (no new event name).
+        const usageInvariant = checkUsageInvariant(turn.usage);
+        if (!usageInvariant.ok) {
+          emit(deps.callbacks, { type: "notice", message: formatUsageInvariantNotice(usageInvariant) });
+        }
         await logEvent(deps, faults, EventTypes.usageRecorded, {
           sessionId: deps.sessionId,
           provider: deps.provider.name,
           model: deps.model,
+          ...(usageInvariant.ok ? {} : { usageInvariant: usageInvariant.violations }),
           inputTokens: turn.usage.inputTokens ?? 0,
           outputTokens: turn.usage.outputTokens ?? 0,
           ...(turn.usage.cacheReadInputTokens !== undefined
@@ -4460,6 +4871,15 @@ export async function runTurn(
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
+      if (finalStepReached && turn.toolCalls.length > 0) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `budget: steps exhausted — final step reached (toolChoice=none): dropped ${turn.toolCalls.length} tool call${turn.toolCalls.length === 1 ? "" : "s"} without execution`,
+        });
+        turn.toolCalls = [];
+        if (turn.stopReason === "tool_use") turn.stopReason = "end";
+        exit = { terminal: "budget_exhausted", detail: "steps" };
+      }
       if (turn.toolCalls.length > 0 && turn.stopReason !== "max_tokens") {
         // max_tokens owns its own batch policy below: it names the cause, fails
         // only the truncated/unsafe calls, executes complete ones and continues.
@@ -4518,14 +4938,21 @@ export async function runTurn(
       if (turn.error) {
         if (
           isContextWindowExceededCode(turn.failureCode) &&
-          !contextWindowRecoveryUsed
+          contextWindowRecoveryAttempts < EMERGENCY_SHRINK_LADDER.length
         ) {
           const rawCount = deps.store.history(deps.sessionId).length;
-          const nextLimit = emergencyHistoryLimit(historyLimit, rawCount);
+          const nextLimit = emergencyHistoryLimit(
+            historyLimit,
+            rawCount,
+            contextWindowRecoveryAttempts,
+          );
           if (nextLimit !== null) {
             const limitBefore = historyLimit;
-            contextWindowRecoveryUsed = true;
+            contextWindowRecoveryAttempts += 1;
+            emergencyHistoryCap = nextLimit;
             historyLimit = nextLimit;
+            anchorBase = undefined;
+            appendedTokens = 0;
             compactionAnnounced = false;
             pendingCompactionTrigger = "emergency-context-window";
             // C-10: one prompt file per failure class — rides the retry step's system rail.
@@ -4537,6 +4964,7 @@ export async function runTurn(
               compactionPending: true,
               historyLimitBefore: limitBefore,
               historyLimitAfter: nextLimit,
+              shrinkStep: contextWindowRecoveryAttempts,
             });
             continue;
           }
@@ -4577,6 +5005,10 @@ export async function runTurn(
           const toFail: ToolCall[] = [];
           const toRun: ToolCall[] = [];
           for (const call of turn.toolCalls) {
+            if (call.toolInputError !== undefined) {
+              toRun.push(call);
+              continue;
+            }
             const parsed = parseCall(call);
             if (parsed.error !== undefined || parsed.truncated === true) toFail.push(call);
             else toRun.push(call);
@@ -4659,50 +5091,55 @@ export async function runTurn(
         // T-3: the model is ending its turn. If the session todo list still has
         // open items, give it ONE more step with a bounded reminder before the
         // run settles (the exit-status gate below keeps `unknown` as the
-        // terminal if it stops again). Budgets and abort are re-checked at the
-        // top of the loop, so the extra step is never free.
-        const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId, todoVersionAtStart);
-        if (pending !== undefined) {
-          todoReminderSent = true;
-          try {
-            deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
-          } catch (err) {
-            faults.noteTranscript("todo", err);
-            break;
-          }
-          emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
-          await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
-          continue;
-        }
-
-        // Lecture 09: Three-Layer Termination Gate (Premature Victory Prevention).
-        // If the agent mutated files and verification has not passed, intercept
-        // completion before turn.done and provide actionable repair feedback.
-        if (terminationGateEnabled(process.env) && !terminationReminderSent) {
-          const evalResult = evaluateTerminationGate({
-            changedPaths: evidence.changedPaths(),
-            verifiedCommand: evidence.verifiedCommand(),
-            lastCommandExitCode: evidence.lastVerifiedExitCode(),
-            workspace: deps.workspace,
-          });
-          if (!evalResult.canTerminate && evalResult.feedback) {
-            terminationReminderSent = true;
+        // terminal if it stops again). Skip re-entry on the final step.
+        if (!finalStepReached) {
+          const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId, todoVersionAtStart);
+          if (pending !== undefined) {
+            todoReminderSent = true;
             try {
-              deps.store.appendMessage(deps.sessionId, { role: "user", content: evalResult.feedback });
+              deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
             } catch (err) {
-              faults.noteTranscript("termination-gate", err);
+              faults.noteTranscript("todo", err);
               break;
             }
-            if (evalResult.notice) emit(deps.callbacks, { type: "notice", message: evalResult.notice });
-            await logEvent(
-              deps,
-              faults,
-              TERMINATION_GATE_INTERCEPT_EVENT,
-              { failingLayer: evalResult.failingLayer, changed: evidence.changedPaths() },
-              { kind: "system", id: "hz-loop" },
-            );
+            emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
+            await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
             continue;
           }
+
+          // Lecture 09: Three-Layer Termination Gate (Premature Victory Prevention).
+          // If the agent mutated files and verification has not passed, intercept
+          // completion before turn.done and provide actionable repair feedback.
+          if (terminationGateEnabled(process.env) && !terminationReminderSent) {
+            const evalResult = evaluateTerminationGate({
+              changedPaths: evidence.changedPaths(),
+              verifiedCommand: evidence.verifiedCommand(),
+              lastCommandExitCode: evidence.lastVerifiedExitCode(),
+              workspace: deps.workspace,
+            });
+            if (!evalResult.canTerminate && evalResult.feedback) {
+              terminationReminderSent = true;
+              try {
+                deps.store.appendMessage(deps.sessionId, { role: "user", content: evalResult.feedback });
+              } catch (err) {
+                faults.noteTranscript("termination-gate", err);
+                break;
+              }
+              if (evalResult.notice) emit(deps.callbacks, { type: "notice", message: evalResult.notice });
+              await logEvent(
+                deps,
+                faults,
+                TERMINATION_GATE_INTERCEPT_EVENT,
+                { failingLayer: evalResult.failingLayer, changed: evidence.changedPaths() },
+                { kind: "system", id: "hz-loop" },
+              );
+              continue;
+            }
+          }
+        } else if (!todoReminderSent && pendingTodosReminder(deps.sessionId, todoVersionAtStart) !== undefined) {
+          // Final step reached with open todos: skip reminder re-entry cleanly
+          // and report budget_exhausted so step-budget contracts stay truthful.
+          exit = { terminal: "budget_exhausted", detail: "steps" };
         }
         break;
       }
@@ -4743,6 +5180,8 @@ export async function runTurn(
       // chain and the tracker stay deterministic regardless of concurrency.
       const toolOk = new Map<string, boolean>();
       const stepOutcomeParts: { name: string; fingerprint: string }[] = [];
+      const answeredCallIds = new Set<string>();
+      let permissionDeclined = false;
       const batchFifo = await runClassedToolBatchFifo(turn.toolCalls, {
         signal: deps.signal,
         runCall: async (call) => {
@@ -4761,6 +5200,7 @@ export async function runTurn(
             },
             speculationLane,
           );
+          answeredCallIds.add(call.id);
           appendedTokens += outcome.tokens;
           if (outcome.fingerprint !== "") {
             stepOutcomeParts.push({ name: call.name, fingerprint: outcome.fingerprint });
@@ -4783,10 +5223,44 @@ export async function runTurn(
             // end) is already recorded and noticed in runToolCall.
             return "fatal";
           }
+          if (isPermissionDeclinedError(err)) {
+            // runToolCall already appended the declined tool result row,
+            // issued the receipt, and emitted the final error tool.card.
+            answeredCallIds.add(call.id);
+            permissionDeclined = true;
+            emit(deps.callbacks, { type: "notice", message: `permission declined for ${call.name}` });
+            return "fatal";
+          }
           emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
           return undefined;
         },
       });
+      if (permissionDeclined) {
+        // Ensure any remaining unexecuted calls in this batch also receive a
+        // declined tool result row so SQLite never holds an unpaired tool_call.
+        for (const call of turn.toolCalls) {
+          if (answeredCallIds.has(call.id)) continue;
+          const skipMsg = "permission declined: skipped remaining tool call in batch";
+          try {
+            deps.store.appendMessage(deps.sessionId, {
+              role: "tool",
+              content: skipMsg,
+              toolCallId: call.id,
+              toolName: call.name,
+            });
+          } catch (err) {
+            faults.noteTranscript(call.name, err);
+          }
+          emit(deps.callbacks, {
+            type: "tool.card",
+            callId: call.id,
+            name: call.name,
+            args: {},
+            status: "error",
+            summary: skipMsg,
+          });
+        }
+      }
       if (batchFifo.aborted) aborted = true;
       if (batchFifo.fatal) fatal = true;
       const batchHadToolFailure = turn.toolCalls.some((call) => toolOk.get(call.id) === false);
@@ -4839,7 +5313,9 @@ export async function runTurn(
       }
 
       if (fatal) {
-        exit = { terminal: "failed", detail: "internal_error" };
+        exit = permissionDeclined
+          ? ({ terminal: "denied", detail: "user_declined" } as unknown as RunExit)
+          : { terminal: "failed", detail: "internal_error" };
         break;
       }
       if (aborted) break;
@@ -5067,7 +5543,7 @@ export async function runTurn(
         });
         decision = { decision: "deny", reason: "guard-error" };
       }
-      if (decision.decision !== "allow") {
+      if (!guardEffectivelyAllows(decision)) {
         const why =
           decision.decision === "ask"
             ? "unattended post-mortem never self-approves; allow the path in policy"
@@ -5127,7 +5603,7 @@ export async function runTurn(
     /* logEvent already accounts for faults */
   }
   emit(deps.callbacks, { type: "turn.done" });
-  return { text, aborted: aborted || deps.signal.aborted, exit };
+  return { text, aborted: Boolean(aborted || deps.signal?.aborted), exit };
 }
 
 /** Session↔kernel pairing check at batch/turn boundaries; never fails the run. */

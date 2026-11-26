@@ -8,21 +8,87 @@
  * the actual socket.
  */
 
+import { lookup as dnsLookupPromise } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { truncate } from "./helpers";
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_OUTPUT_CHARS = 100_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
+const MAX_REDIRECT_HOPS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const AUTH_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "x-api-key",
+  "x-subscription-token",
+]);
+
+function stripAuthHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (!AUTH_HEADER_NAMES.has(k.toLowerCase())) out[k] = v;
+  }
+  return out;
+}
 
 export type WebFetchHttp = (url: string, init: RequestInit) => Promise<Response>;
+export type WebFetchDnsLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 
 let httpFetch: WebFetchHttp = (url, init) => fetch(url, init);
+let usingCustomHttp = false;
+let dnsLookup: WebFetchDnsLookup = (hostname) => dnsLookupPromise(hostname, { all: true });
+let usingCustomDns = false;
 
 /** Test hook: replace the HTTP layer; pass `undefined` to restore Bun `fetch`. */
 export function __setWebFetchHttpForTests(impl: WebFetchHttp | undefined): void {
+  usingCustomHttp = impl !== undefined;
   httpFetch = impl ?? ((url, init) => fetch(url, init));
+}
+
+/** Test hook: replace DNS resolution; pass `undefined` to restore `dns.promises.lookup`. */
+export function __setWebFetchDnsLookupForTests(impl: WebFetchDnsLookup | undefined): void {
+  usingCustomDns = impl !== undefined;
+  dnsLookup = impl ?? ((hostname) => dnsLookupPromise(hostname, { all: true }));
+}
+
+/**
+ * Resolve `url`'s hostname via DNS before fetch() and reject if any returned
+ * address is private/loopback/link-local/CGNAT/multicast/NAT64.
+ * Preserves injected custom `fetch` test harnesses for synthetic test domains
+ * when no custom DNS lookup hook is installed.
+ */
+export async function checkDnsNotPrivate(
+  url: string,
+  opts?: { customFetchInjected?: boolean },
+): Promise<string | null> {
+  if (process.env.HZ_ALLOW_PRIVATE_FETCH === "1") return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname.replace(/^\[/, "").replace(/\]$/, "");
+  } catch {
+    return "invalid URL";
+  }
+  if (isBlockedPrivateHost(host)) {
+    return `blocked private or internal host: ${host}`;
+  }
+  if (isIP(host) !== 0) return null;
+  try {
+    const records = await dnsLookup(host);
+    for (const rec of records) {
+      if (isBlockedPrivateHost(rec.address)) {
+        return `hostname ${host} resolved to blocked private address ${rec.address}`;
+      }
+    }
+    return null;
+  } catch (e) {
+    if (opts?.customFetchInjected && !usingCustomDns) return null;
+    return `DNS resolution failed for ${host}: ${msg(e)}`;
+  }
 }
 
 function fail(error: string): ToolResult {
@@ -33,13 +99,63 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function normalizeUrl(raw: string): string | undefined {
+/** True when a hostname/IP is loopback, link-local, or RFC 1918 / IPv6 ULA. */
+export function isBlockedPrivateHost(hostname: string): boolean {
+  const raw = hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
+  if (raw === "" || raw === "localhost" || raw === "localhost.localdomain" || raw.endsWith(".localhost")) {
+    return true;
+  }
+  // IPv4 literal (decimal dotted-quad; URL parser normalizes octal/hex/integer IPv4 to dotted-quad)
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+    if (a === 169 && b === 254) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a >= 224) return true; // multicast 224.0.0.0/4 + reserved/broadcast 240.0.0.0/4
+    return false;
+  }
+  // IPv6 literals (loopback, unspecified, uncompressed forms)
+  if (raw === "::1" || raw === "::" || /^(?:0{1,4}:){7}0{0,3}[01]$/.test(raw)) {
+    return true;
+  }
+  // Link-local fe80::/10 (fe80..febf), ULA fc00::/7 (fc../fd..), multicast ff00::/8
+  if (/^fe[89ab][0-9a-f]:/.test(raw) || /^f[cd][0-9a-f]{2}:/.test(raw) || /^ff[0-9a-f]{2}:/.test(raw)) {
+    return true;
+  }
+  // NAT64 well-known prefix 64:ff9b::/96 (and local-use 64:ff9b:1::/48)
+  if (/^0{0,2}64:ff9b:/.test(raw)) {
+    return true;
+  }
+  // IPv4-mapped IPv6: compressed (::ffff:...) or uncompressed (0:0:0:0:0:ffff:...)
+  const v4Mapped = /^(?:::|0{1,4}(?::0{1,4}){4}:)ffff:(.+)$/.exec(raw);
+  if (v4Mapped) {
+    const tail = v4Mapped[1]!;
+    if (tail.includes(".")) return isBlockedPrivateHost(tail);
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
+    if (hex) {
+      const hi = parseInt(hex[1]!, 16);
+      const lo = parseInt(hex[2]!, 16);
+      const mapped = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isBlockedPrivateHost(mapped);
+    }
+  }
+  return false;
+}
+
+export function normalizeUrl(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (trimmed === "") return undefined;
   try {
     const u = new URL(trimmed);
     if (u.protocol !== "https:") return undefined;
     if (u.username !== "" || u.password !== "") return undefined;
+    if (process.env.HZ_ALLOW_PRIVATE_FETCH !== "1" && isBlockedPrivateHost(u.hostname)) {
+      return undefined;
+    }
     return u.href;
   } catch {
     return undefined;
@@ -69,7 +185,53 @@ export function stripHtmlToText(html: string): string {
     .trim();
 }
 
-async function readBodyCapped(res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean; bytes: number }> {
+export async function readBodyCapped(
+  res: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; bytes: number }> {
+  if (res.body && typeof res.body.getReader === "function") {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let truncated = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        if (total + value.byteLength > maxBytes) {
+          const remaining = maxBytes - total;
+          if (remaining > 0) {
+            chunks.push(value.subarray(0, remaining));
+            total += remaining;
+          }
+          truncated = true;
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore cancel errors */
+          }
+          break;
+        }
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* already released */
+      }
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(out);
+    return { text, truncated, bytes: total };
+  }
   const buf = await res.arrayBuffer();
   const bytes = buf.byteLength;
   const slice = bytes > maxBytes ? buf.slice(0, maxBytes) : buf;
@@ -152,12 +314,48 @@ export const webFetchTool: Tool = {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await httpFetch(url, {
-        method: "GET",
-        redirect: "follow",
-        signal: controller.signal,
-        headers: { accept: "*/*", "user-agent": "HorizonCode-web_fetch/1.0" },
-      });
+      let currentUrl = url;
+      let currentHeaders: Record<string, string> = { accept: "*/*", "user-agent": "HorizonCode-web_fetch/1.0" };
+      let res: Response;
+      let hops = 0;
+      for (;;) {
+        const dnsErr = await checkDnsNotPrivate(currentUrl, { customFetchInjected: usingCustomHttp });
+        if (dnsErr !== null) return fail(dnsErr);
+        res = await httpFetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          signal: controller.signal,
+          headers: currentHeaders,
+        });
+        if (!REDIRECT_STATUSES.has(res.status)) break;
+        const location = res.headers.get("location");
+        if (!location) break;
+        try {
+          await res.body?.cancel();
+        } catch {
+          /* ignore */
+        }
+        hops += 1;
+        if (hops > MAX_REDIRECT_HOPS) {
+          return fail(`too many redirects (max ${MAX_REDIRECT_HOPS})`);
+        }
+        let nextRaw: string;
+        try {
+          nextRaw = new URL(location, currentUrl).href;
+        } catch {
+          return fail(`invalid redirect location: ${location}`);
+        }
+        const nextUrl = normalizeUrl(nextRaw);
+        if (nextUrl === undefined) {
+          return fail("redirect target must be a valid https:// URL (no userinfo)");
+        }
+        const redirectDenied = await checkNetFetch(ctx, nextUrl);
+        if (redirectDenied) return fail(redirectDenied);
+        if (new URL(nextUrl).origin !== new URL(currentUrl).origin) {
+          currentHeaders = stripAuthHeaders(currentHeaders);
+        }
+        currentUrl = nextUrl;
+      }
 
       const contentType = res.headers.get("content-type") ?? "";
       const { text: body, truncated: bodyTruncated, bytes } = await readBodyCapped(res, maxBytes);
@@ -177,7 +375,7 @@ export const webFetchTool: Tool = {
       const shown = truncate(content, MAX_OUTPUT_CHARS);
 
       const header = [
-        `url: ${url}`,
+        `url: ${currentUrl}`,
         `status: ${res.status}`,
         `content-type: ${contentType || "(none)"}`,
         `bytes: ${bytes}${bodyTruncated ? " (body truncated at max_bytes)" : ""}`,
@@ -197,6 +395,7 @@ export const webFetchTool: Tool = {
 
       return { ok: true, output: `${header}\n\n${shown}${tail}` };
     } catch (e) {
+      tunnelPermissionError(e);
       if (controller.signal.aborted) {
         const reason = ctx.signal.aborted ? "aborted" : "timeout";
         return fail(`fetch ${reason}`);

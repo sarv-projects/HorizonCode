@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { chmodSqliteFiles, ensurePrivateDir, ensureWorkspaceStateDir, workspaceStateDir, workspaceStateFile } from "./paths";
+import { assertSqliteReconcileBarrierClear } from "./session";
 
 const FTS = "session_search_fts";
 const META = "session_search_meta";
@@ -86,6 +87,7 @@ function closeDb(db: Database, dbPath: string): void {
 
 /** Upsert one session document; no-op when title+content hash unchanged. */
 export function upsertSessionSearch(workspace: string, doc: SessionSearchDoc): void {
+  assertSqliteReconcileBarrierClear("session-search.upsertSessionSearch");
   const hash = contentHash(doc.title, doc.content);
   const db = openDb(workspace);
   try {
@@ -113,6 +115,7 @@ export function upsertSessionSearch(workspace: string, doc: SessionSearchDoc): v
 }
 
 export function removeSessionSearch(workspace: string, sessionId: string): void {
+  assertSqliteReconcileBarrierClear("session-search.removeSessionSearch");
   const db = openDb(workspace);
   try {
     db.transaction(() => {

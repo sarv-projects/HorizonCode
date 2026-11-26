@@ -14,6 +14,58 @@ import { receiptsPath } from "../../src/core/session-kernel-reconcile";
 
 const TEST_KEY = Buffer.alloc(32, 0x22);
 
+describe("R172 strict keyed verification (opt-in)", () => {
+  function v2Receipt(): Record<string, unknown> {
+    const body = {
+      id: "r-v2",
+      seq: 1,
+      ts: "2026-01-01T00:00:00.000Z",
+      prevHash: null,
+      action: "tool.execute" as const,
+      tool: "write",
+      argsDigest: "a",
+      resultDigest: "b",
+      schemaVersion: 2 as const,
+      effectId: "fx-1",
+      postimageDigest: "d".repeat(64),
+    };
+    return { ...body, hash: hashReceiptVersioned(body as unknown as Record<string, unknown>) };
+  }
+
+  test("strict mode refuses a v2 chain with no issuer key, default mode stays ok", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-rcpt-strict-nokey-"));
+    try {
+      const file = receiptsPath(ws);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `${JSON.stringify(v2Receipt())}\n`);
+      expect(verifyReceiptChainSync(ws).ok).toBe(true);
+      const strict = verifyReceiptChainSync(ws, { requireKeyedIssuer: true });
+      expect(strict.ok).toBe(false);
+      expect(strict.refusal).toContain("R172 strict");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("strict mode accepts a v2 receipt carrying a valid keyed issuer stamp", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-rcpt-strict-key-"));
+    try {
+      const kdir = kernelStateDir(ws);
+      mkdirSync(kdir, { recursive: true });
+      writeFileSync(path.join(kdir, RECEIPT_ISSUER_KEY_FILE), TEST_KEY.toString("hex"));
+      const body = v2Receipt();
+      writeFileSync(receiptsPath(ws), `${JSON.stringify({
+        ...body,
+        issuerStamp: issuerStampForHash(TEST_KEY, body.hash as string),
+      })}\n`);
+      const strict = verifyReceiptChainSync(ws, { requireKeyedIssuer: true });
+      expect(strict.ok).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("receipt-chain-verify (ruling 289)", () => {
   test("ok chain with sidecar fields strips before recompute", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-rcpt-verify-"));

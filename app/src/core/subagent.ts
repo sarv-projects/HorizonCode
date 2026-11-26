@@ -32,7 +32,9 @@ import { sha256Hex } from "./canon";
 import { loadHooks, runLifecycleHooks } from "./hooks";
 import { hooksLoadOptions } from "./trust";
 import type { KernelClient } from "./kernel";
-import type { EffectHost } from "./effect-host";
+import { createScopedEffectHost, type EffectHost } from "./effect-host";
+import { AgentId, AttemptId, DeliveryLifecycle, OpaqueAddress } from "./subagent-delivery";
+export { AgentId, AttemptId, DeliveryLifecycle, OpaqueAddress } from "./subagent-delivery";
 import { getApprovalHandler, getAskUserHandler, runTurn, streamFor, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
@@ -40,6 +42,7 @@ import { buildChildPrompt, staticChildPrompt } from "./prompt";
 import type { PermissionMode } from "./permission-mode";
 import { resolvePreset, type AgentPreset, type PresetOptions } from "./agent-profiles";
 import { catalogWindow, loadCatalog } from "./catalog/catalog";
+import type { SubagentInbox } from "./subagent-inbox";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
 export const SUBAGENT_SYSTEM_PROMPT = staticChildPrompt();
@@ -191,6 +194,10 @@ export interface NestedRunOptions {
    * digest binding they create is the one the child hook loader consults.
    */
   home?: string;
+  /** Group B / ruling 848 / ruling 856: optional subagent mailbox for inter-agent messaging. */
+  inbox?: SubagentInbox;
+  /** Logical agent identity for the child in the inbox. */
+  agentId?: string;
 }
 
 /**
@@ -217,7 +224,15 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   const steps = clampSteps(preset?.maxSteps !== undefined && requested !== undefined ? Math.min(requested, preset.maxSteps) : requested);
   const title = subagentTitle(task);
   const parentSessionId = typeof opts.parentSessionId === "string" ? opts.parentSessionId.trim() : "";
-  const session = opts.store.createSession(title);
+  const session = opts.store.createSession(title, { permissionMode: childMode });
+  if (opts.inbox !== undefined) {
+    const childId = opts.agentId ?? session.id;
+    try {
+      opts.inbox.post(childId, task);
+    } catch {
+      /* inbox delivery failure must not fail the delegated run */
+    }
+  }
   let forwarded = 0;
   let childTools = 0;
   const profileField = preset !== undefined ? { profile: preset.name } : {};
@@ -230,7 +245,15 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     }
   };
   const startedAt = Date.now();
-  const effectIdsBefore = new Set(opts.effectHost?.listEffectIds() ?? []);
+  const childEffectIds: string[] = [];
+  const scopedEffectHost =
+    opts.effectHost !== undefined ? createScopedEffectHost(opts.effectHost, childEffectIds) : undefined;
+  const delivery = new DeliveryLifecycle<string>();
+  const deliveryKey = AttemptId.mint(newId()).asStr();
+  const _agentToken = AgentId.mint(session.id);
+  const _opaqueAddress = OpaqueAddress.mint(newId());
+  delivery.admitPending(deliveryKey, task);
+  delivery.beginProjection(deliveryKey);
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
@@ -286,9 +309,9 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     maxProviderCalls: steps,
     // NF-073: the child's step slice sits under the parent's shared ceiling.
     ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: steps }) : undefined,
-    effectHost: opts.effectHost,
+    effectHost: scopedEffectHost,
     trustedWorkspaceHooks: opts.trustedWorkspaceHooks,
-    contextWindowTokens: catalogWindow(opts.provider.name, opts.model, loadCatalog()),
+    contextWindowTokens: catalogWindow(opts.provider.name, model, loadCatalog()),
     // No `delegate`: a subagent can never spawn subagents.
   };
   // H1 subagent.start/subagent.stop (the child session boundary): OBSERVATION
@@ -348,7 +371,11 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     });
   }
   const { text, aborted, exit } = await runTurn(deps, task);
-  const childEffectIds = (opts.effectHost?.listEffectIds() ?? []).filter((id) => !effectIdsBefore.has(id));
+  if (aborted) {
+    delivery.terminate("soft_cancel", deliveryKey);
+  } else {
+    delivery.commitAndDeliver(deliveryKey);
+  }
   {
     const stopped = exit.terminal === "budget_exhausted" || exit.terminal === "timeout";
     const empty = text.trim() === "";
@@ -395,6 +422,14 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
         delivery: "queue",
         status: hzStatus,
       });
+    }
+  }
+  if (opts.inbox !== undefined) {
+    const recipient = parentSessionId !== "" ? parentSessionId : "parent";
+    try {
+      opts.inbox.post(recipient, text.trim());
+    } catch {
+      /* inbox delivery failure must not fail the delegated run */
     }
   }
   await runLifecycleHooks(hooks, {

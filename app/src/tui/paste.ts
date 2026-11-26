@@ -41,6 +41,16 @@ export interface PasteCollector {
   flushAfterEnd(): PasteResult | undefined;
 }
 
+/**
+ * Normalize ConPTY / Windows Terminal pasted line endings (`\r\n` and bare `\r`)
+ * into clean `\n` so pasted carriage returns never corrupt multi-line text or
+ * trigger accidental Enter submits.
+ */
+export function normalizePastedLineEndings(text: string): string {
+  if (typeof text !== "string" || text === "") return "";
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
 function finalizePaste(lines: string[]): PasteResult {
   const raw = lines.slice();
   const done = lines.slice();
@@ -70,7 +80,12 @@ export function createPasteCollector(): PasteCollector {
     pasting: () => inside && !ended,
     line(text) {
       if (!inside) return undefined;
-      lines.push(typeof text === "string" ? text : "");
+      const normalized = normalizePastedLineEndings(typeof text === "string" ? text : "");
+      if (normalized.includes("\n")) {
+        lines.push(...normalized.split("\n"));
+      } else {
+        lines.push(normalized);
+      }
       if (!ended) return undefined;
       const out = finalizePaste(lines);
       inside = false;
@@ -79,7 +94,12 @@ export function createPasteCollector(): PasteCollector {
       return out;
     },
     flushAfterEnd() {
-      if (!inside || !ended || lines.length === 0) return undefined;
+      if (!inside || !ended) return undefined;
+      if (lines.length === 0) {
+        inside = false;
+        ended = false;
+        return undefined;
+      }
       const out = finalizePaste(lines);
       inside = false;
       ended = false;
@@ -119,7 +139,7 @@ export interface KeypressPasteCollector {
 }
 
 function finalizeKeypressBuffer(buf: string): PasteResult {
-  const normalized = buf.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalized = normalizePastedLineEndings(buf);
   const raw = normalized === "" ? [] : normalized.split("\n");
   return finalizePaste(raw);
 }
@@ -149,7 +169,12 @@ export function createKeypressPasteCollector(): KeypressPasteCollector {
       if (typeof str === "string" && str !== "") buf += str;
     },
     flushAfterEnd() {
-      if (!inside || !ended || buf === "") return undefined;
+      if (!inside || !ended) return undefined;
+      if (buf === "") {
+        inside = false;
+        ended = false;
+        return undefined;
+      }
       const out = finalizeKeypressBuffer(buf);
       inside = false;
       ended = false;

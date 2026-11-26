@@ -140,8 +140,7 @@ pub fn parse_origin(url: &str) -> Result<Origin, String> {
                 // a ':' that is not a numeric port (e.g. a bare IPv6 group) — no
                 // explicit port, fall back to the scheme default below
                 (
-                    host_port,
-                    0, // sentinel, replaced below
+                    host_port, 0, // sentinel, replaced below
                 )
             }
         }
@@ -150,15 +149,23 @@ pub fn parse_origin(url: &str) -> Result<Origin, String> {
     let port = if port != 0 {
         port
     } else {
-        default_port(&scheme)
-            .ok_or_else(|| format!("url {:?} has no port and scheme {:?} has no default", url, scheme))?
+        default_port(&scheme).ok_or_else(|| {
+            format!(
+                "url {:?} has no port and scheme {:?} has no default",
+                url, scheme
+            )
+        })?
     };
-    let host = host_raw.to_ascii_lowercase();
+    let host_trimmed = host_raw.strip_suffix('.').unwrap_or(host_raw);
+    let host = host_trimmed.to_ascii_lowercase();
     if host.is_empty() {
         return Err(format!("url {:?} has an empty host", url));
     }
     if host.contains('*') {
         return Err(format!("url {:?} host contains a wildcard", url));
+    }
+    if host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return Err(format!("url {:?} host has an empty label", url));
     }
     Ok(Origin { scheme, host, port })
 }
@@ -270,7 +277,11 @@ pub struct OriginRule {
 impl OriginRule {
     fn matches(&self, origin: &Origin) -> bool {
         self.host == origin.host
-            && self.scheme.as_deref().map(|s| s == origin.scheme).unwrap_or(true)
+            && self
+                .scheme
+                .as_deref()
+                .map(|s| s == origin.scheme)
+                .unwrap_or(true)
             && self.port.map(|p| p == origin.port).unwrap_or(true)
     }
 }
@@ -301,6 +312,7 @@ pub enum EgressError {
     Unreadable(String),
     Shape(String),
     Rule { index: usize, detail: String },
+    Hardlinked(String),
 }
 
 impl std::fmt::Display for EgressError {
@@ -320,6 +332,11 @@ impl std::fmt::Display for EgressError {
                 f,
                 "HZ_PRECONDITION_FAILED: egress.json rule {} is malformed: {}",
                 index, detail
+            ),
+            EgressError::Hardlinked(path) => write!(
+                f,
+                "HZ_PRECONDITION_FAILED: {}: egress.json must have exactly one link (metadata nlink > 1); refusing to serve an egress policy another name can rewrite",
+                path
             ),
         }
     }
@@ -342,6 +359,14 @@ pub fn load(state_dir: &Path) -> Result<Option<EgressPolicy>, EgressError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(EgressError::Unreadable(e.to_string())),
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(&path).map_err(|e| EgressError::Unreadable(e.to_string()))?;
+        if meta.nlink() > 1 {
+            return Err(EgressError::Hardlinked(path.display().to_string()));
+        }
+    }
     parse_policy(&text).map(Some)
 }
 
@@ -364,10 +389,12 @@ pub fn parse_policy(text: &str) -> Result<EgressPolicy, EgressError> {
                 Some(Value::Array(items)) => {
                     let mut hosts = Vec::with_capacity(items.len());
                     for (i, item) in items.iter().enumerate() {
-                        let raw = item.as_str().ok_or_else(|| EgressError::Shape(format!(
-                            "disallowedWebFetchDomains[{}] must be a string",
-                            i
-                        )))?;
+                        let raw = item.as_str().ok_or_else(|| {
+                            EgressError::Shape(format!(
+                                "disallowedWebFetchDomains[{}] must be a string",
+                                i
+                            ))
+                        })?;
                         let host = crate::execpolicy::normalize_network_rule_host(raw)
                             .map_err(EgressError::Shape)?;
                         hosts.push(host);
@@ -384,7 +411,11 @@ pub fn parse_policy(text: &str) -> Result<EgressPolicy, EgressError> {
             let observe = match map.get("observe") {
                 None => false,
                 Some(Value::Bool(b)) => *b,
-                Some(_) => return Err(EgressError::Shape("\"observe\" must be a boolean".to_string())),
+                Some(_) => {
+                    return Err(EgressError::Shape(
+                        "\"observe\" must be a boolean".to_string(),
+                    ))
+                }
             };
             return finish_policy(rules, denylist, observe);
         }
@@ -470,8 +501,8 @@ impl EgressPolicy {
     ///   1. the org web-fetch denylist denies (`DenySource::WebFetchDenylist`);
     ///   2. else a matching deny row denies (`DenySource::DenyRow`) —
     ///      most-restrictive-wins, a deny row beats an allow/ask row;
-    ///   3. else a matching allow row allows;
-    ///   4. else a matching ask row asks;
+    ///   3. else a matching ask row asks (R1: Deny > Ask > Allow);
+    ///   4. else a matching allow row allows;
     ///   5. else DEFAULT DENY (N1: no rule matched = deny with `DenyRow`).
     ///
     /// In observe mode every one of those answers is wrapped into
@@ -514,10 +545,10 @@ impl EgressPolicy {
                 BaseDecision::Ask => saw_ask = true,
             }
         }
-        if saw_allow {
-            EgressDecision::Allow
-        } else if saw_ask {
+        if saw_ask {
             EgressDecision::Ask
+        } else if saw_allow {
+            EgressDecision::Allow
         } else {
             // N1: no rule matched -> default deny.
             EgressDecision::Deny(DenySource::DenyRow)
@@ -737,11 +768,11 @@ mod tests {
         for bad in [
             "",
             "   ",
-            "not a url",            // whitespace + no scheme
-            "example.com/path",     // no scheme
-            "https://",             // empty authority
-            "ftp://example.com",    // scheme with no default port and no explicit one
-            "https://ex*ample.com", // wildcard host
+            "not a url",                  // whitespace + no scheme
+            "example.com/path",           // no scheme
+            "https://",                   // empty authority
+            "ftp://example.com",          // scheme with no default port and no explicit one
+            "https://ex*ample.com",       // wildcard host
             "https://example.com:999999", // out-of-range port
         ] {
             assert!(parse_origin(bad).is_err(), "expected {:?} to fail", bad);
@@ -901,7 +932,12 @@ mod tests {
         };
         // would-Allowed
         let d = make(BaseDecision::Allow, vec![]).decide(&origin("https", "obs.test", 443));
-        assert_eq!(d, EgressDecision::AllowAndRecord { would: WouldBe::Allowed });
+        assert_eq!(
+            d,
+            EgressDecision::AllowAndRecord {
+                would: WouldBe::Allowed
+            }
+        );
         assert!(d.admits());
         // would-Denied(DenyRow)
         let d = make(BaseDecision::Deny, vec![]).decide(&origin("https", "obs.test", 443));
@@ -914,7 +950,12 @@ mod tests {
         assert!(d.admits());
         // would-Asked
         let d = make(BaseDecision::Ask, vec![]).decide(&origin("https", "obs.test", 443));
-        assert_eq!(d, EgressDecision::AllowAndRecord { would: WouldBe::Asked });
+        assert_eq!(
+            d,
+            EgressDecision::AllowAndRecord {
+                would: WouldBe::Asked
+            }
+        );
         assert!(d.admits());
         // would-Denied(WebFetchDenylist)
         let d = make(BaseDecision::Allow, vec!["obs.test".to_string()])
@@ -975,7 +1016,9 @@ mod tests {
         );
         // releasing one makes room again.
         budget.release(tokens.pop().unwrap());
-        assert!(budget.try_hold(Some("tag-after-release".to_string())).is_ok());
+        assert!(budget
+            .try_hold(Some("tag-after-release".to_string()))
+            .is_ok());
     }
 
     #[test]
@@ -984,7 +1027,11 @@ mod tests {
         let tag = Some("one-command".to_string());
         let mut tokens = Vec::new();
         for _ in 0..DEFAULT_MAX_HELD_PER_CALL {
-            tokens.push(budget.try_hold(tag.clone()).expect("under per-call ceiling"));
+            tokens.push(
+                budget
+                    .try_hold(tag.clone())
+                    .expect("under per-call ceiling"),
+            );
         }
         // the per-call ceiling (8) is hit before the proxy-wide one (16).
         assert_eq!(budget.try_hold(tag.clone()), Err(Overloaded::PerCall));
@@ -997,21 +1044,37 @@ mod tests {
 
     #[test]
     fn deadline_unix_adds_the_hold_timeout() {
-        assert_eq!(HoldBudget::deadline_unix(1_000), 1_000 + DEFAULT_HOLD_TIMEOUT_SECS);
+        assert_eq!(
+            HoldBudget::deadline_unix(1_000),
+            1_000 + DEFAULT_HOLD_TIMEOUT_SECS
+        );
     }
 
     #[test]
     fn blocked_request_is_content_free() {
         let o = origin("https", "example.com", 443);
-        let rec = BlockedRequest::new(&o, "web.fetch", EgressDecision::Deny(DenySource::DenyRow), 12, 1_600);
+        let rec = BlockedRequest::new(
+            &o,
+            "web.fetch",
+            EgressDecision::Deny(DenySource::DenyRow),
+            12,
+            1_600,
+        );
         let value = rec.to_json();
         let obj = value.as_object().expect("object");
         // EXACTLY these keys, and NONE of the secret-bearing ones.
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort();
-        assert_eq!(keys, ["call", "deadlineUnix", "decided", "holdMs", "host", "port"]);
+        assert_eq!(
+            keys,
+            ["call", "deadlineUnix", "decided", "holdMs", "host", "port"]
+        );
         for forbidden in ["path", "headers", "header", "body", "url", "query"] {
-            assert!(!obj.contains_key(forbidden), "record must omit {:?}", forbidden);
+            assert!(
+                !obj.contains_key(forbidden),
+                "record must omit {:?}",
+                forbidden
+            );
         }
         assert_eq!(obj["decided"], json!("deny"));
         // canonical form is stable and content-free too.
@@ -1049,8 +1112,79 @@ mod tests {
         )
         .unwrap();
         assert!(policy.observe);
-        assert_eq!(policy.disallowed_web_fetch_domains, vec!["evil.test".to_string()]);
+        assert_eq!(
+            policy.disallowed_web_fetch_domains,
+            vec!["evil.test".to_string()]
+        );
         assert_eq!(policy.rules.len(), 1);
         assert_eq!(policy.rules[0].port, Some(443));
+    }
+
+    #[test]
+    fn trailing_dot_stripped_and_empty_labels_rejected() {
+        let origin = parse_origin("https://Example.COM./v1").unwrap();
+        assert_eq!(origin.host, "example.com");
+        assert_eq!(
+            crate::execpolicy::normalize_network_rule_host("Example.COM.").unwrap(),
+            "example.com"
+        );
+        for bad in [
+            "https://example.com../v1",
+            "https://.example.com/v1",
+            "https://a..b.com/v1",
+            "https://./v1",
+        ] {
+            assert!(parse_origin(bad).is_err(), "expected error for {bad}");
+        }
+        for bad_host in ["example.com..", ".example.com", "a..b.com", ".", ".."] {
+            assert!(
+                crate::execpolicy::normalize_network_rule_host(bad_host).is_err(),
+                "expected error for host {bad_host}"
+            );
+        }
+    }
+
+    #[test]
+    fn decide_enforce_r1_ask_beats_allow() {
+        let policy = parse_policy(
+            r#"[
+                { "host": "api.example.com", "decision": "allow" },
+                { "host": "api.example.com.", "decision": "ask" }
+            ]"#,
+        )
+        .unwrap();
+        let origin = parse_origin("https://api.example.com./data").unwrap();
+        assert_eq!(policy.decide(&origin), EgressDecision::Ask);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod track1_hardening_tests {
+    use super::*;
+
+    #[test]
+    fn egress_load_rejects_hardlinked_egress_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "hz-egress-nlink-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let egress_file = dir.join(EGRESS_FILE);
+        fs::write(&egress_file, r#"[{"host":"example.com","decision":"allow"}]"#).unwrap();
+        assert!(load(&dir).unwrap().is_some());
+
+        let hardlink = dir.join("egress-hardlink.json");
+        fs::hard_link(&egress_file, &hardlink).unwrap();
+        let err = load(&dir).unwrap_err();
+        assert!(
+            matches!(err, EgressError::Hardlinked(_)),
+            "expected Hardlinked error, got {err:?}"
+        );
+        assert!(err.to_string().contains("nlink > 1"), "{err}");
+
+        fs::remove_file(&hardlink).unwrap();
+        assert!(load(&dir).unwrap().is_some());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

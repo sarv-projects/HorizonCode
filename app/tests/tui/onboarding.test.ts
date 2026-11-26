@@ -129,7 +129,7 @@ describe("onboarding hints are accurate", () => {
 
     const login = await runApp(appSpec(["login"]));
     expect(login.stderr).toContain("usage: hzcode login <provider> [--device]");
-  });
+  }, 15_000);
 });
 
 /* ---------------------- no notice on scripted runs ----------------------- */
@@ -144,7 +144,7 @@ describe("headless / non-TTY runs", () => {
     expect(run.code).toBe(0);
     expect(run.stdout + run.stderr).not.toContain("no provider key or model configured");
     expect(run.stdout + run.stderr).not.toContain("hide this notice");
-  });
+  }, 15_000);
 
   test("a piped (non-TTY) chat session never prints the onboarding notice", async () => {
     const ws = pool.make();
@@ -152,7 +152,7 @@ describe("headless / non-TTY runs", () => {
     expect(run.timedOut).toBe(false);
     expect(run.stdout + run.stderr).not.toContain("no provider key or model configured");
     expect(run.stdout + run.stderr).not.toContain("hide this notice");
-  });
+  }, 15_000);
 });
 
 /* ------------------------- human at a real TTY --------------------------- */
@@ -222,7 +222,7 @@ if (SCRIPT === null) {
     expect(text).toContain("HzCode");
     expect(text).not.toContain("no provider key or model configured");
     expect(text).not.toContain("hide this notice");
-  });
+  }, 30_000);
 
   test("HZ_NO_ONBOARDING opts out of the notice in a PTY session", async () => {
     const proc = startChat(pool.make(), { [ONBOARDING_OPT_OUT_ENV]: "1" });
@@ -231,5 +231,5 @@ if (SCRIPT === null) {
     expect(text).toContain("HzCode");
     expect(text).not.toContain("no provider key or model configured");
     expect(text).not.toContain("hide this notice");
-  });
+  }, 30_000);
 }

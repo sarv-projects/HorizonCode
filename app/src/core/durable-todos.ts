@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import * as path from "node:path";
 import { canonicalJson } from "./canon";
 import { DURABLE_TODOS, handoffDbPath, resolveHandoffBranch, withHandoffDb } from "./memory/handoff";
+import { assertSqliteReconcileBarrierClear } from "./session";
 
 function nextDurableTodoId(rows: DurableTodoRow[]): string {
   let max = 0;
@@ -171,6 +172,7 @@ function normalizeRows(rows: unknown[]): DurableTodoRow[] {
 function migrateLegacyJsonIfNeeded(workspace: string): void {
   const fp = legacyJsonPath(workspace);
   if (!existsSync(fp)) return;
+  assertSqliteReconcileBarrierClear("durable-todos.migrateLegacyJsonIfNeeded");
   const legacy = parseLegacyFile(workspace);
   const branches = Object.entries(legacy.branches);
   if (branches.length === 0) {
@@ -220,6 +222,7 @@ function loadBranchTodosSqlite(workspace: string, branch: string): DurableTodoRo
 }
 
 function saveBranchTodosSqlite(workspace: string, branch: string, rows: DurableTodoRow[]): void {
+  assertSqliteReconcileBarrierClear("durable-todos.saveBranchTodosSqlite");
   migrateLegacyJsonIfNeeded(workspace);
   const trimmed = normalizeRows(rows);
   withHandoffDb(workspace, false, (db) => {

@@ -8,6 +8,12 @@
 # hzcode loads only the user-owned, 0600 `<user config dir>/env` (see
 # loadUserEnvFile in app/src/core/config.ts); a workspace `.env` is never read.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 exec "$BUN" --no-env-file run "$ROOT/app/src/main.ts" "$@"

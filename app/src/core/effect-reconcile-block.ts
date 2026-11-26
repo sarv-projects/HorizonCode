@@ -43,8 +43,21 @@ export const EFFECT_RECONCILE_BLOCK_NOTICE = EFFECT_RECONCILE_BLOCK_SESSION_NOTI
 /** Only tools whose admission is known not to mutate host state can pass
  * a reconciliation latch. Newly registered or MCP tools are not presumed safe. */
 const RECONCILE_READ_ONLY_TOOLS = new Set([
-  "read", "grep", "glob", "repo_map", "ast_search", "memory_search",
-  "handoff_search", "tool_search",
+  "read",
+  "grep",
+  "glob",
+  "repo_map",
+  "ast_search",
+  "memory_search",
+  "handoff_search",
+  "tool_search",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "git_blame",
+  "ctx_inspect",
+  "history_snip_preview",
+  "verified_open",
 ]);
 
 type ReconcileBlockLatch = { reason: string; latchedAt: number; blockedPaths: string[] };

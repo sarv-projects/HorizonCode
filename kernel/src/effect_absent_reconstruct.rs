@@ -54,9 +54,9 @@ pub fn independently_absent(path: &Path) -> Result<bool, String> {
             "HZ_PRECONDITION_FAILED: cannot observe postimage absence: identity cannot be proven"
                 .into(),
         ),
-        AbsenceClassification::Unstable => Err(
-            "HZ_PRECONDITION_FAILED: cannot observe postimage absence: unstable".into(),
-        ),
+        AbsenceClassification::Unstable => {
+            Err("HZ_PRECONDITION_FAILED: cannot observe postimage absence: unstable".into())
+        }
     }
 }
 
@@ -127,10 +127,8 @@ mod tests {
 
     #[test]
     fn explicit_absent_on_missing_path() {
-        let dir = std::env::temp_dir().join(format!(
-            "hz-absent-reconstruct-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hz-absent-reconstruct-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let missing = dir.join("does-not-exist.txt");
@@ -174,6 +172,9 @@ mod tests {
         let replay = replay_superseded_absent_facts(&events);
         assert_eq!(replay["checked"], 1);
         assert_eq!(replay["reconstructed"][0]["effectId"], "e1");
-        assert_eq!(replay["reconstructed"][0]["classification"], "signed_absence_fact");
+        assert_eq!(
+            replay["reconstructed"][0]["classification"],
+            "signed_absence_fact"
+        );
     }
 }

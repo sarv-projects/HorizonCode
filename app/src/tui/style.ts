@@ -49,7 +49,8 @@ export const red = (s: unknown): string => wrap("31", s);
 /** Bare reset sequence, for callers that build their own runs. */
 export const reset = ESC + "0m";
 
-const ANSI_RE = /\u001b\[[0-9;?]*[ -\/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-Z\\-_]/g;
+const ANSI_RE =
+  /\u001b\[[0-9:;<=>?]*[ -\/]*[@-~]|\u009b[0-9:;<=>?]*[ -\/]*[@-~]|\u001b\][^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[PX^_][\s\S]*?(?:\u001b\\|\u009c|$)|\u001b[@-Z\\-_]/g;
 
 /** Remove ANSI escape sequences. */
 export function strip(s: unknown): string {
@@ -169,6 +170,16 @@ export function errorMessage(err: unknown): string {
 export function sanitizeText(input: unknown): string {
   const s = input === undefined || input === null ? "" : String(input);
   return s.replace(ANSI_RE, "").replace(/[\u0000-\u0008\u000b-\u001f\u007f\u0080-\u009f]/g, "");
+}
+
+const BIDI_AND_TAG_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c\u{E0000}-\u{E007F}]/gu;
+
+/**
+ * Strip ANSI/CSI/OSC/DCS escapes, C0/C1 control characters, BiDi override/isolate
+ * controls, and invisible Unicode tag characters from untrusted display strings.
+ */
+export function sanitizeDisplay(input: unknown): string {
+  return sanitizeText(input).replace(BIDI_AND_TAG_RE, "");
 }
 
 /* ------------------------ colour levels and role table ------------------------ */

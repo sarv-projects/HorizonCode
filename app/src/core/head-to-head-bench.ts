@@ -17,6 +17,7 @@ import {
   admitVerificationFsWrite,
   resolveHzVerificationPath,
 } from "./verification-artifact";
+import { metricContract } from "./metrics";
 
 export const H2H_COMPETITORS = [
   "horizoncode",
@@ -190,6 +191,52 @@ export function runHeadToHeadBench(opts: {
     results,
     summary,
   };
+}
+
+/**
+ * H-7 metric contract for `hzcode h2h` counts (ruling 803+). The human summary
+ * `report.summary` stays byte-identical; these parallel blocks carry
+ * Metric/Anchor/Population/Excludes for each published number. In particular
+ * no pass rate is published in dry-run (no competitor was invoked) or live
+ * scaffold mode (no live adapter is wired), so no pass-rate claim is invented.
+ */
+export function h2hPublication(report: H2HReport): string[] {
+  const anchor = "none — first h2h run (no prior matrix to compare against)";
+  const population = report.live
+    ? "this h2h live-scaffold matrix (planned arms only; no live adapter wired)"
+    : "this h2h dry-run matrix (planned arms only)";
+  const excludes = "no competitor invoked and no pass rate claimed — counts of configured/planned arms only; nothing discarded";
+  const availableCount = report.competitors.filter((c) => c.available).length;
+  return [
+    metricContract({
+      metric: "h2h task count",
+      anchor,
+      population,
+      excludes,
+      value: report.taskCount,
+    }),
+    metricContract({
+      metric: "h2h competitor count",
+      anchor,
+      population,
+      excludes,
+      value: report.competitors.length,
+    }),
+    metricContract({
+      metric: "h2h planned-arm count",
+      anchor,
+      population,
+      excludes,
+      value: report.results.length,
+    }),
+    metricContract({
+      metric: "h2h available-competitor count",
+      anchor,
+      population,
+      excludes,
+      value: availableCount,
+    }),
+  ];
 }
 
 export async function writeH2HReport(workspace: string, report: H2HReport): Promise<string> {

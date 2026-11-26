@@ -8,7 +8,7 @@
  */
 
 import type { RuntimeEvent } from "../contracts";
-import { bold, yellow } from "./style";
+import { bold, sanitizeDisplay, yellow } from "./style";
 
 export interface UnknownEffectPayload {
   effectId: string;
@@ -20,17 +20,21 @@ export interface UnknownEffectPayload {
 /** Scrollback / notice line when `hz.effect.unknown` is observed. */
 export function formatUnknownEffectNotice(payload: UnknownEffectPayload): string {
   const bits = ["effect outcome unverified (UNKNOWN)"];
-  if (payload.tool !== undefined && payload.tool !== "") bits.push(`tool ${payload.tool}`);
-  if (payload.receiptId !== undefined && payload.receiptId !== "") bits.push(`receipt ${payload.receiptId}`);
-  bits.push(`effect ${payload.effectId.slice(0, 8)}`);
+  const tool = payload.tool !== undefined ? sanitizeDisplay(payload.tool) : "";
+  const receiptId = payload.receiptId !== undefined ? sanitizeDisplay(payload.receiptId) : "";
+  const effectId = sanitizeDisplay(payload.effectId);
+  if (tool !== "") bits.push(`tool ${tool}`);
+  if (receiptId !== "") bits.push(`receipt ${receiptId}`);
+  bits.push(`effect ${effectId.slice(0, 8)}`);
   return bits.join(" · ");
 }
 
 /** Status-bar chip segment (distinct from error styling). */
 export function formatUnknownStatusChip(count: number, latestReceiptId?: string): string {
   if (!Number.isFinite(count) || count <= 0) return "";
-  if (count === 1 && latestReceiptId !== undefined && latestReceiptId !== "") {
-    const short = latestReceiptId.length > 12 ? `${latestReceiptId.slice(0, 8)}…` : latestReceiptId;
+  const cleanId = latestReceiptId !== undefined ? sanitizeDisplay(latestReceiptId) : "";
+  if (count === 1 && cleanId !== "") {
+    const short = cleanId.length > 12 ? `${cleanId.slice(0, 8)}…` : cleanId;
     return bold(yellow(`UNKNOWN · ${short}`));
   }
   return bold(yellow(count === 1 ? "UNKNOWN 1" : `UNKNOWN ${count}`));

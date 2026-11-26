@@ -5,7 +5,7 @@
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { declareDeliverables, declaredDeliverables } from "../core/deliverables";
 import { deliverableLineStats, formatDeliverableLineStats } from "../core/deliverable-line-counts";
-import { relPath, resolvePath } from "./helpers";
+import { relPath, resolveRealTarget } from "./helpers";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -33,7 +33,11 @@ export const presentTool: Tool = {
     const paths: string[] = [];
     for (const item of raw) {
       if (typeof item !== "string" || item.trim() === "") return fail("each files entry must be a non-empty string");
-      const abs = resolvePath(ctx.cwd, item);
+      const target = resolveRealTarget(ctx.cwd, item, ctx.workspace);
+      if (!target.inside) {
+        return fail(`path escapes workspace: ${item}`);
+      }
+      const abs = target.real;
       const action: GuardAction = { kind: "fs.read", target: abs };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {

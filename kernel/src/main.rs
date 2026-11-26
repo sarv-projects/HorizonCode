@@ -11,11 +11,11 @@ mod canon;
 mod control_auth;
 mod edit_unicode_fold;
 mod effect_absent_reconstruct;
-mod effect_legacy_unverifiable;
 mod effect_evidence;
+mod effect_history;
 mod effect_host;
 mod effect_host_edit_repair;
-mod effect_history;
+mod effect_legacy_unverifiable;
 mod effect_nested_observe;
 mod effect_owner;
 mod egress;
@@ -25,27 +25,28 @@ mod egress_tls_peek;
 mod egress_tls_terminate;
 mod eventlog;
 mod execpolicy;
+mod fs_delta_observe;
 mod guard;
+mod host_supervisor_lease;
 mod human_principal;
 mod jsonl_append;
 mod os_file_lock;
+mod peer_auth;
 mod permm;
 mod protocol;
-mod receipt_postimage;
 mod receipt_issuer;
+mod receipt_postimage;
 mod receipt_schema;
 mod receipts;
 mod sandbox;
 mod sandbox_atomic_write;
 mod sandbox_path_verify;
-mod time;
 #[cfg(unix)]
 mod socket_serve;
-mod peer_auth;
-mod host_supervisor_lease;
 mod supervisor_binary_seal;
 mod supervisor_epoch;
 mod supervisor_lease;
+mod time;
 mod workspace_binding;
 
 use std::io::{BufRead, BufWriter, Write};
@@ -65,6 +66,13 @@ fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut state_dir: Option<PathBuf> = None;
     let mut control_fd: Option<u32> = None;
+    // Windows launch path (no fd inheritance): a one-shot private file, or the
+    // stronger named pipe (H-29).
+    let mut control_file: Option<PathBuf> = None;
+    let mut control_pipe: Option<String> = None;
+    // H-29 phase 2: the kernel OWNS the pipe and proves the client PID.
+    let mut control_pipe_serve: Option<String> = None;
+    let mut control_parent_pid: Option<u32> = None;
     let mut socket_path: Option<PathBuf> = None;
     let mut selftest = false;
 
@@ -90,6 +98,44 @@ fn run() -> i32 {
                         return 2;
                     }
                 };
+            }
+            "--control-pipe" => {
+                i += 1;
+                match args.get(i) {
+                    Some(path) => control_pipe = Some(path.clone()),
+                    None => {
+                        eprintln!("error: --control-pipe requires a pipe name");
+                        return 2;
+                    }
+                }
+            }
+            "--control-pipe-serve" => {
+                i += 1;
+                match args.get(i) {
+                    Some(path) => control_pipe_serve = Some(path.clone()),
+                    None => {
+                        eprintln!("error: --control-pipe-serve requires a pipe name");
+                        return 2;
+                    }
+                }
+            }
+            "--control-parent-pid" => {
+                i += 1;
+                control_parent_pid = args.get(i).and_then(|raw| raw.parse::<u32>().ok());
+                if control_parent_pid.is_none() {
+                    eprintln!("error: --control-parent-pid requires a numeric pid");
+                    return 2;
+                }
+            }
+            "--control-file" => {
+                i += 1;
+                match args.get(i) {
+                    Some(path) => control_file = Some(PathBuf::from(path)),
+                    None => {
+                        eprintln!("error: --control-file requires a path");
+                        return 2;
+                    }
+                }
             }
             "--socket" => {
                 i += 1;
@@ -139,8 +185,11 @@ fn run() -> i32 {
         eprintln!("error: cannot create state dir {}: {}", dir.display(), e);
         return 2;
     }
-    // Event payloads and receipts are not world-readable material.
-    permm::private_dir(&dir);
+    // Refuse startup if the state directory cannot be restricted.
+    if let Err(e) = permm::private_dir(&dir) {
+        eprintln!("error: cannot secure state dir {}: {}", dir.display(), e);
+        return 2;
+    }
 
     // A present-but-malformed policy refuses service: serving it would mean
     // silently dropping rules (a dropped `deny` is a fail-open).
@@ -159,22 +208,106 @@ fn run() -> i32 {
         }
     };
 
+    let control_modes = [
+        control_fd.is_some(),
+        control_file.is_some(),
+        control_pipe.is_some(),
+        control_pipe_serve.is_some(),
+    ]
+    .iter()
+    .filter(|chosen| **chosen)
+    .count();
+    if control_modes > 1 {
+        eprintln!("error: --control-fd, --control-file, --control-pipe and --control-pipe-serve are mutually exclusive");
+        return 2;
+    }
     if selftest {
-        if control_fd.is_some() {
+        if control_fd.is_some()
+            || control_file.is_some()
+            || control_pipe.is_some()
+            || control_pipe_serve.is_some()
+            || control_parent_pid.is_some()
+        {
             eprintln!("error: --selftest cannot inherit parent approval credentials");
             return 2;
         }
         return selftest_run(&dir, &anchor);
     }
-    let control_secret = match control_fd {
-        Some(fd) => match control_auth::read_from_fd(fd) {
+    // H-29 phase 2: kernel-owned pipe server. The parent connects as a client;
+    // its PID must match what the launcher declared, or the secret is never read.
+    #[cfg(windows)]
+    if let Some(pipe) = control_pipe_serve.as_deref() {
+        let Some(expected_pid) = control_parent_pid else {
+            eprintln!("error: --control-pipe-serve requires --control-parent-pid");
+            return 2;
+        };
+        let server = match control_auth::PipeControlServer::create(pipe) {
+            Ok(server) => server,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        };
+        let control_secret = match server.accept_and_read(expected_pid) {
+            Ok(secret) => Some(secret),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        };
+        let issuer_key = match receipt_issuer::load_or_create(&dir, control_secret.is_some()) {
+            Ok(key) => key,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        };
+        return serve(&dir, anchor, control_secret, issuer_key, socket_path);
+    }
+    #[cfg(not(windows))]
+    if control_pipe_serve.is_some() {
+        eprintln!("error: --control-pipe-serve is Windows-only; use --control-fd 3");
+        return 2;
+    }
+    #[cfg(windows)]
+    if let Some(pipe) = control_pipe.as_deref() {
+        let control_secret = match control_auth::read_from_pipe(pipe) {
+            Ok(secret) => Some(secret),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        };
+        let issuer_key = match receipt_issuer::load_or_create(&dir, control_secret.is_some()) {
+            Ok(key) => key,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        };
+        return serve(&dir, anchor, control_secret, issuer_key, socket_path);
+    }
+    #[cfg(not(windows))]
+    if control_pipe.is_some() {
+        eprintln!("error: --control-pipe is Windows-only; use --control-fd 3");
+        return 2;
+    }
+    let control_secret = match (control_fd, control_file) {
+        (Some(fd), _) => match control_auth::read_from_fd(fd) {
             Ok(secret) => Some(secret),
             Err(err) => {
                 eprintln!("error: {err}");
                 return 2;
             }
         },
-        None => None,
+        (None, Some(path)) => match control_auth::read_from_file(&path) {
+            Ok(secret) => Some(secret),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        },
+        (None, None) => None,
     };
     let issuer_key = match receipt_issuer::load_or_create(&dir, control_secret.is_some()) {
         Ok(key) => key,
@@ -186,21 +319,41 @@ fn run() -> i32 {
     serve(&dir, anchor, control_secret, issuer_key, socket_path)
 }
 
-fn default_state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("HZ_STATE_DIR") {
-        if !dir.trim().is_empty() {
-            return PathBuf::from(dir);
+fn default_state_dir_from(
+    hz_state_dir: Option<&str>,
+    home: Option<&str>,
+    userprofile: Option<&str>,
+    windows_fallback: bool,
+) -> PathBuf {
+    if let Some(dir) = hz_state_dir.filter(|s| !s.trim().is_empty()) {
+        return PathBuf::from(dir);
+    }
+    if let Some(h) = home.filter(|s| !s.trim().is_empty()) {
+        return PathBuf::from(h).join(".hzcode").join("kernel");
+    }
+    if windows_fallback {
+        if let Some(up) = userprofile.filter(|s| !s.trim().is_empty()) {
+            return PathBuf::from(up).join(".hzcode").join("kernel");
         }
     }
-    match std::env::var("HOME") {
-        Ok(home) if !home.trim().is_empty() => PathBuf::from(home).join(".hzcode").join("kernel"),
-        _ => PathBuf::from(".hzcode").join("kernel"),
-    }
+    PathBuf::from(".hzcode").join("kernel")
+}
+
+fn default_state_dir() -> PathBuf {
+    let hz_state_dir = std::env::var("HZ_STATE_DIR").ok();
+    let home = std::env::var("HOME").ok();
+    let userprofile = std::env::var("USERPROFILE").ok();
+    default_state_dir_from(
+        hz_state_dir.as_deref(),
+        home.as_deref(),
+        userprofile.as_deref(),
+        cfg!(windows),
+    )
 }
 
 fn print_help() {
     println!("hz-kernel {} — HorizonCode trust kernel", VERSION);
-    println!("usage: hz-kernel [--state-dir <path>] [--socket <path>] [--control-fd 3] [--selftest] [--version]");
+    println!("usage: hz-kernel [--state-dir <path>] [--socket <path>] [--control-fd 3 | --control-file <path>] [--selftest] [--version]");
     println!("env:   HZ_ANCHOR_KEY=<hex>             keyed HMAC-SHA256 chain anchors");
     println!("       HZ_ACCEPT_LEGACY_ANCHORS=1      accept legacy anchors while keyed");
     println!("       HZ_KERNEL_SOCKET=<path>         Unix socket serve (H-29/H-30/CB-6; exclusive supervisor lease)");
@@ -235,11 +388,17 @@ fn serve(
             return 2;
         }
     };
-    let kernel = Arc::new(Kernel::new_with_control(dir, anchor, control_secret, issuer_key));
+    let kernel = Arc::new(Kernel::new_with_control(
+        dir,
+        anchor,
+        control_secret,
+        issuer_key,
+    ));
+    let handle_gate = Arc::new(std::sync::Mutex::new(()));
     if let Some(socket_path) = socket {
         #[cfg(not(unix))]
         {
-            let _ = (socket_path, kernel, lease);
+            let _ = (socket_path, kernel, lease, handle_gate);
             eprintln!(
                 "error: --socket / HZ_KERNEL_SOCKET requires Unix (Linux/WSL); peer-proven SO_PEERCRED lease is unavailable on this OS"
             );
@@ -248,17 +407,18 @@ fn serve(
         #[cfg(unix)]
         {
             let stdin_kernel = Arc::clone(&kernel);
+            let stdin_gate = Arc::clone(&handle_gate);
             std::thread::spawn(move || {
-                let _ = serve_stdin(&stdin_kernel);
+                let _ = serve_stdin(&stdin_kernel, &stdin_gate);
             });
-            return socket_serve::serve_forever(&socket_path, dir, kernel, lease);
+            return socket_serve::serve_forever(&socket_path, dir, kernel, lease, handle_gate);
         }
     }
     let _lease = lease;
-    serve_stdin(&kernel)
+    serve_stdin(&kernel, &handle_gate)
 }
 
-fn serve_stdin(kernel: &Kernel) -> i32 {
+fn serve_stdin(kernel: &Kernel, handle_gate: &std::sync::Mutex<()>) -> i32 {
     let stdin = std::io::stdin();
     let mut out = BufWriter::new(std::io::stdout().lock());
 
@@ -274,7 +434,10 @@ fn serve_stdin(kernel: &Kernel) -> i32 {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => kernel.handle(&request),
+            Ok(request) => {
+                let _guard = handle_gate.lock().unwrap_or_else(|e| e.into_inner());
+                kernel.handle(&request)
+            }
             Err(e) => canon::error_response(Value::Null, &format!("malformed request line: {}", e)),
         };
         let _ = serde_json::to_writer(&mut out, &response);
@@ -289,6 +452,7 @@ fn serve_stdin(kernel: &Kernel) -> i32 {
 struct Checks {
     total: u32,
     failures: u32,
+    skips: u32,
 }
 
 impl Checks {
@@ -296,6 +460,7 @@ impl Checks {
         Checks {
             total: 0,
             failures: 0,
+            skips: 0,
         }
     }
 
@@ -307,6 +472,14 @@ impl Checks {
             println!("FAIL {}", label);
             self.failures += 1;
         }
+    }
+
+    /// A check that cannot run on this platform. Counted (so the total is
+    /// stable) but never a pass and never a failure: the label names why.
+    fn skip(&mut self, label: &str, reason: &str) {
+        self.total += 1;
+        self.skips += 1;
+        println!("SKIP {} ({})", label, reason);
     }
 }
 
@@ -687,23 +860,40 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
-    let shell_stdout_expected = canon::sha256_bytes(b"hz-selftest-shell\n");
+    // POSIX `echo` is not an executable on Windows; use cmd's builtin and the
+    // CRLF it emits, so the digest path is still exercised on both platforms.
+    // The kernel shell allowlist has no Windows program it will execute (cmd is
+    // refused as unconfined), so this POSIX fixture is unix-only and SKIPs
+    // honestly elsewhere rather than failing a Windows run.
+    #[cfg(windows)]
+    checks.skip(
+        "effect.execute shell.exec sandbox digest",
+        "unix-only fixture: kernel shell.exec has no allowed Windows program",
+    );
+    #[cfg(not(windows))]
+    let (shell_argv, shell_stdout_expected, shell_lease_pattern) = (
+        json!(["echo", "hz-selftest-shell"]),
+        canon::sha256_bytes(b"hz-selftest-shell\n"),
+        "echo hz-selftest-shell",
+    );
     // Shell policy is ASK by default: mint a kernel-owned single-use lease
     // rather than treating a caller's sandboxRoot as authorization.
+    #[cfg(not(windows))]
     let _ = call(
         &kernel,
         "guard.lease",
         json!({
-            "kind": "shell.exec", "pattern": "echo hz-selftest-shell", "ttlMs": 60_000
+            "kind": "shell.exec", "pattern": shell_lease_pattern, "ttlMs": 60_000
         }),
     );
+    #[cfg(not(windows))]
     match call(
         &kernel,
         "effect.execute",
         json!({
             "effectId": "selftest-eff-shell",
             "sandboxRoot": eff_sandbox.to_string_lossy(),
-            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["echo", "hz-selftest-shell"] } }
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": shell_argv } }
         }),
     ) {
         Ok(v) => {
@@ -756,15 +946,20 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
-    // 7. guard policy: workspace write allowed, shell asks
+    // 7. guard policy: workspace write asks with leaseId (G1), shell asks
     let workspace_write = call(
         &kernel,
         "guard.check",
         json!({ "action": { "kind": "fs.write", "target": "/tmp/hz-kernel-selftest/f" }, "scope": "workspace" }),
     );
     checks.check(
-        "guard.check fs.write workspace -> allow",
-        matches!(&workspace_write, Ok(d) if d.get("decision").and_then(|v| v.as_str()) == Some("allow")),
+        "guard.check fs.write workspace -> ask+leaseId",
+        matches!(&workspace_write, Ok(d)
+            if d.get("decision").and_then(|v| v.as_str()) == Some("ask")
+                && d.get("leaseId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)),
     );
     let shell_ask = call(
         &kernel,
@@ -776,7 +971,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         matches!(&shell_ask, Ok(d) if d.get("decision").and_then(|v| v.as_str()) == Some("ask")),
     );
 
-    // 8. lease grants allow for a matching shell command
+    // 8. lease grants ask+leaseId for a matching shell command (G1)
     match call(
         &kernel,
         "guard.lease",
@@ -798,12 +993,12 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
                 }),
             );
             let ok = matches!(&decision, Ok(d)
-                if d.get("decision").and_then(|v| v.as_str()) == Some("allow")
+                if d.get("decision").and_then(|v| v.as_str()) == Some("ask")
                     && d.get("leaseId").and_then(|v| v.as_str()) == Some(lease_id.as_str()));
-            checks.check("guard.lease echo * -> allow", ok && !lease_id.is_empty());
+            checks.check("guard.lease echo * -> ask+leaseId", ok && !lease_id.is_empty());
         }
         Err(e) => {
-            checks.check("guard.lease echo * -> allow", false);
+            checks.check("guard.lease echo * -> ask+leaseId", false);
             eprintln!("selftest: {}", e);
         }
     }
@@ -954,9 +1149,27 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
                     dims.iter().all(|dim| dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced"))
                 }).unwrap_or(false))
         };
+        // The invariant is "never claims enforced without a passing probe".
+        // A host with no confinement backend answers with a typed unavailable
+        // (or a report with no enforced dimension), which satisfies it.
+        let unavailable = |value: &Result<Value, String>| -> bool {
+            match value {
+                Err(e) => e.contains("SANDBOX_UNAVAILABLE") || e.contains("unavailable"),
+                Ok(d) => {
+                    d.get("status")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.contains("unavailable"))
+                        .unwrap_or(false)
+                        || d.get("dimensions")
+                            .and_then(|v| v.as_array())
+                            .map(|dims| dims.is_empty())
+                            .unwrap_or(false)
+                }
+            }
+        };
         checks.check(
             "sandbox.report claims no enforced dimension without a passing probe",
-            probe_ok || no_enforced_dimension(&read_only),
+            probe_ok || no_enforced_dimension(&read_only) || unavailable(&read_only),
         );
 
         let landlock = matches!(&read_only, Ok(d)
@@ -1045,7 +1258,14 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     let _ = std::fs::remove_dir_all(&eff_sandbox);
     let _ = std::fs::remove_dir_all(&scratch);
     if checks.failures == 0 {
-        println!("SELFTEST OK ({} checks)", checks.total);
+        if checks.skips > 0 {
+            println!(
+                "SELFTEST OK ({} checks, {} skipped)",
+                checks.total, checks.skips
+            );
+        } else {
+            println!("SELFTEST OK ({} checks)", checks.total);
+        }
         0
     } else {
         println!(
@@ -1053,5 +1273,34 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             checks.failures, checks.total
         );
         1
+    }
+}
+
+#[cfg(test)]
+mod track1_hardening_tests {
+    use super::*;
+
+    #[test]
+    fn default_state_dir_falls_back_to_userprofile_on_windows_when_home_unset() {
+        assert_eq!(
+            default_state_dir_from(Some("/explicit"), Some("/home/u"), Some(r"C:\Users\u"), true),
+            PathBuf::from("/explicit")
+        );
+        assert_eq!(
+            default_state_dir_from(None, Some("/home/u"), Some(r"C:\Users\u"), true),
+            PathBuf::from("/home/u").join(".hzcode").join("kernel")
+        );
+        assert_eq!(
+            default_state_dir_from(None, None, Some(r"C:\Users\u"), true),
+            PathBuf::from(r"C:\Users\u").join(".hzcode").join("kernel")
+        );
+        assert_eq!(
+            default_state_dir_from(None, Some("  "), Some(r"C:\Users\u"), true),
+            PathBuf::from(r"C:\Users\u").join(".hzcode").join("kernel")
+        );
+        assert_eq!(
+            default_state_dir_from(None, None, None, true),
+            PathBuf::from(".hzcode").join("kernel")
+        );
     }
 }

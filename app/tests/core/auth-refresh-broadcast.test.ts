@@ -25,8 +25,21 @@ describe("oauth refresh cross-process broadcast", () => {
   };
 
   afterEach(() => {
-    if (home) rmSync(home, { recursive: true, force: true });
-    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    // Windows may still hold the credential DB; cleanup is best-effort.
+    if (home) {
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    if (workspace) {
+      try {
+        rmSync(workspace, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
     home = "";
     workspace = "";
     globalThis.fetch = originalFetch;

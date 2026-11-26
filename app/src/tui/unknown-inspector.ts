@@ -9,7 +9,7 @@ import type { Renderer } from "./render";
 import { verifyReceiptChainSync } from "../core/receipt-chain-verify";
 import { buildReceiptInspectorModel, formatReceiptInspectorScrollbackLines } from "./receipt-inspector";
 import { UNKNOWN_ACTION_HINTS } from "./unknown-slash-parse";
-import { dim } from "./style";
+import { dim, sanitizeDisplay } from "./style";
 
 export type { UnknownEffectRow } from "../core/effect-unknown-list";
 
@@ -19,8 +19,8 @@ export function formatUnknownInspectorLines(rows: readonly UnknownEffectRow[]): 
     rows.length === 1 ? "1 unreconciled UNKNOWN effect:" : `${rows.length} unreconciled UNKNOWN effects:`;
   const lines = [header];
   for (const row of rows) {
-    const bits = [`effect ${row.effectId}`, `tool ${row.tool}`];
-    if (row.receiptId !== undefined && row.receiptId !== "") bits.push(`receipt ${row.receiptId}`);
+    const bits = [`effect ${sanitizeDisplay(row.effectId)}`, `tool ${sanitizeDisplay(row.tool)}`];
+    if (row.receiptId !== undefined && row.receiptId !== "") bits.push(`receipt ${sanitizeDisplay(row.receiptId)}`);
     lines.push(`  · ${bits.join(" · ")}`);
   }
   if (rows.length > 0) {

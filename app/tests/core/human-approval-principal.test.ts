@@ -34,11 +34,12 @@ describe("human approval principal (reduced)", () => {
     expect(lease.principal).toBe(HUMAN_APPROVAL_PRINCIPAL);
 
     const admitted = await kernel.checkGuard({ kind: "fs.write", target }, "workspace", [], sessionId);
-    expect(admitted.decision).toBe("allow");
+    expect(admitted.decision).toBe("ask");
     expect(admitted.leaseId).toBe(lease.leaseId);
 
     const childSession = await kernel.checkGuard({ kind: "fs.write", target }, "workspace", [], "child-session");
     expect(childSession.decision).toBe("ask");
+    expect(childSession.leaseId).toBeUndefined();
 
     fs.rmSync(root, { recursive: true, force: true });
   });

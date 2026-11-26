@@ -48,7 +48,14 @@ describe("oauth hermetic e2e (fake IdP)", () => {
 
     const deviceEntry = entryFor("devhost");
     await runDeviceCodeLogin(deviceEntry, { home, fetcher, pollMs: 1, timeoutMs: 10_000 });
-    expect(readOAuthToken("devhost", home)?.accessToken.startsWith("device-")).toBe(true);
+    const storedDevice = readOAuthToken("devhost", home);
+    expect(storedDevice?.accessToken.startsWith("device-")).toBe(true);
+    // Simulate an expired access token so refresh performs the token exchange
+    // (cross-process lock skips redundant exchanges when the stored token is still fresh).
+    await writeOAuthToken(
+      { ...storedDevice!, expiresAt: new Date(Date.now() - 10_000).toISOString() },
+      home,
+    );
 
     const refreshed = await refreshOAuthAccessToken("devhost", deviceEntry.oauth, home, fetcher);
     expect(refreshed?.kind).toBe("oauth");

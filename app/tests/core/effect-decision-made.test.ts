@@ -68,8 +68,7 @@ describe("hz.effect.decision.made", () => {
       const decisions = events.filter((e) => e.type === EventTypes.effectDecisionMade);
       expect(decisions.length).toBeGreaterThanOrEqual(2);
       const kinds = decisions.map((e) => (e.payload as { decision?: string }).decision);
-      expect(kinds).toContain("ask");
-      expect(kinds).toContain("allow");
+      expect(kinds.every((d) => d === "ask")).toBe(true);
       expect(events.some((e) => e.type === EventTypes.approvalRequest)).toBe(true);
       expect(events.some((e) => e.type === EventTypes.approvalDecision)).toBe(true);
     } finally {

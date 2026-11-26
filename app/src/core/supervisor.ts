@@ -72,7 +72,7 @@ export function ownerDeathSupervisorScript(ownerPid: number, workerPid: number, 
   const poll = Number.isFinite(pollMs) && pollMs > 0 ? Math.max(MIN_POLL_MS, Math.floor(pollMs)) : DEFAULT_POLL_MS;
   // `sleep 0.1` at the default; only validated integers reach this string.
   const seconds = (poll / 1000).toString();
-  return `while kill -0 ${owner} 2>/dev/null && kill -0 ${worker} 2>/dev/null; do sleep ${seconds}; done; kill -9 -${worker} 2>/dev/null; exit 0`;
+  return `while kill -0 ${owner} 2>/dev/null && kill -0 ${worker} 2>/dev/null; do sleep ${seconds}; done; if ! kill -0 ${owner} 2>/dev/null; then kill -9 -${worker} 2>/dev/null; fi; exit 0`;
 }
 
 /**

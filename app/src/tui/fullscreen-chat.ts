@@ -15,12 +15,18 @@ import type { ChatMsg, Runtime } from "../contracts";
 import { historyFilePath } from "../core/paths";
 import { type CellBuffer } from "./cellbuffer";
 import type { ApprovalUi } from "./approval";
-import { type KeyAnswer } from "./approval-card";
+import {
+  type ApprovalStageResolution,
+  type ApprovalStageState,
+  type KeyAnswer,
+} from "./approval-card";
 import {
   APPROVAL_TYPE_AHEAD_MS,
   approvalGrantStatusFromCardLines,
   consumeFullscreenApprovalKey,
+  consumeFullscreenStagedApprovalKey,
   findApprovalCardTranscriptStart,
+  fullscreenApprovalStageStatusExtra,
   fullscreenApprovalStatusExtra,
   fullscreenRichApprovalEnabled,
 } from "./fullscreen-approval";
@@ -29,7 +35,12 @@ import {
   normalizeApprovalKeyPrompt,
   type ApprovalKeyPrompt,
 } from "./approval-key-prompt";
-import { fullscreenRichTranscriptEnabled, pushTranscriptChunks } from "./fullscreen-transcript";
+import {
+  createTranscriptMountBudget,
+  fullscreenRichTranscriptEnabled,
+  mountFullscreenTranscriptWindow,
+  pushTranscriptChunks,
+} from "./fullscreen-transcript";
 import { EscapeWriter, type TerminalHooks } from "./escape-writer";
 import {
   FULLSCREEN_INPUT_PROMPT,
@@ -49,7 +60,7 @@ import {
 } from "./fullscreen-inset-pane";
 import type { UnknownEffectRow } from "../core/effect-unknown-list";
 import type { RuntimeWithUnknownEffects } from "./unknown-slash";
-import { applyEditorKey } from "./fullscreen-line-editor";
+import { applyEditorKey, createDeferredSubmitGuard } from "./fullscreen-line-editor";
 import {
   applyFullscreenPaletteKey,
   buildFullscreenPaletteFrame,
@@ -105,10 +116,27 @@ import {
   PASTE_SINGLE_LINE_FLUSH_MS,
   createKeypressPasteCollector,
   editorPasteDisplay,
+  normalizePastedLineEndings,
   type KeypressPasteCollector,
   type PasteResult,
 } from "./paste";
-import { formatIdleStatusLine, readGitBranch, unicodeLocale, type StatusInfo } from "./live";
+import {
+  formatIdleStatusLine,
+  readGitBranch,
+  syncEnabled,
+  syncFrame,
+  unicodeLocale,
+  type StatusInfo,
+} from "./live";
+import { emitOsc7501 } from "./osc7501";
+import { createDoubleEscDetector, createTurnQueueController } from "./turn-queue";
+import { formatFullscreenLatchBanner } from "./reconcile-block-chip";
+import {
+  inspectPrincipalPosture,
+  readEffectHostMode,
+  readEgressPosture,
+  readPiiVaultStatus,
+} from "./trust-spine-status";
 import { feedMouseBytes } from "./mouse-parse";
 import {
   applyResumePickerKey,
@@ -215,6 +243,9 @@ export async function runFullscreenExperimentalChat(
   let approvalQuestion: string | null = null;
   let approvalResolve: ((answer: string) => void) | null = null;
   let approvalKeyResolve: ((answer: KeyAnswer) => void) | null = null;
+  let approvalStagedResolve: ((res: ApprovalStageResolution) => void) | null = null;
+  let approvalStageState: ApprovalStageState | null = null;
+  let approvalStageRender: ((state: ApprovalStageState) => string[]) | undefined;
   let approvalKeyArmedAt = 0;
   let approvalKeyTickTimer: ReturnType<typeof setInterval> | undefined;
   let approvalGrantStatus: string | undefined;
@@ -243,6 +274,8 @@ export async function runFullscreenExperimentalChat(
   let pendingSubmitText: string | undefined;
   const paste: KeypressPasteCollector = createKeypressPasteCollector();
   let pasteFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  const transcriptBudget = createTranscriptMountBudget();
+  const submitGuard = createDeferredSubmitGuard();
   let inputHistory = createFullscreenInputHistory(readHistoryFileEntries(historyFilePath(opts.workspace)));
   const historyFile = historyFilePath(opts.workspace);
 
@@ -280,7 +313,16 @@ export async function runFullscreenExperimentalChat(
 
   const writer = new EscapeWriter({ hooks });
   // SIGINT is handled by the chat loop so we can exit with 130 after restore.
-  writer.installLifecycleHandlers(["SIGTERM", "SIGHUP"]);
+  // SIGTERM / SIGHUP restore terminal modes and exit cleanly with standard signal codes.
+  writer.installLifecycleHandlers(["SIGTERM", "SIGHUP"], (sig) => {
+    finish(sig === "SIGTERM" ? 143 : 129);
+  });
+
+  let focusModeOn = false;
+  const turnQueue = createTurnQueueController();
+  const doubleEsc = createDoubleEscDetector();
+  const fullRepaintMode = process.env.HORIZON_FULL_REPAINT === "1";
+  const syncOut = syncEnabled();
 
   const canRawMode =
     hooks.readStdin !== false &&
@@ -292,6 +334,7 @@ export async function runFullscreenExperimentalChat(
   const renderer = createRenderer({
     wrap: true,
     rich: richTranscript,
+    focusMode: () => focusModeOn,
     out: (chunk) => {
       pushTranscriptChunks(transcript, chunk);
       paint();
@@ -300,11 +343,42 @@ export async function runFullscreenExperimentalChat(
   ui.renderer = renderer;
   ui.runtime = runtime;
 
-  ui.ask = (question: string) =>
+  ui.ask = (question: string, askOpts?: { signal?: AbortSignal }) =>
     new Promise<string>((resolve) => {
+      const signal = askOpts?.signal;
+      if (signal?.aborted) {
+        resolve("");
+        return;
+      }
+      let settled = false;
+      const cleanup = (): void => {
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        if (approvalResolve === waiter) {
+          approvalResolve = null;
+          approvalQuestion = null;
+        }
+        cleanup();
+        paint();
+        resolve("");
+      };
+      const waiter = (answer: string): void => {
+        if (settled) return;
+        settled = true;
+        if (approvalResolve === waiter) {
+          approvalResolve = null;
+          approvalQuestion = null;
+        }
+        cleanup();
+        resolve(answer);
+      };
       approvalQuestion = question;
-      approvalResolve = resolve;
-      transcript.push(`[approval] ${question.replace(/\s+/g, " ").trim()}`);
+      approvalResolve = waiter;
+      signal?.addEventListener("abort", onAbort, { once: true });
+      transcript.push(`[approval] ${sanitizeText(question).replace(/\s+/g, " ").trim()}`);
       paint();
     });
 
@@ -326,19 +400,52 @@ export async function runFullscreenExperimentalChat(
             if (approvalKeyResolve === null) return;
             const fresh = onTick();
             if (approvalKeyLineCount > 0 && approvalKeyTranscriptFrom < transcript.length) {
-              transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh);
+              transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh.map((l) => sanitizeText(l)));
             }
             approvalKeyLineCount = fresh.length;
             approvalGrantStatus = approvalGrantStatusFromCardLines(fresh);
             paint();
           }, APPROVAL_GRANT_TICK_MS);
+          (approvalKeyTickTimer as { unref?: () => void }).unref?.();
+        }
+        paint();
+      });
+
+    ui.askStagedKey = (prompt: ApprovalKeyPrompt, initial: ApprovalStageState) =>
+      new Promise<ApprovalStageResolution>((resolve) => {
+        clearApprovalKeyTick();
+        approvalKeyArmedAt = Date.now() + APPROVAL_TYPE_AHEAD_MS;
+        const { lines, onTick, renderStage } = normalizeApprovalKeyPrompt(prompt);
+        approvalKeyTranscriptFrom = findApprovalCardTranscriptStart(transcript, lines);
+        approvalKeyLineCount = lines.length;
+        approvalGrantStatus = approvalGrantStatusFromCardLines(lines);
+        approvalStageState = initial;
+        approvalStageRender = renderStage;
+        approvalStagedResolve = resolve;
+        editorText = "";
+        pendingSubmitText = undefined;
+        if (onTick) {
+          approvalKeyTickTimer = setInterval(() => {
+            if (approvalStagedResolve === null || approvalStageState?.stage !== "permission") return;
+            const fresh = onTick();
+            if (approvalKeyLineCount > 0 && approvalKeyTranscriptFrom < transcript.length) {
+              transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh.map((l) => sanitizeText(l)));
+            }
+            approvalKeyLineCount = fresh.length;
+            approvalGrantStatus = approvalGrantStatusFromCardLines(fresh);
+            paint();
+          }, APPROVAL_GRANT_TICK_MS);
+          (approvalKeyTickTimer as { unref?: () => void }).unref?.();
         }
         paint();
       });
   }
 
   const writePaintedFrame = (frame: CellBuffer, kind: FullscreenPaintKind): void => {
-    hooks.write(encodeFullscreenConsecutiveFrameDiff(lastPaintedFrame, frame, lastPaintedKind, kind));
+    const prev = fullRepaintMode ? null : lastPaintedFrame;
+    const prevKind = fullRepaintMode ? null : lastPaintedKind;
+    const diff = encodeFullscreenConsecutiveFrameDiff(prev, frame, prevKind, kind);
+    if (diff !== "") hooks.write(syncFrame(diff, syncOut));
     lastPaintedFrame = frame;
     lastPaintedKind = kind;
   };
@@ -367,6 +474,7 @@ export async function runFullscreenExperimentalChat(
       }
       if (opts.freshOnDismiss) {
         transcript.length = 0;
+        transcriptBudget.reset();
         transcript.push("(new session)");
       }
       return;
@@ -376,6 +484,7 @@ export async function runFullscreenExperimentalChat(
         try {
           rt.switchSession(outcome.sessionId);
           if (typeof rt.history === "function") transcript.length = 0;
+          transcriptBudget.reset();
           transcript.push(...transcriptLinesFromHistory(rt.history?.() ?? []));
         } catch (err) {
           transcript.push(`could not resume ${outcome.sessionId}: ${errorMessage(err)}`);
@@ -410,7 +519,7 @@ export async function runFullscreenExperimentalChat(
     const onPickerKeypress = (str: string | undefined, key: readline.Key): void => {
       if (exiting) return;
       let event: ResumePickerKey | undefined;
-      if (key.name === "escape") event = { kind: "dismiss" };
+      if (key.name === "escape" || (key.ctrl === true && key.name === "c") || str === "\x03") event = { kind: "dismiss" };
       else if (key.name === "return" || key.name === "enter") event = { kind: "confirm" };
       else if (key.name === "backspace") event = { kind: "backspace" };
       else if (key.name === "up") event = { kind: "up" };
@@ -443,10 +552,21 @@ export async function runFullscreenExperimentalChat(
     }
   };
 
+  const hasActiveLatchBanner = (): boolean => {
+    const status = sessionStatus();
+    return Boolean(formatFullscreenLatchBanner(unknownCount, status.reconcileBlock)) && rows >= 4;
+  };
+
   const visibleTranscript = (): string[] => {
-    if (scrollUp <= 0) return transcript;
-    const end = Math.max(0, transcript.length - scrollUp);
-    return transcript.slice(0, end);
+    const bannerRows = hasActiveLatchBanner() ? 1 : 0;
+    const viewportRows = Math.max(1, rows - activeInsetPaneRows() - 2 - bannerRows);
+    const mounted = mountFullscreenTranscriptWindow(transcript, transcriptBudget, {
+      scrollUp,
+      viewportRows,
+    });
+    if (scrollUp <= 0) return [...mounted.items];
+    const end = Math.max(0, mounted.items.length - scrollUp);
+    return mounted.items.slice(0, end);
   };
 
   const paintPalette = (state: ReturnType<typeof initialFullscreenPaletteState>): void => {
@@ -510,7 +630,7 @@ export async function runFullscreenExperimentalChat(
     const onPaletteKeypress = (str: string | undefined, key: readline.Key): void => {
       if (exiting) return;
       let event: FullscreenPaletteKey | undefined;
-      if (key.name === "escape") event = { kind: "dismiss" };
+      if (key.name === "escape" || (key.ctrl === true && key.name === "c") || str === "\x03") event = { kind: "dismiss" };
       else if (key.name === "return" || key.name === "enter") event = { kind: "confirm" };
       else if (key.name === "backspace") event = { kind: "backspace" };
       else if (key.name === "up") event = { kind: "up" };
@@ -577,7 +697,7 @@ export async function runFullscreenExperimentalChat(
     const onInspectorKeypress = (str: string | undefined, key: readline.Key): void => {
       if (exiting) return;
       let event: FullscreenReceiptInspectorKey | undefined;
-      if (key.name === "escape") event = { kind: "dismiss" };
+      if (key.name === "escape" || (key.ctrl === true && key.name === "c") || str === "\x03") event = { kind: "dismiss" };
       else if (key.name === "up") event = { kind: "up" };
       else if (key.name === "down") event = { kind: "down" };
       if (event === undefined) return;
@@ -630,7 +750,7 @@ export async function runFullscreenExperimentalChat(
     const onCompletionKeypress = (str: string | undefined, key: readline.Key): void => {
       if (exiting) return;
       let event: FullscreenCompletionKey | undefined;
-      if (key.name === "escape") event = { kind: "dismiss" };
+      if (key.name === "escape" || (key.ctrl === true && key.name === "c") || str === "\x03") event = { kind: "dismiss" };
       else if (key.name === "tab") event = { kind: "confirm" };
       else if (key.name === "up") event = { kind: "up" };
       else if (key.name === "down") event = { kind: "down" };
@@ -663,6 +783,41 @@ export async function runFullscreenExperimentalChat(
     }
   };
 
+  const syncUnknownFromRuntime = (): void => {
+    const rowsNow = unknownRowsForInset();
+    unknownCount = rowsNow.length;
+    unknownReceiptId = rowsNow.length === 1 ? rowsNow[0]?.receiptId : undefined;
+  };
+
+  const withExclusiveStdin = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const stdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean; setRawMode?: (on: boolean) => void };
+    const wasRaw = stdin.isRaw === true;
+    if (stdin.isTTY) {
+      stdin.off("keypress", onKeypress);
+      stdin.off("data", onStdinData);
+      try {
+        stdin.setRawMode?.(false);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      if (!exiting && stdin.isTTY) {
+        try {
+          stdin.setRawMode?.(wasRaw);
+        } catch {
+          /* ignore */
+        }
+        stdin.on("keypress", onKeypress);
+        if (mouseEnabled) stdin.on("data", onStdinData);
+        lastPaintedFrame = null;
+        paint();
+      }
+    }
+  };
+
   const slashCtx = () => ({
     runtime,
     renderer,
@@ -672,6 +827,16 @@ export async function runFullscreenExperimentalChat(
     unknownCount,
     unknownReceiptId,
     showReceiptInspector: runReceiptInspectorOverlay,
+    withExclusiveStdin,
+    toggleFocusMode: () => {
+      focusModeOn = !focusModeOn;
+      return focusModeOn;
+    },
+    sendBtw: async (question: string) => {
+      await sendTurn(`[btw side-question — answer concisely without changing the main task] ${question}`);
+    },
+    // D-9: /exit and /quit close the alt-screen loop instead of prompting the model.
+    requestExit: () => finish(0),
   });
 
   const sessionStatus = (): StatusInfo => {
@@ -679,6 +844,7 @@ export async function runFullscreenExperimentalChat(
       branchCache = { at: Date.now(), value: readGitBranch(opts.workspace) };
     }
     const rt = runtime as RuntimeWithExtras;
+    const principal = inspectPrincipalPosture();
     return {
       badge: permissionBadge(planState.on, runtime),
       model: runtime.model,
@@ -691,6 +857,11 @@ export async function runFullscreenExperimentalChat(
         typeof (rt as RuntimeWithUnknownEffects).reconcileBlockLatch === "function"
           ? (rt as RuntimeWithUnknownEffects).reconcileBlockLatch!.call(runtime)
           : undefined,
+      effectHostMode: readEffectHostMode(),
+      egressPosture: readEgressPosture(runtime),
+      piiVault: readPiiVaultStatus(runtime),
+      principalMode: principal.principalMode,
+      principalKeyFingerprint: principal.principalKeyFingerprint,
     };
   };
 
@@ -709,21 +880,25 @@ export async function runFullscreenExperimentalChat(
     const insetRows = activeInsetPaneRows();
     const layout =
       insetRows > 0 ? fullscreenLayoutWithInsetPane(rows, insetRows) : fullscreenLayoutRows(rows);
+    const currentStatus = sessionStatus();
     const approvalExtra =
-      approvalKeyResolve !== null
-        ? fullscreenApprovalStatusExtra("key")
-        : approvalQuestion !== null
-          ? fullscreenApprovalStatusExtra("line")
-          : "";
-    const blockExtra = fullscreenReconcileBlockExtra(sessionStatus().reconcileBlock ?? { latched: false, mode: "off" });
+      approvalStagedResolve !== null && approvalStageState !== null
+        ? fullscreenApprovalStageStatusExtra(approvalStageState.stage)
+        : approvalKeyResolve !== null
+          ? fullscreenApprovalStatusExtra("key")
+          : approvalQuestion !== null
+            ? fullscreenApprovalStatusExtra("line")
+            : "";
+    const blockExtra = fullscreenReconcileBlockExtra(currentStatus.reconcileBlock ?? { latched: false, mode: "off" });
     const grantExtra = approvalGrantStatus ?? "";
     const extraBits = [approvalExtra, grantExtra, blockExtra].filter((s) => s !== "");
     if (insetPaneOpen) extraBits.push("inset");
-    const status = formatIdleStatusLine(sessionStatus(), cols, {
+    const status = formatIdleStatusLine(currentStatus, cols, {
       plain: true,
       busy,
       extras: extraBits,
     });
+    const latchBanner = formatFullscreenLatchBanner(unknownCount, currentStatus.reconcileBlock);
     const mainTranscript = visibleTranscript();
     const insetLogical =
       insetRows > 0
@@ -731,7 +906,7 @@ export async function runFullscreenExperimentalChat(
             transcript,
             mainScrollUp: scrollUp,
             unknownRows: unknownRowsForInset(),
-            reconcileBlock: sessionStatus().reconcileBlock,
+            reconcileBlock: currentStatus.reconcileBlock,
           })
         : [];
     if (insetRows > 0) {
@@ -744,6 +919,7 @@ export async function runFullscreenExperimentalChat(
             width: cols,
             height: rows,
             status,
+            banner: latchBanner,
             transcript: mainTranscript,
             insetPaneRows: insetRows,
             insetScrollback: insetLogical,
@@ -755,6 +931,7 @@ export async function runFullscreenExperimentalChat(
             width: cols,
             height: rows,
             status,
+            banner: latchBanner,
             transcript: mainTranscript,
             input: editorText,
             prompt: FULLSCREEN_INPUT_PROMPT,
@@ -775,16 +952,20 @@ export async function runFullscreenExperimentalChat(
       inspector: inspectorActive,
       completion: completionActive,
     });
+    const hasBanner = hasActiveLatchBanner();
     const hitCache = createHitTestCache(cols, rows, layoutVersion, {
       insetPaneRows: insetRows,
+      hasBanner,
       ...modalOverlay,
     });
     const layout =
       insetRows > 0 ? fullscreenLayoutWithInsetPane(rows, insetRows) : fullscreenLayoutRows(rows);
-    const mainTranscriptRows =
-      insetRows > 0
+    const mainTranscriptRows = Math.max(
+      1,
+      (insetRows > 0
         ? (layout as FullscreenInsetPaneLayout).mainTranscriptRows
-        : layout.transcriptRows;
+        : layout.transcriptRows) - (hasBanner ? 1 : 0),
+    );
     const maxScroll = Math.max(0, transcript.length - mainTranscriptRows);
     const insetLogical =
       insetRows > 0
@@ -823,11 +1004,36 @@ export async function runFullscreenExperimentalChat(
   const finish = (code: number): void => {
     if (exiting) return;
     exiting = true;
+    submitGuard.cancel();
+    clearApprovalKeyTick();
+    if (approvalResolve !== null) {
+      const r = approvalResolve;
+      approvalResolve = null;
+      approvalQuestion = null;
+      r("");
+    }
+    if (approvalKeyResolve !== null) {
+      const r = approvalKeyResolve;
+      approvalKeyResolve = null;
+      r("n");
+    }
+    if (approvalStagedResolve !== null) {
+      const r = approvalStagedResolve;
+      approvalStagedResolve = null;
+      approvalStageState = null;
+      approvalStageRender = undefined;
+      r({ kind: "declined" });
+    }
+    if (pasteFlushTimer !== undefined) {
+      clearTimeout(pasteFlushTimer);
+      pasteFlushTimer = undefined;
+    }
     try {
       runtime.abort();
     } catch {
       /* nothing in flight */
     }
+    emitOsc7501((c) => hooks.write(c), "idle");
     writer.restore();
     resolveDone(code);
   };
@@ -843,7 +1049,9 @@ export async function runFullscreenExperimentalChat(
     busy = true;
     editorText = "";
     transcript.push(`${FULLSCREEN_INPUT_PROMPT}${sanitizeText(text)}`);
+    emitOsc7501((c) => hooks.write(c), "working");
     paint();
+    let hadError = false;
     try {
       const result = await runtime.send(trimmed, {
         onEvent: (ev) => {
@@ -864,15 +1072,33 @@ export async function runFullscreenExperimentalChat(
         paint();
       }
     } catch (err) {
+      hadError = true;
+      emitOsc7501((c) => hooks.write(c), "error");
       transcript.push(`error: ${errorMessage(err)}`);
       paint();
     } finally {
       busy = false;
+      if (!hadError) emitOsc7501((c) => hooks.write(c), "done");
       paint();
+    }
+    while (!exiting && turnQueue.length > 0) {
+      const next = turnQueue.dequeue();
+      if (next) await sendTurn(next);
     }
   };
 
   const submitEditor = async (): Promise<void> => {
+    // Check approval/ask_user waiter BEFORE slash dispatch and preserve original case for ask_user.
+    if (approvalResolve !== null) {
+      const answer = editorText.trim();
+      editorText = "";
+      approvalQuestion = null;
+      const resolve = approvalResolve;
+      approvalResolve = null;
+      resolve(answer);
+      paint();
+      return;
+    }
     if (!overlayBlocksInput()) {
       if (editorText.trim().startsWith("/")) {
         const slashLine = editorText;
@@ -881,6 +1107,10 @@ export async function runFullscreenExperimentalChat(
           editorText = "";
           inputHistory = pushFullscreenHistoryEntry(inputHistory, slashLine);
           await rememberHistory(historyFile, slashLine, opts.workspace);
+          const lower = slashLine.trim().toLowerCase();
+          if (lower.startsWith("/reconcile") || lower.startsWith("/unknown")) {
+            syncUnknownFromRuntime();
+          }
           paint();
           return;
         }
@@ -901,19 +1131,31 @@ export async function runFullscreenExperimentalChat(
         return;
       }
     }
-    if (approvalResolve !== null) {
-      const answer = editorText.trim().toLowerCase();
-      editorText = "";
-      approvalQuestion = null;
-      const resolve = approvalResolve;
-      approvalResolve = null;
-      resolve(answer);
-      paint();
-      return;
-    }
-    if (busy) return;
     const text = pendingSubmitText ?? editorText;
     pendingSubmitText = undefined;
+    if (busy) {
+      const trimmed = text.trim();
+      if (trimmed === "") return;
+      await turnQueue.withCommitGuard(() => {
+        const interject = (
+          runtime as { interject?: (t: string, opts?: { mode?: "steer" | "interrupt" }) => { accepted: boolean } }
+        ).interject;
+        if (typeof interject === "function") {
+          const outcome = interject.call(runtime, trimmed, { mode: "interrupt" });
+          if (outcome?.accepted === true) {
+            editorText = "";
+            transcript.push(`${FULLSCREEN_INPUT_PROMPT}${sanitizeText(trimmed)} [steered]`);
+            paint();
+            return;
+          }
+        }
+        const n = turnQueue.enqueue(trimmed);
+        editorText = "";
+        transcript.push(`(queued #${n}: ${sanitizeText(trimmed)})`);
+        paint();
+      });
+      return;
+    }
     editorText = "";
     inputHistory = pushFullscreenHistoryEntry(inputHistory, text);
     await rememberHistory(historyFile, text, opts.workspace);
@@ -926,6 +1168,20 @@ export async function runFullscreenExperimentalChat(
     const step = applyEditorKey(editorText, key);
     editorText = step.text;
     if (step.action.kind === "interrupt") {
+      submitGuard.cancel();
+      if (approvalResolve !== null) {
+        const resolve = approvalResolve;
+        approvalResolve = null;
+        approvalQuestion = null;
+        editorText = "";
+        pendingSubmitText = undefined;
+        resolve("");
+        if (!busy) {
+          transcript.push("(interrupted)");
+          paint();
+          return;
+        }
+      }
       if (busy) {
         try {
           runtime.abort();
@@ -941,7 +1197,7 @@ export async function runFullscreenExperimentalChat(
       return;
     }
     if (step.action.kind === "submit") {
-      void submitEditor();
+      submitGuard.request(() => submitEditor());
       return;
     }
     paint();
@@ -958,7 +1214,38 @@ export async function runFullscreenExperimentalChat(
 
   const applyPaste = (pasted: PasteResult | undefined): void => {
     if (!pasted) return;
-    if (approvalKeyResolve !== null && pasted.lines > 1) {
+    if (approvalStagedResolve !== null) {
+      if (approvalStageState?.stage === "reject_steer") {
+        const clean = normalizePastedLineEndings(pasted.text)
+          .replace(/\n/g, " ")
+          .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+        if (clean.length > 0) {
+          approvalStageState = {
+            ...approvalStageState,
+            steeringInput: approvalStageState.steeringInput + clean,
+          };
+          const fresh = approvalStageRender?.(approvalStageState);
+          if (fresh && approvalKeyLineCount > 0 && approvalKeyTranscriptFrom < transcript.length) {
+            transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh.map((l) => sanitizeText(l)));
+            approvalKeyLineCount = fresh.length;
+          }
+          paint();
+        }
+        return;
+      }
+      const resolve = approvalStagedResolve;
+      clearApprovalKeyTick();
+      approvalStagedResolve = null;
+      approvalStageState = null;
+      approvalStageRender = undefined;
+      approvalKeyArmedAt = 0;
+      editorText = "";
+      pendingSubmitText = undefined;
+      resolve({ kind: "declined" });
+      paint();
+      return;
+    }
+    if (approvalKeyResolve !== null) {
       const resolve = approvalKeyResolve;
       clearApprovalKeyTick();
       approvalKeyResolve = null;
@@ -969,7 +1256,7 @@ export async function runFullscreenExperimentalChat(
       paint();
       return;
     }
-    if (approvalResolve !== null && pasted.lines > 1) {
+    if (approvalResolve !== null) {
       editorText = "";
       pendingSubmitText = undefined;
       approvalQuestion = null;
@@ -985,8 +1272,75 @@ export async function runFullscreenExperimentalChat(
     paint();
   };
 
+  const flushTranscriptToScrollback = (): void => {
+    if (transcript.length === 0) {
+      transcript.push("(scrollback flush: transcript is empty)");
+      paint();
+      return;
+    }
+    const payload = transcript.map((l) => sanitizeText(l)).join("\n") + "\n";
+    hooks.write("\x1b[?2026l\x1b[?1049l");
+    hooks.write(`\n--- HorizonCode transcript (${transcript.length} lines) ---\n${payload}`);
+    hooks.write("\x1b[?1049h");
+    lastPaintedFrame = null;
+    lastPaintedKind = null;
+    transcript.push(`(flushed ${transcript.length} line(s) to native scrollback)`);
+    paint();
+  };
+
   const onKeypress = (str: string | undefined, key: readline.Key): void => {
     if (exiting || overlayBlocksInput()) return;
+    // Update bracketed-paste state BEFORE approval key handling so `paste-start`
+    // always sets `paste.pasting() === true` and pasted "y"/"a" cannot approve.
+    paste.key(key?.name);
+    if (approvalStagedResolve !== null && approvalStageState !== null) {
+      const now = Date.now();
+      const outcome = consumeFullscreenStagedApprovalKey(
+        approvalStageState,
+        approvalKeyArmedAt,
+        now,
+        paste.pasting(),
+        key,
+        str,
+      );
+      if (outcome.kind === "paste-block") {
+        const resolve = approvalStagedResolve;
+        clearApprovalKeyTick();
+        approvalStagedResolve = null;
+        approvalStageState = null;
+        approvalStageRender = undefined;
+        approvalKeyArmedAt = 0;
+        editorText = "";
+        pendingSubmitText = undefined;
+        resolve({ kind: "declined" });
+        paint();
+        return;
+      }
+      if (outcome.kind === "ignore") return;
+      if (outcome.kind === "transition") {
+        const prevStage = approvalStageState.stage;
+        approvalStageState = outcome.state;
+        if (prevStage !== "always_confirm" && approvalStageState.stage === "always_confirm") {
+          approvalKeyArmedAt = now + APPROVAL_TYPE_AHEAD_MS;
+        }
+        const fresh = approvalStageRender?.(approvalStageState);
+        if (fresh && approvalKeyLineCount > 0 && approvalKeyTranscriptFrom < transcript.length) {
+          transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh.map((l) => sanitizeText(l)));
+          approvalKeyLineCount = fresh.length;
+        }
+        paint();
+        return;
+      }
+      const resolve = approvalStagedResolve;
+      clearApprovalKeyTick();
+      approvalStagedResolve = null;
+      approvalStageState = null;
+      approvalStageRender = undefined;
+      approvalKeyArmedAt = 0;
+      resolve(outcome.resolution);
+      paint();
+      return;
+    }
     if (approvalKeyResolve !== null) {
       const outcome = consumeFullscreenApprovalKey(
         approvalKeyArmedAt,
@@ -1009,8 +1363,10 @@ export async function runFullscreenExperimentalChat(
       return;
     }
     if (paste.pasting() || key?.name === "paste-start" || key?.name === "paste-end") {
-      paste.key(key?.name);
-      if (paste.pasting() && typeof str === "string" && str !== "") paste.chunk(str);
+      if (paste.pasting()) {
+        if (typeof str === "string" && str !== "") paste.chunk(str);
+        else if (key?.name === "return" || key?.name === "enter") paste.chunk("\n");
+      }
       if (key?.name === "paste-end") {
         if (pasteFlushTimer) clearTimeout(pasteFlushTimer);
         pasteFlushTimer = setTimeout(() => {
@@ -1018,6 +1374,36 @@ export async function runFullscreenExperimentalChat(
           applyPaste(paste.flushAfterEnd());
         }, PASTE_SINGLE_LINE_FLUSH_MS);
       }
+      return;
+    }
+    if (key.name === "escape" && !busy && approvalResolve === null && editorText.trim() === "") {
+      if (doubleEsc.onEscape()) {
+        const latched = sessionStatus().reconcileBlock?.latched === true;
+        if (unknownCount > 0 || latched) {
+          void tryRunFullscreenLocalSlash("/reconcile", slashCtx()).then(() => {
+            syncUnknownFromRuntime();
+            paint();
+          });
+        } else {
+          transcript.push("(Esc+Esc: no UNKNOWN effects — run /rewind in scrollback or /reconcile to inspect)");
+          paint();
+        }
+      }
+      return;
+    }
+    if (key.name !== "escape") doubleEsc.reset();
+    if (!busy && approvalResolve === null && editorText === "" && !key.ctrl && !key.meta && str === "[") {
+      flushTranscriptToScrollback();
+      return;
+    }
+    if (key.name === "tab" && busy && editorText.trim() !== "") {
+      const queuedText = editorText.trim();
+      void turnQueue.withCommitGuard(() => {
+        const n = turnQueue.enqueue(queuedText);
+        editorText = "";
+        transcript.push(`(queued #${n}: ${sanitizeText(queuedText)})`);
+        paint();
+      });
       return;
     }
     if (key.ctrl && key.name === "p") {
@@ -1096,9 +1482,16 @@ export async function runFullscreenExperimentalChat(
       paint();
       return;
     }
-    if (typeof str === "string" && str.length === 1) {
-      const code = str.codePointAt(0) ?? 0;
-      if (code >= 0x20 && code <= 0x7e) onKeyByte(code);
+    if (!key?.ctrl && !key?.meta && typeof str === "string" && str.length > 0) {
+      const clean = str.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+      if (clean.length > 0) {
+        if (clean.length === 1 && (clean.codePointAt(0) ?? 0) <= 0x7e) {
+          onKeyByte(clean.codePointAt(0) as number);
+        } else {
+          editorText += clean;
+          paint();
+        }
+      }
     }
   };
 
@@ -1112,6 +1505,8 @@ export async function runFullscreenExperimentalChat(
   try {
     writer.enterFullscreen();
     writer.markCursorHidden();
+    if (syncOut) writer.markSyncOutput();
+    syncUnknownFromRuntime();
     if (process.stdout.isTTY) {
       hooks.write(PASTE_ON);
       writer.markBracketedPaste();
@@ -1123,7 +1518,7 @@ export async function runFullscreenExperimentalChat(
       process.stdin.on("keypress", onKeypress);
       if (mouseEnabled) process.stdin.on("data", onStdinData);
     }
-    if (process.stdin.isTTY) process.stdin.on("SIGINT", onSigInt);
+    process.on("SIGINT", onSigInt);
     if (process.stdout.isTTY) process.stdout.on("resize", onResize);
 
     if (opts.skipResumePickerOnStart !== true) {
@@ -1145,8 +1540,8 @@ export async function runFullscreenExperimentalChat(
     if (process.stdin.isTTY) {
       process.stdin.off("keypress", onKeypress);
       process.stdin.off("data", onStdinData);
-      process.stdin.off("SIGINT", onSigInt);
     }
+    process.off("SIGINT", onSigInt);
     if (process.stdout.isTTY) process.stdout.off("resize", onResize);
     writer.restore();
   }

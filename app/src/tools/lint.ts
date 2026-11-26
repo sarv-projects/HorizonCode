@@ -12,10 +12,11 @@
 
 import { readFile } from "node:fs/promises";
 import type { GuardAction, ReceiptInput, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { canonicalJson, sha256Hex } from "../core/canon";
 import { DiagnosticsLedger } from "../core/diagnostics-ledger";
 import { workspaceDiagnostics } from "../core/lsp";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { invisibleUnicodeError, isBinary, relPath, resolveRealTarget } from "./helpers";
 import { defaultConfigPath, loadConfig, type LspConfig } from "../core/config";
 import { kernelStateDir } from "../core/owned-spawn";
 import { noteLintedPath } from "../core/git-dirty-checkpoint";
@@ -41,11 +42,16 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+const MAX_LEDGERS = 256;
 const ledgers = new Map<string, DiagnosticsLedger>();
 
 function ledgerFor(sessionId: string): DiagnosticsLedger {
   let ledger = ledgers.get(sessionId);
   if (ledger === undefined) {
+    if (ledgers.size >= MAX_LEDGERS) {
+      const oldest = ledgers.keys().next();
+      if (!oldest.done) ledgers.delete(oldest.value);
+    }
     ledger = new DiagnosticsLedger();
     ledgers.set(sessionId, ledger);
   }
@@ -99,14 +105,25 @@ export const lintTool: Tool = {
     },
     required: ["path"],
   },
-  concurrencyClass: "shared",
+  concurrencyClass: "exclusive",
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
 
-      const resolved = resolvePath(ctx.cwd, args.path);
+      const resolved = resolveRealTarget(ctx.cwd, args.path, ctx.workspace).real;
       const rel = relPath(ctx.cwd, resolved);
+
+      // D-1: admit the file on its REAL path before reading it (see lsp.ts).
+      const readAction: GuardAction = { kind: "fs.read", target: resolved };
+      const readDecision = await ctx.guard(readAction);
+      if (readDecision.decision === "deny") {
+        return fail(`denied by policy${readDecision.reason ? `: ${readDecision.reason}` : ""}`);
+      }
+      if (readDecision.decision === "ask") {
+        const ok = await ctx.approve({ title: `Read ${rel}`, detail: resolved, kind: "fs.read" }, readAction);
+        if (!ok) return fail("declined by user");
+      }
 
       let content: string;
       try {
@@ -121,9 +138,13 @@ export const lintTool: Tool = {
       const userLint = resolveLintCommand(resolved, hz.lint);
       if (userLint !== undefined) {
         const cmd = substituteLintFile(userLint.command, resolved);
+        const invisible = invisibleUnicodeError(cmd, "a lint command");
+        if (invisible !== undefined) return fail(invisible);
+        if (ctx.signal.aborted) return fail("aborted");
         if (!(await admitUserLintCommand(cmd, ctx))) {
           return fail("HZ_PRECONDITION_FAILED: user lint shell command was denied or declined");
         }
+        if (ctx.signal.aborted) return fail("aborted");
         const ran = await runUserLintCommand(cmd, {
           cwd: ctx.cwd,
           stateDir: kernelStateDir(ctx.workspace),
@@ -194,6 +215,7 @@ export const lintTool: Tool = {
       noteLintedPath(ctx.sessionId, rel);
       return { ok: true, output };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

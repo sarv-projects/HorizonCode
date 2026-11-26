@@ -159,8 +159,12 @@ test("log.read, log.verify and the receipts behave like the trusted kernel", asy
 });
 
 test("guard.check applies DEFAULT_POLICY and guard.lease unlocks a command", async () => {
-  expect((await client.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
-  expect((await client.checkGuard({ kind: "fs.write", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
+  const readWs = await client.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace");
+  expect(readWs.decision).toBe("ask");
+  expect(typeof readWs.leaseId === "string" && readWs.leaseId.length > 0).toBe(true);
+  const writeWs = await client.checkGuard({ kind: "fs.write", target: path.join(workspace, "a.txt") }, "workspace");
+  expect(writeWs.decision).toBe("ask");
+  expect(typeof writeWs.leaseId === "string" && writeWs.leaseId.length > 0).toBe(true);
   expect((await client.checkGuard({ kind: "fs.read", target: "/etc/hosts" }, "outside")).decision).toBe("ask");
   expect((await client.checkGuard({ kind: "shell.exec", target: "rm -rf /" }, "*")).decision).toBe("ask");
   expect((await client.checkGuard({ kind: "net.fetch", target: "https://example.invalid" }, "*")).decision).toBe("ask");
@@ -173,7 +177,7 @@ test("guard.check applies DEFAULT_POLICY and guard.lease unlocks a command", asy
   const lease = await client.makeLease("shell.exec", "echo *", 60_000);
   expect(lease.pattern).toBe("echo *");
   const held = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
-  expect(held.decision).toBe("allow");
+  expect(held.decision).toBe("ask");
   expect(held.leaseId).toBe(lease.leaseId);
   // Ruling 32: the lease is spent by that one allow — a second identical check
   // is not admitted by it, whether held or echoed back as a caller-supplied
@@ -327,10 +331,36 @@ test("an ask rule beats a matching allow rule in the fallback (docs/11 R1)", asy
     // lease semantics are unchanged: an unexpired matching lease still allows
     const lease = await kernel.makeLease("shell.exec", "echo *", 60_000);
     const held = await kernel.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
-    expect(held.decision).toBe("allow");
+    expect(held.decision).toBe("ask");
     expect(held.leaseId).toBe(lease.leaseId);
   } finally {
     await kernel.close();
+  }
+});
+
+test("R172 strict verify refuses an unkeyed v2 receipt chain (fallback)", async () => {
+  const snap = snapshotEnv();
+  const stateDir = path.join(tempDir("hz-r172-fallback-"), "kernel");
+  const workspace = tempDir("hz-r172-ws-");
+  try {
+    const kernel = new KernelClient({ workspace, stateDir });
+    expect(await kernel.start()).toBe("untrusted");
+    await kernel.issueReceipt({
+      action: "tool.execute",
+      tool: "write",
+      argsDigest: "1".repeat(64),
+      resultDigest: "2".repeat(64),
+      schemaVersion: 2,
+      effectId: "fx-strict",
+    } as Parameters<typeof kernel.issueReceipt>[0]);
+    expect(await kernel.verifyReceipts()).toEqual({ ok: true, count: 1 });
+
+    setEnv({ HZ_R172_REQUIRE_KEYED: "1" });
+    const strict = await kernel.verifyReceipts();
+    expect(strict.ok).toBe(false);
+    expect(strict.brokenAt).toBe(1);
+  } finally {
+    restoreEnv(snap);
   }
 });
 
@@ -525,14 +555,18 @@ test("the local kernel reloads policy.json per check and refuses unknown kinds (
   const kernel = new LocalKernel({ stateDir, workspace });
   const target = path.join(workspace, "a.txt");
 
-  expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+  const before = await kernel.checkGuard({ kind: "fs.write", target }, "workspace");
+  expect(before.decision).toBe("ask");
+  expect(typeof before.leaseId === "string" && before.leaseId.length > 0).toBe(true);
   // Tighten the policy mid-session: the next check must see it (the local
   // kernel used to cache policy.json at construction while Rust reloads it
   // before every check — a deny-vs-allow divergence in fallback mode).
   writeFileSync(policy, JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny" }]), "utf8");
   expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("deny");
   rmSync(policy);
-  expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+  const after = await kernel.checkGuard({ kind: "fs.write", target }, "workspace");
+  expect(after.decision).toBe("ask");
+  expect(typeof after.leaseId === "string" && after.leaseId.length > 0).toBe(true);
 
   // A kind outside the closed TS vocabulary is refused BEFORE evaluation: the
   // structural state-dir rule is keyed to fs.write, so an unknown mutating

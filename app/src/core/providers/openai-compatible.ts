@@ -21,6 +21,7 @@ import { OAuthCredentialHandle } from "../auth/store";
 import type { ProviderOAuthEndpoints } from "../config";
 import type { MessageFormatter } from "./message-formatter";
 import { streamOpenAiCompatible } from "./openai";
+import { normalizeToolCallEvents, type ToolIdRule } from "./tool-call-id";
 
 export interface OpenAiCompatibleOptions {
   /** The real host id that becomes Provider.name (e.g. "groq"), not a literal. */
@@ -34,6 +35,10 @@ export interface OpenAiCompatibleOptions {
   home?: string;
   /** H-4: optional config-selected formatter; absent → native converter. */
   messageFormatter?: MessageFormatter;
+  /** Optional extra request headers (from catalog/provider metadata). */
+  headers?: Record<string, string>;
+  /** V-15: optional data rule for vendors that constrain tool-call ids. */
+  toolIdRule?: ToolIdRule;
 }
 
 /**
@@ -64,6 +69,7 @@ export function createOpenAiCompatibleProvider(opts: OpenAiCompatibleOptions): P
     baseUrl: opts.baseUrl,
     maxTokens: opts.maxTokens,
     messageFormatter: opts.messageFormatter,
+    headers: opts.headers,
     getAuthorization: () => {
       const live = oauthHandle?.pollCredential() ?? credential;
       return authorizationHeader(live);
@@ -79,8 +85,20 @@ export function createOpenAiCompatibleProvider(opts: OpenAiCompatibleOptions): P
           }
         : undefined,
   });
-  return {
+  const provider: Provider = {
     name: opts.name,
     stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamOpenAiCompatible(wire(), req),
+  };
+  if (opts.toolIdRule === undefined) return provider;
+  // V-15: opt-in, data-driven id normalization. Without a rule the adapter is
+  // byte-identical; tool results later reference the ids the loop saw here.
+  const rule = opts.toolIdRule;
+  return {
+    name: provider.name,
+    async *stream(req: ProviderRequest): AsyncIterable<ProviderEvent> {
+      for await (const event of provider.stream(req)) {
+        yield* normalizeToolCallEvents([event], rule);
+      }
+    },
   };
 }

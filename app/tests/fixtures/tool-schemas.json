@@ -58,6 +58,10 @@
           "description": "Default answer when the user accepts without picking (optional).",
           "type": "string"
         },
+        "multi_select": {
+          "description": "Allow user to pick multiple options (e.g. comma-separated).",
+          "type": "boolean"
+        },
         "options": {
           "description": "Optional choices (2–8): plain strings or {label, description?, recommended?}.",
           "items": {
@@ -89,6 +93,10 @@
         "question": {
           "description": "The question to present (≤ 2 KiB).",
           "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Timeout in milliseconds before falling back to default or failing (≤ 300000).",
+          "type": "integer"
         }
       },
       "required": [
@@ -208,6 +216,55 @@
       "required": [
         "code"
       ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Run a bounded bytecode program through a metered pure VM (no file, network or tool access) to compute a result deterministically. Supply words (opcodes + operands), consts and optional fuel.",
+    "exposure": "deferred",
+    "name": "code_mode_vm",
+    "parameters": {
+      "properties": {
+        "consts": {
+          "description": "Constant pool referenced by PUSH_CONST.",
+          "type": "array"
+        },
+        "fuel": {
+          "description": "Instruction budget, 1..1000000 (default 10000).",
+          "type": "number"
+        },
+        "localCount": {
+          "description": "Number of local slots (default 0).",
+          "type": "number"
+        },
+        "words": {
+          "description": "Instruction words (opcodes and operands).",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "words"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Inspect the model-visible context budget (workspace, session, token window). Read-only; produces no effect.",
+    "exposure": "deferred",
+    "name": "ctx_inspect",
+    "parameters": {
+      "properties": {
+        "topic": {
+          "description": "Optional field to narrow the report: 'tokens', 'workspace', or 'session'.",
+          "type": "string"
+        }
+      },
+      "required": [],
       "type": "object"
     }
   },
@@ -591,6 +648,32 @@
   },
   {
     "concurrencyClass": "shared",
+    "description": "Preview what snipping the middle of a long tool result would look like (keep first/last lines, insert a snip marker). Read-only: does not modify the conversation.",
+    "exposure": "deferred",
+    "name": "history_snip_preview",
+    "parameters": {
+      "properties": {
+        "keepFirst": {
+          "description": "Lines to keep at the start (default 2).",
+          "type": "number"
+        },
+        "keepLast": {
+          "description": "Lines to keep at the end (default 2).",
+          "type": "number"
+        },
+        "text": {
+          "description": "The tool-result text to preview snipping.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
     "description": "Compiler-grade diagnostics for a file: runs the language-server path and returns only severity error lines (warnings omitted).",
     "exposure": "direct",
     "name": "lint",
@@ -639,6 +722,18 @@
     "exposure": "deferred",
     "name": "memory_forget",
     "parameters": {
+      "anyOf": [
+        {
+          "required": [
+            "content"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ],
       "properties": {
         "bank": {
           "enum": [
@@ -724,6 +819,10 @@
           "description": "Terms to search for in remembered facts.",
           "type": "string"
         },
+        "rank": {
+          "description": "When true, fuse RRF k=60 + store-day decay + lexical supersession (opt-in, non-embedding).",
+          "type": "boolean"
+        },
         "scope": {
           "description": "Search scope: project (default), user, shared, or shared_recall / all (cross-bank recall with bank id on each hit).",
           "enum": [
@@ -788,7 +887,7 @@
           "type": "string"
         },
         "id": {
-          "description": "Preview id to stop (from `status`; any session may stop any preview).",
+          "description": "Preview id to stop (from `status`; scoped to the current session).",
           "type": "string"
         },
         "port": {
@@ -1060,7 +1159,7 @@
   {
     "concurrencyClass": "exclusive",
     "description": "Alias for `todo`: session checklist list/add/done/drop/merge (Engram `todo_write` naming). Durable when HZ_TODO_DURABLE=1.",
-    "exposure": "direct",
+    "exposure": "hidden",
     "name": "todo_write",
     "parameters": {
       "properties": {

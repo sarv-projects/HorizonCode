@@ -12,6 +12,7 @@ import {
 import { stateRoot } from "../core/paths";
 import { MEMORY_FACT_MAX_CHARS, memoryDbPathForBank } from "../core/memory/store";
 import { forgetMemoryFacts, rememberMemoryFact } from "../core/memory/store";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
@@ -86,7 +87,11 @@ export const memoryRememberTool: Tool = {
         if (!approved) return fail("declined by user");
       }
     }
-    const result = rememberMemoryFact(ctx.workspace, content, bank);
+    const result = await withBunMutationDiskCriticalSection(
+      ctx.workspace,
+      memoryDbPathForBank(ctx.workspace, bank),
+      async () => rememberMemoryFact(ctx.workspace, content, bank),
+    );
     if (result.ok === false) {
       if (result.reason === "empty") return fail("content is required");
       if (result.reason === "too_long") return fail(`content exceeds ${MEMORY_FACT_MAX_CHARS} chars`);
@@ -117,6 +122,9 @@ export const memoryForgetTool: Tool = {
       bank: { type: "string", enum: ["project", "user", "shared"] },
       limit: { type: "number", description: "Max rows removed when using query (default 8)." },
     },
+    // D-13(b): the description promised "at least one", the schema did not say
+    // so. anyOf makes the requirement machine-checkable instead of runtime-only.
+    anyOf: [{ required: ["content"] }, { required: ["query"] }],
   },
   concurrencyClass: "exclusive",
   exposure: "deferred",
@@ -133,7 +141,11 @@ export const memoryForgetTool: Tool = {
     }
     const deniedDb = await admitMemoryBankDbWrite(ctx, bank, "Forget memory facts");
     if (deniedDb) return fail(deniedDb);
-    const { deleted, removed } = forgetMemoryFacts(ctx.workspace, { bank, content, query, limit });
+    const { deleted, removed } = await withBunMutationDiskCriticalSection(
+      ctx.workspace,
+      memoryDbPathForBank(ctx.workspace, bank),
+      async () => forgetMemoryFacts(ctx.workspace, { bank, content, query, limit }),
+    );
     if (deleted === 0) return { ok: true, output: `no matching facts in bank ${bank}` };
     const preview = removed.map((r) => `- ${r.slice(0, 120)}${r.length > 120 ? "…" : ""}`).join("\n");
     return { ok: true, output: `forgot ${deleted} fact(s) in bank ${bank}:\n${preview}` };

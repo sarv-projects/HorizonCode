@@ -4,11 +4,31 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { writeOAuthToken } from "../../src/core/auth/store";
 import { createOpenAiCompatibleProvider } from "../../src/core/providers/openai-compatible";
-import { sseFrame, sseResponse } from "./helpers";
+import { sseFrame, sseResponse, startServer } from "./helpers";
 
 describe("openai-compatible oauth refresh on 401", () => {
   test("retries once after refresh", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "hz-oauth-401-"));
+    let chatCalls = 0;
+    // Use the local canned server instead of stubbing globalThis.fetch: a
+    // failed assertion in one test file must never leak a fetch stub into the
+    // other provider tests when Bun runs multiple files in one process.
+    const server = startServer((req) => {
+      if (req.path === "/token") {
+        return new Response(JSON.stringify({ access_token: "fresh" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      chatCalls += 1;
+      if (chatCalls === 1) {
+        expect(req.headers.authorization).toBe("Bearer stale");
+        return new Response("unauthorized", { status: 401 });
+      }
+      expect(req.headers.authorization).toBe("Bearer fresh");
+      const body = sseFrame({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n";
+      return sseResponse(body);
+    });
     try {
       await writeOAuthToken(
         {
@@ -19,34 +39,14 @@ describe("openai-compatible oauth refresh on 401", () => {
         },
         home,
       );
-      let chatCalls = 0;
-      const original = globalThis.fetch;
-      globalThis.fetch = (async (url, init) => {
-        const u = String(url);
-        if (u.endsWith("/token")) {
-          return new Response(JSON.stringify({ access_token: "fresh" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        chatCalls += 1;
-        if (chatCalls === 1) {
-          expect(init?.headers && (init.headers as Record<string, string>).authorization).toBe("Bearer stale");
-          return new Response("unauthorized", { status: 401 });
-        }
-        expect(init?.headers && (init.headers as Record<string, string>).authorization).toBe("Bearer fresh");
-        const body = sseFrame({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n";
-        return sseResponse(body);
-      }) as typeof fetch;
-
       const provider = createOpenAiCompatibleProvider({
         name: "oauthhost",
-        baseUrl: "https://api.example",
+        baseUrl: server.baseUrl,
         credential: { kind: "oauth", accessToken: "stale", refreshToken: "rtok" },
         oauth: {
           clientId: "cid",
-          authorizeUrl: "https://api.example/authorize",
-          tokenUrl: "https://api.example/token",
+          authorizeUrl: `${server.baseUrl}/authorize`,
+          tokenUrl: `${server.baseUrl}/token`,
         },
         home,
       });
@@ -65,9 +65,14 @@ describe("openai-compatible oauth refresh on 401", () => {
       }
       expect(chatCalls).toBe(2);
       expect(events.join("")).toContain("ok");
-      globalThis.fetch = original;
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      server.stop();
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {
+        // Windows may keep the credential file handle briefly; temp cleanup
+        // is not a product assertion.
+      }
     }
   });
 });

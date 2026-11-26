@@ -52,6 +52,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SECCOMP_MODE_FILTER: i32 = 2;
+const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff0000;
 const SECCOMP_RET_ERRNO: u32 = 0x00050000;
 
@@ -60,14 +61,25 @@ const BPF_W: u16 = 0x00;
 const BPF_ABS: u16 = 0x20;
 const BPF_JMP: u16 = 0x05;
 const BPF_JEQ: u16 = 0x10;
+const BPF_JGE: u16 = 0x30;
+const BPF_JSET: u16 = 0x40;
 const BPF_K: u16 = 0x00;
 const BPF_RET: u16 = 0x06;
 
 #[cfg(target_arch = "x86_64")]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
+#[cfg(target_arch = "x86_64")]
+const SYS_CLONE_NR: u32 = 56;
+#[cfg(target_arch = "aarch64")]
+const SYS_CLONE_NR: u32 = 220;
+const CLONE_NEWUSER_FLAG: u32 = 0x1000_0000;
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SYS_LANDLOCK_CREATE_RULESET: i64 = 444;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SYS_LANDLOCK_ADD_RULE: i64 = 445;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SYS_LANDLOCK_RESTRICT_SELF: i64 = 446;
 
 const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
@@ -174,13 +186,44 @@ const AUDIT_ARCH_NATIVE: u32 = 0xc000_003e;
 const AUDIT_ARCH_NATIVE: u32 = 0xc000_00b7;
 
 #[cfg(target_arch = "x86_64")]
-const DENY_SYSCALLS: &[i64] = &[101, 165, 321, 246]; // ptrace, mount, bpf, kexec_load
+const DENY_SYSCALLS: &[i64] = &[
+    101, // ptrace
+    155, // pivot_root
+    165, // mount
+    246, // kexec_load
+    272, // unshare
+    304, // open_by_handle_at
+    310, // process_vm_readv
+    311, // process_vm_writev
+    320, // kexec_file_load
+    321, // bpf
+    323, // userfaultfd
+    425, // io_uring_setup
+    426, // io_uring_enter
+    427, // io_uring_register
+];
 #[cfg(target_arch = "aarch64")]
-const DENY_SYSCALLS: &[i64] = &[117, 40, 280, 104];
+const DENY_SYSCALLS: &[i64] = &[
+    40,  // mount
+    41,  // pivot_root
+    97,  // unshare
+    104, // kexec_load
+    117, // ptrace
+    265, // open_by_handle_at
+    270, // process_vm_readv
+    271, // process_vm_writev
+    280, // bpf
+    282, // userfaultfd
+    294, // kexec_file_load
+    425, // io_uring_setup
+    426, // io_uring_enter
+    427, // io_uring_register
+];
 
-fn install_seccomp_denylist() -> io::Result<()> {
+fn build_seccomp_denylist_filters() -> Vec<SockFilter> {
     const OFF_NR: u32 = 0;
     const OFF_ARCH: u32 = 4;
+    const OFF_ARG0_LO: u32 = 16;
 
     let mut filters: Vec<SockFilter> = Vec::new();
     filters.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH));
@@ -190,9 +233,26 @@ fn install_seccomp_denylist() -> io::Result<()> {
         1,
         0,
     ));
-    filters.push(stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+    filters.push(stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
     filters.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
-    let deny_pos = filters.len() + DENY_SYSCALLS.len() + 1;
+
+    let x32_checks = if cfg!(target_arch = "x86_64") { 1 } else { 0 };
+    // 3 instructions for conditional clone(CLONE_NEWUSER) check + 1 for ALLOW.
+    let deny_pos = filters.len() + x32_checks + DENY_SYSCALLS.len() + 3 + 1;
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Reject x32 ABI syscalls (nr >= __X32_SYSCALL_BIT = 0x4000_0000) so
+        // callers cannot bypass the x86_64 denylist with the x32 bit set.
+        let dist = deny_pos - filters.len() - 1;
+        filters.push(jump(
+            BPF_JMP | BPF_JGE | BPF_K,
+            X32_SYSCALL_BIT,
+            dist as u8,
+            0,
+        ));
+    }
+
     for &nr in DENY_SYSCALLS.iter() {
         let dist = deny_pos - filters.len() - 1;
         filters.push(jump(
@@ -202,11 +262,26 @@ fn install_seccomp_denylist() -> io::Result<()> {
             0,
         ));
     }
+    // Block clone() when CLONE_NEWUSER is set in arg0 (allows normal fork/threads).
+    filters.push(jump(BPF_JMP | BPF_JEQ | BPF_K, SYS_CLONE_NR, 0, 2));
+    filters.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARG0_LO));
+    filters.push(jump(
+        BPF_JMP | BPF_JSET | BPF_K,
+        CLONE_NEWUSER_FLAG,
+        1,
+        0,
+    ));
     filters.push(stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+    debug_assert_eq!(filters.len(), deny_pos);
     filters.push(stmt(
         BPF_RET | BPF_K,
         SECCOMP_RET_ERRNO | (libc::EPERM as u32),
     ));
+    filters
+}
+
+fn install_seccomp_denylist() -> io::Result<()> {
+    let filters = build_seccomp_denylist_filters();
 
     let prog = SockFprog {
         len: filters.len() as u16,
@@ -340,9 +415,7 @@ fn join_prepared_netns(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn map_userns_identities() -> io::Result<()> {
-    let uid = unsafe { libc::getuid() };
-    let gid = unsafe { libc::getgid() };
+fn map_userns_identities(uid: libc::uid_t, gid: libc::gid_t) -> io::Result<()> {
     let _ = write_proc("/proc/self/setgroups", "deny\n");
     write_proc("/proc/self/uid_map", &format!("0 {uid} 1\n"))?;
     write_proc("/proc/self/gid_map", &format!("0 {gid} 1\n"))?;
@@ -350,18 +423,22 @@ fn map_userns_identities() -> io::Result<()> {
 }
 
 fn isolate_user_namespace() -> io::Result<()> {
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
     if unsafe { libc::unshare(libc::CLONE_NEWUSER) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    map_userns_identities()
+    map_userns_identities(uid, gid)
 }
 
 fn isolate_network() -> io::Result<()> {
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
     let flags = libc::CLONE_NEWUSER | libc::CLONE_NEWNET;
     if unsafe { libc::unshare(flags) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    map_userns_identities()
+    map_userns_identities(uid, gid)
 }
 
 fn apply_veth_create_isolation() -> io::Result<()> {
@@ -425,149 +502,285 @@ fn apply_child_network_isolation() -> io::Result<()> {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn landlock_abi_version() -> i64 {
+unsafe fn raw_syscall2(nr: i64, a0: u64, a1: u64) -> i64 {
     let ret: i64;
-    unsafe {
-        std::arch::asm!(
-            "syscall",
-            inlateout("rax") SYS_LANDLOCK_CREATE_RULESET => ret,
-            in("rdi") 0u64,
-            in("rsi") 0u64,
-            in("rdx") LANDLOCK_CREATE_RULESET_VERSION,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
+    std::arch::asm!(
+        "syscall",
+        inlateout("rax") nr => ret,
+        in("rdi") a0,
+        in("rsi") a1,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
     ret
 }
 
 #[cfg(target_arch = "x86_64")]
-fn landlock_create_ruleset() -> io::Result<RawFd> {
-    let abi = landlock_abi_version();
+unsafe fn raw_syscall3(nr: i64, a0: u64, a1: u64, a2: u64) -> i64 {
     let ret: i64;
-    if abi >= 4 {
+    std::arch::asm!(
+        "syscall",
+        inlateout("rax") nr => ret,
+        in("rdi") a0,
+        in("rsi") a1,
+        in("rdx") a2,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn raw_syscall4(nr: i64, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        inlateout("rax") nr => ret,
+        in("rdi") a0,
+        in("rsi") a1,
+        in("rdx") a2,
+        in("r10") a3,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn raw_syscall2(nr: i64, a0: u64, a1: u64) -> i64 {
+    let ret: i64;
+    std::arch::asm!(
+        "svc #0",
+        in("x8") nr,
+        inlateout("x0") a0 as i64 => ret,
+        in("x1") a1,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn raw_syscall3(nr: i64, a0: u64, a1: u64, a2: u64) -> i64 {
+    let ret: i64;
+    std::arch::asm!(
+        "svc #0",
+        in("x8") nr,
+        inlateout("x0") a0 as i64 => ret,
+        in("x1") a1,
+        in("x2") a2,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn raw_syscall4(nr: i64, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
+    let ret: i64;
+    std::arch::asm!(
+        "svc #0",
+        in("x8") nr,
+        inlateout("x0") a0 as i64 => ret,
+        in("x1") a1,
+        in("x2") a2,
+        in("x3") a3,
+        options(nostack),
+    );
+    ret
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn landlock_abi_version() -> i64 {
+    unsafe {
+        raw_syscall3(
+            SYS_LANDLOCK_CREATE_RULESET,
+            0,
+            0,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    }
+}
+
+fn handled_access_fs_for_abi(abi: i64) -> u64 {
+    let mut handled = HANDLED_ACCESS_FS;
+    if abi < 2 {
+        handled &= !LANDLOCK_ACCESS_FS_REFER;
+    }
+    if abi < 3 {
+        handled &= !LANDLOCK_ACCESS_FS_TRUNCATE;
+    }
+    handled
+}
+
+/// On Landlock ABI ≥ 4, only enforce TCP bind/connect denial when child network
+/// isolation is active (`HZ_SANDBOX_CHILD_NET != on`). When `child_net=on`,
+/// `handled_access_net` MUST be 0 so TCP is not broken on Linux 6.7+/WSL2.
+fn handled_access_net_for_abi(abi: i64, deny_net: bool) -> u64 {
+    if abi >= 4 && deny_net {
+        HANDLED_ACCESS_NET
+    } else {
+        0
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn landlock_create_ruleset(deny_net: bool) -> io::Result<(RawFd, u64)> {
+    let abi = landlock_abi_version();
+    if abi < 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("Landlock ABI unavailable (version {abi})"),
+        ));
+    }
+    let handled_fs = handled_access_fs_for_abi(abi);
+    let handled_net = handled_access_net_for_abi(abi, deny_net);
+    let ret: i64 = if abi >= 4 {
         let attr = LandlockRulesetAttrV4 {
-            handled_access_fs: HANDLED_ACCESS_FS,
-            handled_access_net: HANDLED_ACCESS_NET,
+            handled_access_fs: handled_fs,
+            handled_access_net: handled_net,
         };
         unsafe {
-            std::arch::asm!(
-                "syscall",
-                inlateout("rax") SYS_LANDLOCK_CREATE_RULESET => ret,
-                in("rdi") &attr as *const _ as u64,
-                in("rsi") std::mem::size_of::<LandlockRulesetAttrV4>() as u64,
-                in("rdx") 0u64,
-                out("rcx") _,
-                out("r11") _,
-                options(nostack),
-            );
+            raw_syscall3(
+                SYS_LANDLOCK_CREATE_RULESET,
+                &attr as *const _ as u64,
+                std::mem::size_of::<LandlockRulesetAttrV4>() as u64,
+                0,
+            )
         }
     } else {
         let attr = LandlockRulesetAttr {
-            handled_access_fs: HANDLED_ACCESS_FS,
+            handled_access_fs: handled_fs,
         };
         unsafe {
-            std::arch::asm!(
-                "syscall",
-                inlateout("rax") SYS_LANDLOCK_CREATE_RULESET => ret,
-                in("rdi") &attr as *const _ as u64,
-                in("rsi") std::mem::size_of::<LandlockRulesetAttr>() as u64,
-                in("rdx") 0u64,
-                out("rcx") _,
-                out("r11") _,
-                options(nostack),
-            );
+            raw_syscall3(
+                SYS_LANDLOCK_CREATE_RULESET,
+                &attr as *const _ as u64,
+                std::mem::size_of::<LandlockRulesetAttr>() as u64,
+                0,
+            )
         }
-    }
+    };
     if ret < 0 {
         return Err(io::Error::from_raw_os_error((-ret) as i32));
     }
-    Ok(ret as RawFd)
+    Ok((ret as RawFd, handled_fs))
 }
 
-#[cfg(target_arch = "x86_64")]
-fn landlock_add_path(ruleset: RawFd, path: &Path, access: u64) -> io::Result<()> {
-    let file = OpenOptions::new().read(true).custom_flags(libc::O_PATH).open(path)?;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn landlock_add_path(ruleset: RawFd, path: &Path, access: u64, handled_fs: u64) -> io::Result<()> {
+    // O_PATH | O_NOFOLLOW ensures workspace symlinks (e.g. ws/escape -> ~/.ssh)
+    // open the symlink inode itself rather than granting ACCESS_RW to targets outside.
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
     let attr = LandlockPathBeneathAttr {
-        allowed_access: access,
+        allowed_access: access & handled_fs,
         parent_fd: file.as_raw_fd(),
     };
-    let ret: i64;
-    unsafe {
-        std::arch::asm!(
-            "syscall",
-            inlateout("rax") SYS_LANDLOCK_ADD_RULE => ret,
-            in("rdi") ruleset as u64,
-            in("rsi") LANDLOCK_RULE_PATH_BENEATH as u64,
-            in("rdx") &attr as *const _ as u64,
-            in("r10") 0u64,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
+    let ret = unsafe {
+        raw_syscall4(
+            SYS_LANDLOCK_ADD_RULE,
+            ruleset as u64,
+            LANDLOCK_RULE_PATH_BENEATH as u64,
+            &attr as *const _ as u64,
+            0,
+        )
+    };
     if ret < 0 {
         return Err(io::Error::from_raw_os_error((-ret) as i32));
     }
     Ok(())
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 fn landlock_restrict_self(ruleset: RawFd) -> io::Result<()> {
-    let ret: i64;
-    unsafe {
-        std::arch::asm!(
-            "syscall",
-            inlateout("rax") SYS_LANDLOCK_RESTRICT_SELF => ret,
-            in("rdi") ruleset as u64,
-            in("rsi") 0u64,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
+    let ret = unsafe { raw_syscall2(SYS_LANDLOCK_RESTRICT_SELF, ruleset as u64, 0) };
     if ret < 0 {
         return Err(io::Error::from_raw_os_error((-ret) as i32));
     }
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsMode {
     ReadOnly,
     WorkspaceWrite,
 }
 
-fn resolve_fs_mode() -> FsMode {
-    match env::var("HZ_SANDBOX_FS_MODE").ok().as_deref() {
-        Some("read-only") | Some("readonly") | Some("ro") => FsMode::ReadOnly,
-        _ => FsMode::WorkspaceWrite,
+fn parse_fs_mode(raw: Option<&str>) -> io::Result<FsMode> {
+    match raw {
+        None => Ok(FsMode::WorkspaceWrite),
+        Some(v) => match v.trim() {
+            "read-only" | "readonly" | "ro" => Ok(FsMode::ReadOnly),
+            "workspace-write" | "rw" => Ok(FsMode::WorkspaceWrite),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown HZ_SANDBOX_FS_MODE: {other:?}"),
+            )),
+        },
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-fn apply_landlock(_fs_root: &Path, _mode: FsMode) -> io::Result<()> {
+fn resolve_fs_mode() -> io::Result<FsMode> {
+    match env::var("HZ_SANDBOX_FS_MODE") {
+        Ok(raw) => parse_fs_mode(Some(&raw)),
+        Err(env::VarError::NotPresent) => Ok(FsMode::WorkspaceWrite),
+        Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HZ_SANDBOX_FS_MODE is not valid UTF-8",
+        )),
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn apply_landlock(_fs_root: &Path, _mode: FsMode, _deny_net: bool) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "Landlock apply is only implemented on x86_64",
+        "Landlock apply is only implemented on x86_64 and aarch64",
     ))
 }
 
+/// Mandatory read-only paths inside writable workspaces when present.
+const MANDATORY_WORKSPACE_RO_REL_PATHS: &[&str] = &[
+    ".git/hooks",
+    ".git/config",
+    ".mcp.json",
+    ".vscode",
+];
+
 /// Optional `:`-separated absolute paths that must stay read-only even when the
-/// workspace fence is `workspace-write` (typically the kernel state directory).
-fn resolve_ro_paths() -> Vec<PathBuf> {
-    let Ok(raw) = env::var("HZ_SANDBOX_FS_RO_PATHS") else {
-        return Vec::new();
-    };
-    raw.split(':')
-        .filter(|p| !p.is_empty())
-        .map(|p| {
-            PathBuf::from(p)
+/// workspace fence is `workspace-write` (typically the kernel state directory),
+/// plus mandatory workspace RO protections (`.git/hooks`, `.git/config`,
+/// `.mcp.json`, `.vscode`) whenever present inside `fs_root`.
+fn resolve_ro_paths(fs_root: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Ok(raw) = env::var("HZ_SANDBOX_FS_RO_PATHS") {
+        for p in raw.split(':').filter(|p| !p.is_empty()) {
+            let resolved = PathBuf::from(p)
                 .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(p))
-        })
-        .collect()
+                .unwrap_or_else(|_| PathBuf::from(p));
+            if !out.contains(&resolved) {
+                out.push(resolved);
+            }
+        }
+    }
+    for rel in MANDATORY_WORKSPACE_RO_REL_PATHS {
+        let candidate = fs_root.join(rel);
+        if let Ok(meta) = std::fs::symlink_metadata(&candidate) {
+            let target = if meta.file_type().is_symlink() {
+                candidate
+            } else {
+                candidate.canonicalize().unwrap_or(candidate)
+            };
+            if !out.contains(&target) {
+                out.push(target);
+            }
+        }
+    }
+    out
 }
 
 fn path_is_or_under(path: &Path, ancestor: &Path) -> bool {
@@ -585,99 +798,103 @@ fn path_is_ro_protected(path: &Path, ro_paths: &[PathBuf]) -> bool {
 }
 
 /// Explicit ACCESS_RO on every entry under `dir` (files do not inherit reliably).
-#[cfg(target_arch = "x86_64")]
-fn landlock_add_ro_tree(ruleset: RawFd, dir: &Path) {
-    let _ = landlock_add_path(ruleset, dir, ACCESS_RO);
+/// Never follows symlinks.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn landlock_add_ro_tree(ruleset: RawFd, dir: &Path, handled_fs: u64) {
+    let _ = landlock_add_path(ruleset, dir, ACCESS_RO, handled_fs);
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
+        if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(true) {
+            continue;
+        }
+        let _ = landlock_add_path(ruleset, &p, ACCESS_RO, handled_fs);
         if p.is_dir() {
-            landlock_add_ro_tree(ruleset, &p);
+            landlock_add_ro_tree(ruleset, &p, handled_fs);
         }
     }
 }
 
 /// Grant RW on each directory entry under `dir`, recursing into ancestors of an
 /// RO path so the protected subtree never inherits a parent RW grant.
-#[cfg(target_arch = "x86_64")]
-fn landlock_add_rw_excluding(ruleset: RawFd, dir: &Path, ro_paths: &[PathBuf]) {
+/// Never follows symlinks.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn landlock_add_rw_excluding(ruleset: RawFd, dir: &Path, ro_paths: &[PathBuf], handled_fs: u64) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
     for entry in entries.flatten() {
         let p = entry.path();
+        if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(true) {
+            continue;
+        }
         if path_is_ro_protected(&p, ro_paths) {
             if p.is_dir() {
-                landlock_add_ro_tree(ruleset, &p);
+                landlock_add_ro_tree(ruleset, &p, handled_fs);
             } else {
-                let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
+                let _ = landlock_add_path(ruleset, &p, ACCESS_RO, handled_fs);
             }
             continue;
         }
         if path_covers_any_ro(&p, ro_paths) {
-            let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
-            landlock_add_rw_excluding(ruleset, &p, ro_paths);
+            let _ = landlock_add_path(ruleset, &p, ACCESS_RO, handled_fs);
+            landlock_add_rw_excluding(ruleset, &p, ro_paths, handled_fs);
             continue;
         }
-        let _ = landlock_add_path(ruleset, &p, ACCESS_RW);
+        let _ = landlock_add_path(ruleset, &p, ACCESS_RW, handled_fs);
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-fn apply_landlock(fs_root: &Path, mode: FsMode) -> io::Result<()> {
-    // ABI ≥ 4: handled_access_net is set with no LANDLOCK_RULE_NET_PORT allows,
-    // so TCP bind/connect are denied (complements userns+netns network-off).
-    let ruleset = landlock_create_ruleset()?;
-    let ro_paths = resolve_ro_paths();
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn apply_landlock(fs_root: &Path, mode: FsMode, deny_net: bool) -> io::Result<()> {
+    // ABI ≥ 4: handled_access_net is set only when deny_net is true
+    // (HZ_SANDBOX_CHILD_NET != on), so TCP bind/connect are denied when network
+    // isolation is active and allowed when child_net=on (Linux 6.7+/WSL2).
+    let (ruleset, handled_fs) = landlock_create_ruleset(deny_net)?;
+    let ro_paths = resolve_ro_paths(fs_root);
     match mode {
         FsMode::ReadOnly => {
-            landlock_add_path(ruleset, fs_root, ACCESS_RO)?;
+            landlock_add_path(ruleset, fs_root, ACCESS_RO, handled_fs)?;
         }
         FsMode::WorkspaceWrite if ro_paths.is_empty() => {
-            landlock_add_path(ruleset, fs_root, ACCESS_RW)?;
+            landlock_add_path(ruleset, fs_root, ACCESS_RW, handled_fs)?;
         }
         FsMode::WorkspaceWrite => {
             // Default RO on the whole workspace, then RW grants only on paths that
-            // are not under HZ_SANDBOX_FS_RO_PATHS (hook/state write-deny adapt).
-            landlock_add_path(ruleset, fs_root, ACCESS_RO)?;
+            // are not under HZ_SANDBOX_FS_RO_PATHS or mandatory workspace RO paths.
+            landlock_add_path(ruleset, fs_root, ACCESS_RO, handled_fs)?;
             for ro in &ro_paths {
                 if path_is_or_under(ro, fs_root) {
-                    if ro.is_dir() {
-                        landlock_add_ro_tree(ruleset, ro);
-                    } else {
-                        landlock_add_path(ruleset, ro, ACCESS_RO)?;
+                    if ro.is_dir() && !ro.is_symlink() {
+                        landlock_add_ro_tree(ruleset, ro, handled_fs);
+                    } else if !ro.is_symlink() {
+                        landlock_add_path(ruleset, ro, ACCESS_RO, handled_fs)?;
                     }
                 }
             }
-            landlock_add_rw_excluding(ruleset, fs_root, &ro_paths);
+            landlock_add_rw_excluding(ruleset, fs_root, &ro_paths, handled_fs);
         }
     }
     // System prefixes so dynamic loaders / interpreters can run.
-    // In read-only mode keep /tmp and /dev RO too so the child cannot stage
-    // writes outside the workspace via those prefixes.
+    // Never grant broad `/tmp` ACCESS_RW (protects hz-ephemeral-ca-*.pem and
+    // hz-stream-*.bin in /tmp); allow /dev/null RW in workspace-write mode so
+    // shell redirects to /dev/null still work.
     for prefix in [
         "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev", "/proc", "/tmp",
     ] {
         let p = Path::new(prefix);
         if p.exists() {
-            let mut access = if mode == FsMode::WorkspaceWrite && (prefix == "/tmp" || prefix == "/dev")
-            {
-                ACCESS_RW
-            } else {
-                ACCESS_RO
-            };
-            // Landlock access is the union of matching rules. A broad RW rule on
-            // `/tmp` would defeat HZ_SANDBOX_FS_RO_PATHS when the workspace lives
-            // under /tmp (the usual probe layout).
-            if (prefix == "/tmp" || prefix == "/dev") && path_is_or_under(fs_root, p) {
-                access = ACCESS_RO;
-            }
-            let _ = landlock_add_path(ruleset, p, access);
+            let _ = landlock_add_path(ruleset, p, ACCESS_RO, handled_fs);
+        }
+    }
+    if mode == FsMode::WorkspaceWrite {
+        let dev_null = Path::new("/dev/null");
+        if dev_null.exists() {
+            let _ = landlock_add_path(ruleset, dev_null, ACCESS_RW, handled_fs);
         }
     }
     landlock_restrict_self(ruleset)?;
@@ -687,11 +904,38 @@ fn apply_landlock(fs_root: &Path, mode: FsMode) -> io::Result<()> {
     Ok(())
 }
 
-fn resolve_fs_root() -> PathBuf {
-    let raw = env::var("HZ_SANDBOX_FS_ROOT").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(raw)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from("."))
+fn resolve_fs_root() -> io::Result<PathBuf> {
+    let raw = match env::var("HZ_SANDBOX_FS_ROOT") {
+        Ok(v) => {
+            if v.trim().is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "HZ_SANDBOX_FS_ROOT must not be empty",
+                ));
+            }
+            v
+        }
+        Err(env::VarError::NotPresent) => ".".to_string(),
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "HZ_SANDBOX_FS_ROOT is not valid UTF-8",
+            ));
+        }
+    };
+    let canon = PathBuf::from(&raw).canonicalize().map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("invalid HZ_SANDBOX_FS_ROOT {raw:?}: {e}"),
+        )
+    })?;
+    if !canon.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("HZ_SANDBOX_FS_ROOT is not a directory: {}", canon.display()),
+        ));
+    }
+    Ok(canon)
 }
 
 fn pre_exec_confine() -> io::Result<()> {
@@ -699,11 +943,14 @@ fn pre_exec_confine() -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     apply_rlimits()?;
-    if child_network_isolation_requested() {
+    let deny_net = child_network_isolation_requested();
+    if deny_net {
         apply_child_network_isolation()?;
     }
     install_seccomp_denylist()?;
-    apply_landlock(&resolve_fs_root(), resolve_fs_mode())?;
+    let fs_root = resolve_fs_root()?;
+    let fs_mode = resolve_fs_mode()?;
+    apply_landlock(&fs_root, fs_mode, deny_net)?;
     Ok(())
 }
 
@@ -731,4 +978,121 @@ pub fn entry() {
     let err = cmd.exec();
     eprintln!("hz-sandbox-exec: exec {}: {}", program, err);
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn landlock_handled_access_fs_masks_by_abi() {
+        let abi1 = handled_access_fs_for_abi(1);
+        assert_eq!(abi1 & LANDLOCK_ACCESS_FS_REFER, 0);
+        assert_eq!(abi1 & LANDLOCK_ACCESS_FS_TRUNCATE, 0);
+
+        let abi2 = handled_access_fs_for_abi(2);
+        assert_ne!(abi2 & LANDLOCK_ACCESS_FS_REFER, 0);
+        assert_eq!(abi2 & LANDLOCK_ACCESS_FS_TRUNCATE, 0);
+
+        let abi3 = handled_access_fs_for_abi(3);
+        assert_ne!(abi3 & LANDLOCK_ACCESS_FS_REFER, 0);
+        assert_ne!(abi3 & LANDLOCK_ACCESS_FS_TRUNCATE, 0);
+        assert_eq!(abi3, HANDLED_ACCESS_FS);
+    }
+
+    #[test]
+    fn seccomp_denylist_rejects_x32_and_blocks_added_syscalls() {
+        let filters = build_seccomp_denylist_filters();
+        let deny_idx = filters.len() - 1;
+        assert_eq!(
+            filters[deny_idx].k,
+            SECCOMP_RET_ERRNO | (libc::EPERM as u32)
+        );
+        assert_eq!(filters[deny_idx - 1].k, SECCOMP_RET_ALLOW);
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Confirm x32 bit check jumps to deny_idx.
+            let x32_check = filters
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.code == (BPF_JMP | BPF_JGE | BPF_K) && f.k == X32_SYSCALL_BIT)
+                .expect("x32 syscall bit check missing");
+            assert_eq!(x32_check.0 + 1 + x32_check.1.jt as usize, deny_idx);
+
+            for expected_nr in [
+                101u32, 155, 165, 246, 272, 304, 310, 311, 320, 321, 323, 425, 426, 427,
+            ] {
+                let found = filters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| f.code == (BPF_JMP | BPF_JEQ | BPF_K) && f.k == expected_nr)
+                    .unwrap_or_else(|| panic!("missing denylist rule for syscall {expected_nr}"));
+                assert_eq!(found.0 + 1 + found.1.jt as usize, deny_idx);
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            for expected_nr in [
+                40u32, 41, 97, 104, 117, 265, 270, 271, 280, 282, 294, 425, 426, 427,
+            ] {
+                let found = filters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| f.code == (BPF_JMP | BPF_JEQ | BPF_K) && f.k == expected_nr)
+                    .unwrap_or_else(|| panic!("missing denylist rule for syscall {expected_nr}"));
+                assert_eq!(found.0 + 1 + found.1.jt as usize, deny_idx);
+            }
+        }
+
+        // Confirm clone(CLONE_NEWUSER) conditional block jumps to deny_idx.
+        let clone_jset = filters
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.code == (BPF_JMP | BPF_JSET | BPF_K) && f.k == CLONE_NEWUSER_FLAG)
+            .expect("clone(CLONE_NEWUSER) JSET check missing");
+        assert_eq!(clone_jset.0 + 1 + clone_jset.1.jt as usize, deny_idx);
+    }
+
+    #[test]
+    fn fs_mode_fails_closed_on_unknown_values() {
+        assert_eq!(parse_fs_mode(None).unwrap(), FsMode::WorkspaceWrite);
+        assert_eq!(parse_fs_mode(Some("read-only")).unwrap(), FsMode::ReadOnly);
+        assert_eq!(parse_fs_mode(Some("workspace-write")).unwrap(), FsMode::WorkspaceWrite);
+        assert!(parse_fs_mode(Some("")).is_err());
+        assert!(parse_fs_mode(Some("danger-full-access")).is_err());
+        assert!(parse_fs_mode(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn resolve_ro_paths_includes_mandatory_workspace_protections() {
+        let dir = std::env::temp_dir().join(format!(
+            "hz-sbx-mandatory-ro-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git/hooks")).unwrap();
+        std::fs::write(dir.join(".git/config"), "[core]\n").unwrap();
+        std::fs::write(dir.join(".mcp.json"), "{}\n").unwrap();
+        std::fs::create_dir_all(dir.join(".vscode")).unwrap();
+
+        let canon = dir.canonicalize().unwrap();
+        let ro = resolve_ro_paths(&canon);
+        assert!(ro.contains(&canon.join(".git/hooks")));
+        assert!(ro.contains(&canon.join(".git/config")));
+        assert!(ro.contains(&canon.join(".mcp.json")));
+        assert!(ro.contains(&canon.join(".vscode")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn landlock_handled_access_net_only_set_when_child_net_denied() {
+        assert_eq!(handled_access_net_for_abi(3, true), 0);
+        assert_eq!(handled_access_net_for_abi(3, false), 0);
+        assert_eq!(handled_access_net_for_abi(4, true), HANDLED_ACCESS_NET);
+        assert_eq!(handled_access_net_for_abi(4, false), 0);
+        assert_eq!(handled_access_net_for_abi(5, true), HANDLED_ACCESS_NET);
+        assert_eq!(handled_access_net_for_abi(5, false), 0);
+    }
 }

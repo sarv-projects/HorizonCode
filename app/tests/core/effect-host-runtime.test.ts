@@ -3,6 +3,7 @@ import {
   applyEffectHostKernelFromUserConfig,
   applyEffectHostKernelRegulatedRequire,
   applyEffectHostKernelSandboxDefault,
+  applyEffectHostKernelTrustedDefault,
   applyEffectHostKernelTrustedRequire,
   parseEffectHostKernelConfig,
   sandboxWrapActiveForEffectHost,
@@ -116,6 +117,26 @@ describe("effect-host-runtime trusted require (ruling 540)", () => {
     } finally {
       restoreEnv(snap);
     }
+  });
+
+  // D-13(d): this path sets `default` and must report that, not `trusted-require`.
+  // The old assertion pinned the mislabel; the require path is the next test.
+  test("trusted default applies on any platform when trusted and env unset", () => {
+    const env: Record<string, string | undefined> = {};
+    const res = applyEffectHostKernelTrustedDefault(env, true);
+    // D-13(d): this path sets `default` and must report that, not the require label.
+    expect(res.applied).toBe("trusted-default");
+    expect(env.HZ_EFFECT_HOST_KERNEL).toBe("default");
+    expect(res.mode).toBe("default");
+    expect(res.notice).toContain("trusted Rust kernel active");
+
+    // Skips when untrusted or explicit env already present
+    const env2: Record<string, string | undefined> = {};
+    expect(applyEffectHostKernelTrustedDefault(env2, false).applied).toBeUndefined();
+
+    const env3: Record<string, string | undefined> = { HZ_EFFECT_HOST_KERNEL: "require" };
+    expect(applyEffectHostKernelTrustedDefault(env3, true).applied).toBeUndefined();
+    expect(env3.HZ_EFFECT_HOST_KERNEL).toBe("require");
   });
 });
 

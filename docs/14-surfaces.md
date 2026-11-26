@@ -640,7 +640,7 @@ Every capability below starts at **DESIGNED**, except the rows `28-implementatio
 | Capability | Surface(s) | Level | Evidence required to advance |
 |---|---|---|---|
 | Print/exec CLI path (schemas, exit codes, approvals fail closed) | print | VERIFIED (`28-implementation-status.md` §1: `bin/hzcode`, `--output` modes, headless approvals fail closed, exit-code e2e) | `surfaces/headless.schema`, `surfaces/headless.redaction` |
-| CI recipes and gate wiring (documented recipes run green in CI) | print | DESIGNED for the recipes; the repository's own gate runner `ops/gates.sh` (8 gates) and `.github/workflows/ci.yml` exist, see [`16-operations.md`](16-operations.md) | `surfaces/ci.recipes` |
+| CI recipes and gate wiring (documented recipes run green in CI) | print | DESIGNED for the recipes; the repository's own gate runner `ops/gates.sh` (9 gates) and `.github/workflows/ci.yml` exist, see [`16-operations.md`](16-operations.md) | `surfaces/ci.recipes` |
 | Local server transports (stdio/UDS/TCP/HTTP/SSE/WS) | server | DESIGNED for UDS/TCP/HTTP/SSE/WS; the stdio single-attach subset is TESTED per `28-implementation-status.md` (server row) | `surfaces/server.transports` |
 | Discovery + leader arbitration | server | DESIGNED | `surfaces/server.discovery` |
 | Auth (token, pairing, session token, roles) | server | DESIGNED | `surfaces/server.auth` |

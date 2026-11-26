@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "src/",
+    "schema/",
+    "kernel.sha256"
+  ],
+  "bin": {
+    "hzcode": "../bin/hzcode"
+  },
   "scripts": {
     "start": "bun --no-env-file run src/main.ts",
     "eval": "bun --no-env-file run src/eval-run.ts",
@@ -11,7 +19,7 @@
     "grow": "bun --no-env-file run src/grow.ts",
     "typecheck": "bunx tsc --noEmit -p .",
     "test": "bun test --timeout 30000",
-    "check": "bun build src/main.ts --target=bun --outdir=/tmp/hz-b-app"
+    "check": "bunx tsc --noEmit -p ."
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

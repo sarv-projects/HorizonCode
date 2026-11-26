@@ -1,3 +1,5 @@
+import { detectNearDuplicateSegments, detectProgressLexiconStall } from "./thinking-loop-guard";
+
 /**
  * thinking-loop.ts — reduced C-10 failure class (omp thinking-loop-redirect ADAPT).
  *
@@ -29,13 +31,15 @@ export interface ThinkingLoopStep {
   toolCallCount: number;
   thinkingText: string;
   assistantText: string;
+  /** ADDITIVE: prose segments for the omp semantic detectors (opt-in). */
+  segments?: readonly string[];
 }
 
 export interface ThinkingLoopVerdict {
   kind: "ok" | "soft" | "hard";
   message?: string;
   consecutiveCount?: number;
-  reason?: "exact_cycle" | "repeated_fingerprint";
+  reason?: "exact_cycle" | "repeated_fingerprint" | "near_duplicate_segments" | "progress_lexicon_stall";
 }
 
 export interface ThinkingLoopState {
@@ -107,6 +111,21 @@ export function checkThinkingLoopStep(
   if (step.toolCallCount > 0) {
     resetThinkingLoopState(state);
     return { kind: "ok" };
+  }
+
+  // ADDITIVE omp semantic detectors (must-steal #13): opt-in so the reduced
+  // byte-identical path is preserved. They judge prose only; tool calls already
+  // reset the streak above.
+  if (step.segments !== undefined && step.segments.length > 0) {
+    const raw = process.env.HZ_THINKING_LOOP_SEMANTIC?.trim().toLowerCase();
+    if (raw === "1" || raw === "true" || raw === "yes") {
+      if (detectNearDuplicateSegments(step.segments)) {
+        return { kind: "hard", reason: "near_duplicate_segments" };
+      }
+      if (detectProgressLexiconStall(step.segments)) {
+        return { kind: "hard", reason: "progress_lexicon_stall" };
+      }
+    }
   }
 
   const material = thinkingStallMaterial(step);

@@ -14,17 +14,21 @@ const SEAL_FILE: &str = "hzk.binary";
 
 fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64
-        && s.bytes().all(|b| {
-            (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b)
-        })
+        && s.bytes()
+            .all(|b| (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b))
 }
 
 /// Sha256 hex of the currently running `hz-kernel` image bytes.
 pub fn running_binary_sha256() -> Result<String, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("HZ_PRECONDITION_FAILED: cannot resolve hz-kernel binary path: {e}"))?;
-    let bytes = fs::read(&exe)
-        .map_err(|e| format!("HZ_PRECONDITION_FAILED: cannot read hz-kernel binary {}: {e}", exe.display()))?;
+    let exe = std::env::current_exe().map_err(|e| {
+        format!("HZ_PRECONDITION_FAILED: cannot resolve hz-kernel binary path: {e}")
+    })?;
+    let bytes = fs::read(&exe).map_err(|e| {
+        format!(
+            "HZ_PRECONDITION_FAILED: cannot read hz-kernel binary {}: {e}",
+            exe.display()
+        )
+    })?;
     Ok(canon::sha256_bytes(&bytes))
 }
 

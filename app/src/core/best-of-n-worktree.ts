@@ -8,7 +8,7 @@ import type { ToolContext } from "../contracts";
 import { shellTool } from "../tools/shell";
 import type { BestOfNAttempt, BestOfNWorktreeSlot } from "./best-of-n";
 import { resolveWorktreeAcquire } from "./worktree-pool";
-import { worktreeRemoveCommand } from "./worktree";
+import { worktreeRemoveCommand, worktreeResetCommand } from "./worktree";
 
 export type BestOfNWorktreeShellResult = { ok: boolean; output: string };
 
@@ -20,6 +20,8 @@ export type BestOfNWorktreeRaceHooks = {
   refreshPorcelain?: () => string | undefined;
   /** Remove sibling trees created for this race but not selected (default true). */
   cleanupLosers?: boolean;
+  /** Reset existing worktree to clean HEAD state before reuse (default true). */
+  resetOnReuse?: boolean;
 };
 
 export type BestOfNWorktreeProvision = "add" | "reuse";
@@ -82,6 +84,21 @@ export async function prepareBestOfNWorktreeSlots(
       continue;
     }
     if (decision.kind === "reuse") {
+      if (hooks.resetOnReuse !== false) {
+        const resetCmd = worktreeResetCommand(slot.path);
+        const resetRes = await hooks.shell(resetCmd);
+        if (!resetRes.ok) {
+          prepared.push({
+            ...slot,
+            decision: {
+              kind: "refuse",
+              reason: resetRes.output.trim() || `worktree reset failed for ${slot.path}`,
+            },
+            provision: undefined,
+          });
+          continue;
+        }
+      }
       prepared.push({ ...slot, decision, provision: "reuse" });
       continue;
     }

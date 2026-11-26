@@ -11,24 +11,24 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 describe("G1 wire protocol V2 (HZ_GUARD_G1_WIRE)", () => {
-  test("applyGuardG1Wire: legacy off keeps decision allow + additive g1 ask", () => {
+  test("applyGuardG1Wire: always stamps G1 ask + preserves leaseId even when env unset", () => {
     const prev = process.env.HZ_GUARD_G1_WIRE;
     delete process.env.HZ_GUARD_G1_WIRE;
     const out = applyGuardG1Wire(
-      { decision: "allow", leaseId: "lease-1", reason: "policy allow" },
+      { decision: "ask", leaseId: "lease-1", reason: "policy allow" },
       process.env,
     );
     if (prev !== undefined) process.env.HZ_GUARD_G1_WIRE = prev;
-    expect(out.decision).toBe("allow");
+    expect(out.decision).toBe("ask");
     expect(out.g1).toBe("ask");
     expect(out.leaseId).toBe("lease-1");
   });
 
-  test("applyGuardG1Wire: HZ_GUARD_G1_WIRE=1 projects decision to ask", () => {
+  test("applyGuardG1Wire: HZ_GUARD_G1_WIRE=1 keeps decision ask + leaseId", () => {
     const prev = process.env.HZ_GUARD_G1_WIRE;
     process.env.HZ_GUARD_G1_WIRE = "1";
     const out = applyGuardG1Wire(
-      { decision: "allow", leaseId: "lease-2", reason: "policy allow" },
+      { decision: "ask", leaseId: "lease-2", reason: "policy allow" },
       process.env,
     );
     if (prev !== undefined) process.env.HZ_GUARD_G1_WIRE = prev;
@@ -38,9 +38,9 @@ describe("G1 wire protocol V2 (HZ_GUARD_G1_WIRE)", () => {
     expect(out.leaseId).toBe("lease-2");
   });
 
-  test("guardEffectivelyAllows: G1 ask with leaseId is admission", () => {
-    expect(guardEffectivelyAllows({ decision: "allow", leaseId: "l1" })).toBe(true);
+  test("guardEffectivelyAllows: G1 ask with non-empty leaseId is the sole admission", () => {
     expect(guardEffectivelyAllows({ decision: "ask", leaseId: "l1", g1: "ask" })).toBe(true);
+    expect(guardEffectivelyAllows({ decision: "ask", leaseId: "", g1: "ask" })).toBe(false);
     expect(guardEffectivelyAllows({ decision: "ask", g1: "ask" })).toBe(false);
     expect(guardEffectivelyAllows({ decision: "deny", g1: "deny" })).toBe(false);
   });
@@ -53,7 +53,7 @@ describe("G1 wire protocol V2 (HZ_GUARD_G1_WIRE)", () => {
     expect(out.g1).toBe("deny");
   });
 
-  test("LocalKernel.checkGuard mirrors Rust when HZ_GUARD_G1_WIRE=1", async () => {
+  test("LocalKernel.checkGuard always emits G1 ask + leaseId regardless of HZ_GUARD_G1_WIRE", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "hz-g1-wire-"));
     const state = path.join(root, "state");
     fs.mkdirSync(path.join(state, "events"), { recursive: true });
@@ -71,9 +71,10 @@ describe("G1 wire protocol V2 (HZ_GUARD_G1_WIRE)", () => {
 
     const prev = process.env.HZ_GUARD_G1_WIRE;
     delete process.env.HZ_GUARD_G1_WIRE;
-    const legacy = await kernel.checkGuard({ kind: "fs.write", target }, "workspace");
-    expect(legacy.decision).toBe("allow");
-    expect(legacy.g1).toBe("ask");
+    const unset = await kernel.checkGuard({ kind: "fs.write", target }, "workspace");
+    expect(unset.decision).toBe("ask");
+    expect(unset.g1).toBe("ask");
+    expect(guardEffectivelyAllows(unset)).toBe(true);
 
     process.env.HZ_GUARD_G1_WIRE = "1";
     expect(guardG1WireEnabled(process.env)).toBe(true);
@@ -82,6 +83,7 @@ describe("G1 wire protocol V2 (HZ_GUARD_G1_WIRE)", () => {
     else delete process.env.HZ_GUARD_G1_WIRE;
     expect(v2.decision).toBe("ask");
     expect(v2.g1).toBe("ask");
+    expect(guardEffectivelyAllows(v2)).toBe(true);
 
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -93,8 +95,8 @@ describe("G1 wire honesty (ruling 716)", () => {
     expect(guardG1WireHonesty({ HZ_GUARD_G1_WIRE: "1" }).mode).toBe("protocol-v2");
   });
 
-  test("legacy mismatch notice only when V2 off", () => {
-    const decision = { decision: "allow" as const, g1: "ask" as const, leaseId: "l" };
+  test("legacy mismatch notice only when V2 off and stale wire emits allow", () => {
+    const decision = { decision: "allow" as unknown as "ask", g1: "ask" as const, leaseId: "l" };
     expect(guardG1LegacyWireMismatchNotice(decision, {})).toContain('decision remains "allow"');
     expect(guardG1LegacyWireMismatchNotice(decision, { HZ_GUARD_G1_WIRE: "1" })).toBeUndefined();
   });

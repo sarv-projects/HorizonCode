@@ -2,7 +2,8 @@
  * Structural call-site reach for Engineering Brain critic (ruling **727** slice).
  *
  * BEST-EFFORT parenthesis-aware occurrence scan (string/comment/template aware).
- * Not tree-sitter / not a full AST call-graph — honest structural heuristic only.
+ * Counts optional `symbol?.()`, a newline between the name and `(`, and calls
+ * inside `${...}` interpolations. Not tree-sitter / not a full AST call-graph.
  */
 
 const IDENT_TAIL = /[\w$]/;
@@ -50,12 +51,26 @@ function linePrefixBefore(text: string, index: number): string {
   return text.slice(lineStart, index);
 }
 
+/** Skip whitespace, one optional `?.`, and a `<...>` generic list before `(`. */
+function skipCallGap(text: string, start: number): number {
+  const gap = (index: number): number => {
+    let j = index;
+    while (j < text.length && (text[j] === " " || text[j] === "\t" || text[j] === "\n" || text[j] === "\r")) j++;
+    return j;
+  };
+  let j = gap(start);
+  if (text.startsWith("?.", j)) j = gap(j + 2);
+  j = skipGenericArgs(text, j);
+  return gap(j);
+}
+
 /** Count `symbol(` call sites in source text (not comments/strings; not declarations). */
 export function countStructuralCallSites(text: string, symbol: string): number {
   if (symbol.length === 0) return 0;
   let count = 0;
   let state: "code" | "lineComment" | "blockComment" | "single" | "double" | "template" = "code";
   let escaped = false;
+  let interp = 0;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (state === "lineComment") {
@@ -81,8 +96,23 @@ export function countStructuralCallSites(text: string, symbol: string): number {
     }
     if (state === "template") {
       if (!escaped && ch === "`") state = "code";
+      else if (!escaped && ch === "$" && text[i + 1] === "{") {
+        state = "code";
+        interp = 1;
+        i++;
+      }
       escaped = !escaped && ch === "\\";
       continue;
+    }
+    if (interp > 0) {
+      if (ch === "{") interp++;
+      else if (ch === "}") {
+        interp--;
+        if (interp === 0) {
+          state = "template";
+          continue;
+        }
+      }
     }
     if (ch === "/" && text[i + 1] === "/") {
       state = "lineComment";
@@ -110,10 +140,7 @@ export function countStructuralCallSites(text: string, symbol: string): number {
     const before = i === 0 ? undefined : text[i - 1];
     const after = text[i + symbol.length];
     if (isIdentChar(before) || isIdentChar(after)) continue;
-    let j = i + symbol.length;
-    while (j < text.length && (text[j] === " " || text[j] === "\t")) j++;
-    j = skipGenericArgs(text, j);
-    while (j < text.length && (text[j] === " " || text[j] === "\t")) j++;
+    const j = skipCallGap(text, i + symbol.length);
     if (text[j] !== "(") continue;
     const prefix = linePrefixBefore(text, i);
     if (DECL_BEFORE_IDENT.test(prefix)) continue;

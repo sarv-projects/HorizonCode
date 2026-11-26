@@ -274,12 +274,49 @@ describe("apply_patch fuzz ladder", () => {
     expect(readFixture(ws, "a.txt")).toBe("keep\ndone\n");
   });
 
+  test("rung 2b: relative indent match -> fuzz 50 with re-indentation", async () => {
+    // File has lines indented by 4 spaces
+    const ws = makeWorkspace({ "a.txt": "    def foo():\n        return 1\n" });
+    const ctx = await ctxHavingRead(ws, ["a.txt"]);
+    // Patch written with 0 spaces indent
+    const r = await applyPatchTool.execute(
+      {
+        input: wrap(
+          "*** Update File: a.txt\n@@\n def foo():\n-    return 1\n+    return 2",
+        ),
+      },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("Patch applied with fuzz factor 50");
+    // Replacement must be cleanly re-indented with 4 spaces matching the target file
+    expect(readFixture(ws, "a.txt")).toBe("    def foo():\n        return 2\n");
+  });
+
   test("rung 3: per-line trim (both sides) match -> fuzz 100", async () => {
     const ws = makeWorkspace({ "a.txt": "   keep\ntarget\n" }); // leading spaces in file
     const ctx = await ctxHavingRead(ws, ["a.txt"]);
     const r = await applyPatchTool.execute({ input: wrap("*** Update File: a.txt\n@@\n keep\n-target\n+done") }, ctx);
     expect(r.ok).toBe(true);
     expect(r.output).toContain("Patch applied with fuzz factor 100");
+  });
+
+  test("rung 3b: whitespace collapse match -> fuzz 500", async () => {
+    // File has multiple spaces/tabs inside tokens
+    const ws = makeWorkspace({ "a.txt": "const   x   =   1;\n" });
+    const ctx = await ctxHavingRead(ws, ["a.txt"]);
+    // Patch has single normalized spaces
+    const r = await applyPatchTool.execute(
+      {
+        input: wrap(
+          "*** Update File: a.txt\n@@\n-const x = 1;\n+const x = 2;",
+        ),
+      },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("Patch applied with fuzz factor 500");
+    expect(readFixture(ws, "a.txt")).toBe("const x = 2;\n");
   });
 
   test("rung 4: Levenshtein similarity >= 0.66 -> fuzz 1000", async () => {

@@ -45,14 +45,21 @@
  * follow-up.
  */
 
-import { readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffixes } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
+import {
+  captureWorkspaceBinding,
+  isWorkspaceBindingError,
+  refuseWorkspaceIdentityDrift,
+} from "../core/workspace-binding";
 import { isRefused, writeAtomic } from "./atomic-write";
+import { withEffectR170BunMutationFence } from "../core/effect-r170-bun-mutation-fence";
 import { acquireLock, targetLockPath } from "../core/file-lock";
 import { recordChangeGuarded } from "./change-journal";
 import { canonicalize, parse, type FileOp, type PatchChunk } from "./apply-patch-parser";
@@ -156,10 +163,49 @@ const SIMILARITY_THRESHOLD = APPLY_PATCH_LEVENSHTEIN_THRESHOLD;
 interface MatchResult {
   /** The 0-based line index where the window matched. */
   start: number;
-  /** The fuzz cost of this match (0 / 1 / 100 / 1000, plus +10000 if eof-anchored). */
+  /** The fuzz cost of this match (0 / 1 / 50 / 100 / 500 / 1000, plus +10000 if eof-anchored). */
   fuzz: number;
   /** The Levenshtein similarity when rung 4 matched; 1 otherwise (for messages). */
   similarity: number;
+  /** Optional re-indentation offsets for relative indent matches (rung 2b). */
+  reindent?: { add: string; base: string };
+}
+
+function commonIndentPrefix(lines: string[]): string {
+  let prefix: string | null = null;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const match = line.match(/^[ \t]+/);
+    const indent = match ? match[0] : "";
+    if (prefix === null) {
+      prefix = indent;
+    } else {
+      let i = 0;
+      while (i < prefix.length && i < indent.length && prefix[i] === indent[i]) i++;
+      prefix = prefix.slice(0, i);
+    }
+  }
+  return prefix ?? "";
+}
+
+function stripIndent(lines: string[], prefix: string): string[] {
+  if (prefix === "") return lines;
+  return lines.map((l) => (l.trim() === "" ? "" : l.startsWith(prefix) ? l.slice(prefix.length) : l));
+}
+
+function reindentLines(lines: string[], addPrefix: string, basePrefix: string): string[] {
+  if (addPrefix === basePrefix) return lines;
+  return lines.map((line) => {
+    if (line.trim() === "") return "";
+    if (basePrefix !== "" && line.startsWith(basePrefix)) {
+      return addPrefix + line.slice(basePrefix.length);
+    }
+    return addPrefix + line;
+  });
+}
+
+function collapseWs(s: string): string {
+  return s.trim().replace(/[ \t]+/g, " ");
 }
 
 /**
@@ -191,8 +237,20 @@ function findWindow(fileLines: string[], want: string[], from: number, eofAnchor
     if (equalLines(window, want)) return { start: s, fuzz: base + 0, similarity: 1 };
     // (2) per-line trimEnd
     if (equalLines(window.map(trimEnd), want.map(trimEnd))) return { start: s, fuzz: base + 1, similarity: 1 };
+    // (2b) relative indent match
+    const winPrefix = commonIndentPrefix(window);
+    const wantPrefix = commonIndentPrefix(want);
+    if (winPrefix !== wantPrefix) {
+      const winStripped = stripIndent(window, winPrefix);
+      const wantStripped = stripIndent(want, wantPrefix);
+      if (equalLines(winStripped, wantStripped)) {
+        return { start: s, fuzz: base + 50, similarity: 1, reindent: { add: winPrefix, base: wantPrefix } };
+      }
+    }
     // (3) per-line trim
     if (equalLines(window.map((l) => l.trim()), want.map((l) => l.trim()))) return { start: s, fuzz: base + 100, similarity: 1 };
+    // (3b) whitespace collapse
+    if (equalLines(window.map(collapseWs), want.map(collapseWs))) return { start: s, fuzz: base + 500, similarity: 1 };
     // (4) Levenshtein similarity over the joined block
     const sim = similarity(window.join("\n"), want.join("\n"));
     if (sim >= SIMILARITY_THRESHOLD) return { start: s, fuzz: base + 1000, similarity: sim };
@@ -262,9 +320,13 @@ function applyUpdate(before: string, rel: string, chunks: PatchChunk[]): UpdateO
     }
     fuzz = Math.max(fuzz, match.fuzz);
     const n = want.length;
+    let replacement = chunk.newLines;
+    if (match.reindent) {
+      replacement = reindentLines(chunk.newLines, match.reindent.add, match.reindent.base);
+    }
     // Replace the matched window [start, start+n) with the chunk's new-lines.
-    lines = [...lines.slice(0, match.start), ...chunk.newLines, ...lines.slice(match.start + n)];
-    cursor = match.start + chunk.newLines.length;
+    lines = [...lines.slice(0, match.start), ...replacement, ...lines.slice(match.start + n)];
+    cursor = match.start + replacement.length;
   });
 
   return { after: fromLines(lines, eol), fuzz, warnings };
@@ -293,6 +355,7 @@ async function guardAndPreimage(
   needsPreimage: boolean,
   ctx: ToolContext,
   held: Array<() => void>,
+  wsBinding: Exclude<Awaited<ReturnType<typeof captureWorkspaceBinding>>, { error: string }>,
 ): Promise<{ ok: true; before: string | null } | { ok: false; error: string }> {
   const resolved = target.requested;
   const real = target.real;
@@ -301,7 +364,12 @@ async function guardAndPreimage(
   // deny, never let an "inside" decision authorize bytes outside the workspace.
   const action: GuardAction = { kind: "fs.write", target: real };
 
-  // Preimage BEFORE the guard/approval window (TOCTOU, like edit.ts).
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return { ok: false, error: `apply_patch: denied by policy${decision.reason ? `: ${decision.reason}` : ""} (${rel})` };
+  }
+
+  // Preimage AFTER guard and BEFORE approval window (TOCTOU, like edit.ts).
   let before: string | null = null;
   let preSha = "absent";
   if (needsPreimage) {
@@ -313,11 +381,6 @@ async function guardAndPreimage(
     } catch {
       return { ok: false, error: `apply_patch: file not found: ${rel}` };
     }
-  }
-
-  const decision = await ctx.guard(action);
-  if (decision.decision === "deny") {
-    return { ok: false, error: `apply_patch: denied by policy${decision.reason ? `: ${decision.reason}` : ""} (${rel})` };
   }
   if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
     const targetNote = real === resolved ? "" : `; resolves to ${real}`;
@@ -348,6 +411,11 @@ async function guardAndPreimage(
     held.push(await acquireLock(targetLockPath(ctx.workspace, effectReal)));
   } catch (e) {
     return { ok: false, error: `apply_patch: ${msg(e)} (${rel})` };
+  }
+
+  const wsDrift = await refuseWorkspaceIdentityDrift(ctx.workspace, wsBinding);
+  if (wsDrift !== undefined) {
+    return { ok: false, error: wsDrift };
   }
 
   // Re-read immediately before the effect: a change in the window is a conflict.
@@ -392,12 +460,18 @@ async function applyOpLocked(
   warnings: PatchWarning[],
   held: Array<() => void>,
 ): Promise<{ ok: true; fuzz: number; checkpointNote: string } | { ok: false; error: string }> {
+  const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+  if (isWorkspaceBindingError(wsBindingCap)) return { ok: false, error: wsBindingCap.error };
+  const wsBinding = wsBindingCap;
+
   if (op.kind === "add") {
     const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
     const resolved = target.requested;
     const real = target.real;
     const rel = relPath(ctx.cwd, resolved);
-    if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+    if (escapesCwd(ctx.cwd, resolved) || escapesCwd(realpathish(ctx.cwd), real)) {
+      return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+    }
     // Add File means a NEW file: refuse when the target already exists rather
     // than silently clobbering content we have no undo preimage for. (write.ts
     // enforces the same read-before-overwrite discipline; here the grammar is
@@ -408,15 +482,27 @@ async function applyOpLocked(
         error: `apply_patch: Add File refused: ${rel} already exists (Add File creates a new file; use '*** Update File:' to modify it)`,
       };
     }
-    const guarded = await guardAndPreimage(target, rel, "Add", false, ctx, held);
+    const guarded = await guardAndPreimage(target, rel, "Add", false, ctx, held, wsBinding);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
+    // Re-check existence INSIDE the per-file lock so a concurrent creator
+    // during the approval window cannot be clobbered.
+    if (await pathExists(real)) {
+      return {
+        ok: false,
+        error: `HZ_PRECONDITION_FAILED: apply_patch: Add File refused: ${rel} appeared before write lock was acquired`,
+      };
+    }
     // E-1: Add creates a new file (no pre-existing dirt), so this is a no-op,
     // but call the same opt-in hook for uniform coverage of every op.
     const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
-    const outcome = await writeAtomic(real, content, ctx, real);
+    const outcome = await withEffectR170BunMutationFence(ctx.workspace, async () => {
+      await mkdir(path.dirname(real), { recursive: true });
+      return writeAtomic(real, content, ctx, real, wsBinding);
+    });
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
-    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
+    // D-4: journal the real target (see write.ts).
+    await recordChangeGuarded(ctx.sessionId, { workspace: ctx.workspace, path: real, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
     noteRead(ctx, real);
     summary.added.push(rel);
     return { ok: true, fuzz: 0, checkpointNote };
@@ -426,20 +512,36 @@ async function applyOpLocked(
     const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
     const resolved = target.requested;
     const rel = relPath(ctx.cwd, resolved);
-    if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
-    const guarded = await guardAndPreimage(target, rel, "Delete", true, ctx, held);
+    if (escapesCwd(ctx.cwd, resolved) || escapesCwd(realpathish(ctx.cwd), target.real)) {
+      return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+    }
+    const guarded = await guardAndPreimage(target, rel, "Delete", true, ctx, held, wsBinding);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     // The removal only runs after the full guard + approval + protectedTarget +
-    // preimage checks above; the preimage is journaled so the delete can undo.
-    // `rm` on the requested path removes a symlink itself rather than its target;
-    // the guard above already classified (and required approval for) the target.
-    try {
-      await rm(resolved);
-    } catch (e) {
-      return { ok: false, error: `apply_patch: could not delete ${rel}: ${msg(e)}` };
-    }
-    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before: guarded.before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
+    // preimage + workspace-drift checks above; inspect via lstat so symlinks are
+    // unlinked safely (never following them or deleting a directory).
+    const delErr = await withEffectR170BunMutationFence(ctx.workspace, async (): Promise<string | undefined> => {
+      try {
+        const st = await lstat(resolved);
+        if (st.isDirectory()) {
+          return `apply_patch: refusing to delete directory: ${rel}`;
+        }
+        if (st.isSymbolicLink()) {
+          if (realpathish(resolved) !== target.real) {
+            return `HZ_PRECONDITION_FAILED: apply_patch refused: symlink ${rel} drifted before delete`;
+          }
+          await unlink(resolved);
+        } else {
+          await rm(resolved);
+        }
+        return undefined;
+      } catch (e) {
+        return `apply_patch: could not delete ${rel}: ${msg(e)}`;
+      }
+    });
+    if (delErr !== undefined) return { ok: false, error: delErr };
+    await recordChangeGuarded(ctx.sessionId, { workspace: ctx.workspace, path: target.real, rel, before: guarded.before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
     summary.deleted.push(rel);
     return { ok: true, fuzz: 0, checkpointNote };
   }
@@ -449,9 +551,11 @@ async function applyOpLocked(
   const resolved = target.requested;
   const real = target.real;
   const rel = relPath(ctx.cwd, resolved);
-  if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+  if (escapesCwd(ctx.cwd, resolved) || escapesCwd(realpathish(ctx.cwd), real)) {
+    return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+  }
 
-  const guarded = await guardAndPreimage(target, rel, op.movePath === undefined ? "Update" : "Move", true, ctx, held);
+  const guarded = await guardAndPreimage(target, rel, op.movePath === undefined ? "Update" : "Move", true, ctx, held, wsBinding);
   if (guarded.ok !== true) return { ok: false, error: guarded.error };
   const before = guarded.before ?? "";
 
@@ -460,9 +564,9 @@ async function applyOpLocked(
 
   if (op.movePath === undefined) {
     const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
-    const outcome = await writeAtomic(real, after, ctx, real);
+    const outcome = await withEffectR170BunMutationFence(ctx.workspace, () => writeAtomic(real, after, ctx, real, wsBinding));
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
-    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
+    await recordChangeGuarded(ctx.sessionId, { workspace: ctx.workspace, path: real, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
     noteRead(ctx, real);
     summary.updated.push(rel);
     return { ok: true, fuzz, checkpointNote };
@@ -474,28 +578,46 @@ async function applyOpLocked(
   const destResolved = destTarget.requested;
   const destReal = destTarget.real;
   const destRel = relPath(ctx.cwd, destResolved);
-  if (escapesCwd(ctx.cwd, destResolved)) return { ok: false, error: `apply_patch: move destination escapes the workspace: ${op.movePath}` };
+  if (escapesCwd(ctx.cwd, destResolved) || escapesCwd(realpathish(ctx.cwd), destReal)) {
+    return { ok: false, error: `apply_patch: move destination escapes the workspace: ${op.movePath}` };
+  }
   // A move may legitimately land on an existing file. Unlike Add File we do not
   // refuse, but we must NOT journal `before: null` and silently destroy the
   // destination's content: read its real bytes first (when `needsPreimage`,
   // guardAndPreimage returns that preimage) so undo can restore what the move
   // clobbered. A brand-new destination returns `before: null` as before.
   const destExists = await pathExists(destReal);
-  const destGuarded = await guardAndPreimage(destTarget, destRel, "Create", destExists, ctx, held);
+  const destGuarded = await guardAndPreimage(destTarget, destRel, "Create", destExists, ctx, held, wsBinding);
   if (destGuarded.ok !== true) return { ok: false, error: destGuarded.error };
   const destBefore = destGuarded.before; // the clobbered file's real preimage, or null for a new file
   // E-1: both the move destination (possibly overwritten) and the source
   // (about to be removed) get the same opt-in checkpoint before either effect.
   const checkpointNote = dirtyCheckpointPrefix(ctx, destRel) + dirtyCheckpointPrefix(ctx, rel);
-  const outcome = await writeAtomic(destReal, after, ctx, destReal);
-  if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
-  try {
-    await rm(resolved);
-  } catch (e) {
-    return { ok: false, error: `apply_patch: moved content to ${destRel} but could not remove ${rel}: ${msg(e)}` };
-  }
-  await recordChangeGuarded(ctx.sessionId, { path: destResolved, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
-  await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
+  const moveErr = await withEffectR170BunMutationFence(ctx.workspace, async (): Promise<string | undefined> => {
+    await mkdir(path.dirname(destReal), { recursive: true });
+    const outcome = await writeAtomic(destReal, after, ctx, destReal, wsBinding);
+    if (isRefused(outcome)) return outcome.refusal;
+    try {
+      const st = await lstat(resolved);
+      if (st.isDirectory()) {
+        return `apply_patch: refusing to remove directory during move: ${rel}`;
+      }
+      if (realpathish(resolved) !== real) {
+        return `HZ_PRECONDITION_FAILED: apply_patch refused: source ${rel} drifted before move cleanup`;
+      }
+      if (st.isSymbolicLink()) {
+        await unlink(resolved);
+      } else {
+        await rm(resolved);
+      }
+      return undefined;
+    } catch (e) {
+      return `apply_patch: moved content to ${destRel} but could not remove ${rel}: ${msg(e)}`;
+    }
+  });
+  if (moveErr !== undefined) return { ok: false, error: moveErr };
+  await recordChangeGuarded(ctx.sessionId, { workspace: ctx.workspace, path: destReal, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
+  await recordChangeGuarded(ctx.sessionId, { workspace: ctx.workspace, path: real, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
   noteRead(ctx, destReal);
   summary.moved.push(`${rel} -> ${destRel}`);
   return { ok: true, fuzz, checkpointNote };
@@ -610,6 +732,7 @@ export const applyPatchTool: Tool = {
 
       return { ok: true, output: lines.join("\n") };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

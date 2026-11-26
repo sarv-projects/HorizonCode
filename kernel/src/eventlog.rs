@@ -190,7 +190,9 @@ impl EventLog {
 
     pub fn stream_path(&self, stream: &str) -> Result<PathBuf, String> {
         let name = Self::sanitize(stream)?;
-        Ok(self.events_dir().join(format!("{}{}", name, STREAM_FILE_SUFFIX)))
+        Ok(self
+            .events_dir()
+            .join(format!("{}{}", name, STREAM_FILE_SUFFIX)))
     }
 
     /// Append a caller-provided `EventSeed`; returns the completed envelope.
@@ -240,7 +242,8 @@ impl EventLog {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
-            permm::private_dir(parent);
+            permm::private_dir(parent)
+                .map_err(|e| format!("cannot secure {}: {}", parent.display(), e))?;
         }
         let _lock = LockFile::acquire(&path)?;
 
@@ -285,9 +288,23 @@ impl EventLog {
         let path = self.stream_path(stream)?;
         let from_seq = from_seq.unwrap_or(1);
         let mut out = Vec::new();
-        for line in read_lines(&path)? {
-            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+        for (index, line) in read_lines(&path)?.into_iter().enumerate() {
+            if line.trim().is_empty() {
                 continue;
+            }
+            // D-12: unlike the append-tail cache (which may skip a torn final
+            // line), a READ is a claim about the log. Skipping an unparseable
+            // record would hand back a shorter "clean" list than verify_chain
+            // reports, so a corrupt record fails the read and names its line.
+            let event = match serde_json::from_str::<Value>(&line) {
+                Ok(event) => event,
+                Err(e) => {
+                    return Err(format!(
+                        "HZ_PRECONDITION_FAILED: event stream {stream} is corrupt at line {} ({}); refusing to skip it",
+                        index + 1,
+                        e
+                    ));
+                }
             };
             let seq = event.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
             if seq < from_seq {
@@ -707,7 +724,9 @@ pub fn note_appended(path: &Path, record: &Value) {
         cache_drop(path);
         return;
     };
-    let ended_at_line_boundary = cache_get(path).map(|entry| entry.len == entry.line_end).unwrap_or(false);
+    let ended_at_line_boundary = cache_get(path)
+        .map(|entry| entry.len == entry.line_end)
+        .unwrap_or(false);
     if !ended_at_line_boundary {
         cache_drop(path);
         return;
@@ -814,7 +833,11 @@ fn extend_tail_from_delta(
     let mut offset = 0u64;
     for line in text.split_inclusive('\n') {
         let complete = line.ends_with('\n');
-        let body = if complete { &line[..line.len() - 1] } else { line };
+        let body = if complete {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
         if complete {
             delta_line_end = offset + line.len() as u64;
         }
@@ -848,7 +871,10 @@ fn extend_tail_from_delta(
         }
         if value_seq >= seq {
             seq = value_seq;
-            hash = value.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string());
+            hash = value
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             record = Some(value);
         }
     }
@@ -991,9 +1017,7 @@ impl LockFile {
                     }
                     sleep(LOCK_RETRY_DELAY);
                 }
-                Err(e) => {
-                    return Err(format!("cannot create lock {}: {}", lock_path.display(), e))
-                }
+                Err(e) => return Err(format!("cannot create lock {}: {}", lock_path.display(), e)),
             }
         }
     }
@@ -1052,8 +1076,11 @@ mod tests {
         let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
         let stream = "session:cache-truncate";
         for i in 0..3u64 {
-            log.append(stream, &json!({ "type": "message.delta", "payload": { "i": i } }))
-                .expect("append");
+            log.append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": i } }),
+            )
+            .expect("append");
         }
         let path = log.stream_path(stream).expect("stream path");
         let text = fs::read_to_string(&path).expect("read chain");
@@ -1062,10 +1089,45 @@ mod tests {
         fs::write(&path, &truncated).expect("truncate");
 
         let err = log
-            .append(stream, &json!({ "type": "message.delta", "payload": { "i": 9 } }))
+            .append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": 9 } }),
+            )
             .expect_err("a truncated tail must not be extended");
         assert!(err.contains("anchor"), "unexpected refusal: {}", err);
         assert_eq!(fs::read_to_string(&path).unwrap(), truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// D-12: a malformed record is a corrupt stream, not a record to skip. An
+    /// unverified reader must not see a shorter "clean" log than verify reports.
+    #[test]
+    fn read_refuses_a_malformed_record_instead_of_skipping_it() {
+        let dir = scratch("read-corrupt");
+        let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
+        let stream = "session:read-corrupt";
+        for i in 0..3u64 {
+            log.append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": i } }),
+            )
+            .expect("append");
+        }
+        let path = log.stream_path(stream).expect("stream path");
+        let text = fs::read_to_string(&path).expect("read chain");
+        let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+        lines[1] = "{\"not\": an event".to_string();
+        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("corrupt middle record");
+
+        let err = log
+            .read(stream, None, None)
+            .expect_err("a corrupt record must fail the read");
+        assert!(err.contains("corrupt"), "unexpected refusal: {}", err);
+        assert!(
+            err.contains("line 2"),
+            "the refusal must name the line: {}",
+            err
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1076,8 +1138,11 @@ mod tests {
         let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
         let stream = "session:cache-rewrite";
         for i in 0..3u64 {
-            log.append(stream, &json!({ "type": "message.delta", "payload": { "i": i } }))
-                .expect("append");
+            log.append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": i } }),
+            )
+            .expect("append");
         }
         let path = log.stream_path(stream).expect("stream path");
         let text = fs::read_to_string(&path).expect("read chain");
@@ -1088,7 +1153,10 @@ mod tests {
         fs::write(&path, format!("{}\n", lines.join("\n"))).expect("rewrite tail");
 
         let err = log
-            .append(stream, &json!({ "type": "message.delta", "payload": { "i": 9 } }))
+            .append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": 9 } }),
+            )
             .expect_err("a rewritten tail must not be extended");
         assert!(err.contains("anchor"), "unexpected refusal: {}", err);
         let _ = fs::remove_dir_all(&dir);

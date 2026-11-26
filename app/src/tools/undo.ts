@@ -26,8 +26,10 @@ import { rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 import { realpathish } from "../core/paths";
 import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   BEFORE_MAX_BYTES,
@@ -38,8 +40,9 @@ import {
   type ChangeEntry,
   type JournalStatus,
 } from "./change-journal";
-import { relPath, resolvePath, resolveRealTarget } from "./helpers";
+import { relPath, resolveRealTarget } from "./helpers";
 import { noteRead } from "./read-ledger";
+import { protectedTargetRefusal } from "./verified-open";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -97,7 +100,12 @@ export const undoTool: Tool = {
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
-      const scope = typeof args.path === "string" && args.path !== "" ? resolvePath(ctx.cwd, args.path) : undefined;
+      // D-4: the journal names the effect's real path, so a scoped undo resolves
+      // the caller's spelling the same way before it compares.
+      const scope =
+        typeof args.path === "string" && args.path !== ""
+          ? resolveRealTarget(ctx.cwd, args.path, ctx.workspace).real
+          : undefined;
       // The workspace this session writes for: the entry may not name it on its
       // own (a path outside the workspace), and consume must tombstone the
       // right journal.
@@ -144,27 +152,8 @@ export const undoTool: Tool = {
       const target = resolveRealTarget(ctx.cwd, entry.path, ctx.workspace);
       const real = target.real;
 
-      // The stale-check: current bytes must still be what the recorded change
-      // wrote. Anything else is a concurrent edit, and undo declines it.
-      let current: string;
-      try {
-        current = (await readFile(real)).toString("utf8");
-      } catch {
-        return fail(
-          `HZ_PRECONDITION_FAILED: undo refused: ${rel} is gone or unreadable; ` +
-            `the recorded change expected sha256 ${entry.afterSha256} -- refusing to touch the path`,
-        );
-      }
-      const actual = sha256Hex(current);
-      if (actual !== entry.afterSha256) {
-        return fail(
-          `HZ_PRECONDITION_FAILED: undo refused: ${rel} changed since the recorded change wrote it ` +
-            `(expected sha256 ${entry.afterSha256}; actual sha256 ${actual}); ` +
-            `refusing to overwrite a concurrent edit -- read it and decide`,
-        );
-      }
-
-      // Same consent path as the write/edit it reverses, on the real target.
+      // Same consent path as the write/edit it reverses, on the real target —
+      // ALWAYS before reading or touching disk.
       const action: GuardAction = { kind: "fs.write", target: real };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
@@ -180,31 +169,58 @@ export const undoTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      if (entry.before === null) {
-        // The file exists only because of the recorded change -- and it still
-        // matches that change (checked above), so removing it is exact reversal.
-        // Re-resolve immediately before the removal: a path swapped for a link
-        // to another directory after the guard must not be removed there.
+      const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult> => {
         const effectReal = realpathish(entry.path);
         if (effectReal !== real) {
           return fail(
             `HZ_PRECONDITION_FAILED: undo refused: ${entry.path} now resolves to ${effectReal} ` +
-              `(the approved target was ${real}); nothing was removed`,
+              `(the approved target was ${real}); nothing was ${entry.before === null ? "removed" : "written"}`,
           );
         }
-        rmSync(entry.path);
-        await consumeChangeGuarded(ctx.sessionId, entry);
-        return { ok: true, output: `Removed ${rel} (it existed only because of the last recorded ${entry.tool}; undo)` };
-      }
+        const refused = await protectedTargetRefusal(entry.path, effectReal, ctx);
+        if (refused !== undefined) return fail(refused);
 
-      const outcome = await writeAtomic(real, entry.before, ctx, real);
-      if (isRefused(outcome)) return fail(outcome.refusal);
-      // Append the consume tombstone: a reload must not resurrect this entry.
-      await consumeChangeGuarded(ctx.sessionId, entry);
-      // The session now holds the restored bytes -- later edits are legitimate.
-      noteRead(ctx, real);
-      return { ok: true, output: `Restored ${rel} to its content before the last recorded ${entry.tool}` };
+        // The stale-check: current bytes must still be what the recorded change
+        // wrote. Anything else is a concurrent edit, and undo declines it.
+        let current: string;
+        try {
+          current = (await readFile(real)).toString("utf8");
+        } catch {
+          return fail(
+            `HZ_PRECONDITION_FAILED: undo refused: ${rel} is gone or unreadable; ` +
+              `the recorded change expected sha256 ${entry.afterSha256} -- refusing to touch the path`,
+          );
+        }
+        const actual = sha256Hex(current);
+        if (actual !== entry.afterSha256) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: undo refused: ${rel} changed since the recorded change wrote it ` +
+              `(expected sha256 ${entry.afterSha256}; actual sha256 ${actual}); ` +
+              `refusing to overwrite a concurrent edit -- read it and decide`,
+          );
+        }
+
+        if (entry.before === null) {
+          // D-4: remove the effect's target, never a lexical spelling of it.
+          rmSync(real);
+          await consumeChangeGuarded(ctx.sessionId, entry);
+          return { ok: true, output: `Removed ${rel} (it existed only because of the last recorded ${entry.tool}; undo)` };
+        }
+
+        const outcome = await writeAtomic(real, entry.before, ctx, real);
+        if (isRefused(outcome)) return fail(outcome.refusal);
+        // Append the consume tombstone: a reload must not resurrect this entry.
+        await consumeChangeGuarded(ctx.sessionId, entry);
+        // The session now holds the restored bytes -- later edits are legitimate.
+        noteRead(ctx, real);
+        return { ok: true, output: `Restored ${rel} to its content before the last recorded ${entry.tool}` };
+      }).catch((e: unknown) => {
+        tunnelPermissionError(e);
+        return fail(msg(e));
+      });
+      return locked;
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

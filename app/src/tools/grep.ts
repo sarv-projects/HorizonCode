@@ -4,13 +4,15 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
 import { realpathish } from "../core/paths";
-import { isBinary, relPath, resolveRealTarget } from "./helpers";
+import { isBinary, relPath, resolveRealTarget, scrubEnv } from "./helpers";
 import { gitIgnoredPaths } from "./ignore";
 
 const MAX_RESULTS = 200;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const RG_TIMEOUT_MS = 30_000;
 /** Candidate files the JS fallback collects before filtering/searching. */
 const MAX_CANDIDATES = 50_000;
 // `.hz` (canonical) and `.hzcode` (legacy) hold runtime state (kernel files, the
@@ -75,19 +77,21 @@ async function rgSearch(
   globFilter: string | undefined,
   cwd: string,
   stateDir: string,
+  signal: AbortSignal,
 ): Promise<string[] | null> {
+  if (signal.aborted) return [];
   const cmd = [exe, "--json", "--no-config", "--no-messages", "--color", "never", "-e", pattern];
   if (globFilter) cmd.push("--glob", globFilter);
   for (const exclude of RG_EXCLUDES) cmd.push("--glob", exclude);
-  cmd.push(root);
+  cmd.push("--", root);
 
   let proc: Awaited<ReturnType<typeof spawnOwned>>["proc"];
   try {
     // NF-071: the single spawn path (foreground: ledger row, no supervisor).
-    // cwd/env stay inherited exactly as before; only the record is added.
     ({ proc } = await spawnOwned(cmd, {
       stateDir,
       label: "grep:rg",
+      env: scrubEnv(),
       stdio: { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
       longLived: false,
     }));
@@ -99,8 +103,23 @@ async function rgSearch(
   const decoder = new TextDecoder();
   const reader = proc.stdout.getReader();
   let buf = "";
+  const killRg = (): void => {
+    try {
+      proc.kill(9);
+    } catch {
+      /* ignore */
+    }
+    try {
+      void reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  };
+  const timer = setTimeout(killRg, RG_TIMEOUT_MS);
+  signal.addEventListener("abort", killRg, { once: true });
   try {
     outer: for (;;) {
+      if (signal.aborted) break;
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -115,6 +134,9 @@ async function rgSearch(
     }
   } catch {
     /* stream closed early */
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", killRg);
   }
   try {
     reader.cancel();
@@ -150,6 +172,7 @@ async function jsSearch(
   globFilter: string | undefined,
   cwd: string,
   stateDir: string,
+  signal?: AbortSignal,
 ): Promise<{ matches: string[]; note?: string }> {
   let re: RegExp;
   try {
@@ -190,7 +213,7 @@ async function jsSearch(
   const candidates: string[] = [];
   let capped = false;
   const walk = (dir: string): void => {
-    if (capped) return;
+    if (capped || signal?.aborted) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -198,6 +221,7 @@ async function jsSearch(
       return;
     }
     for (const entry of entries) {
+      if (signal?.aborted) return;
       if (candidates.length >= MAX_CANDIDATES) {
         capped = true;
         return;
@@ -231,9 +255,10 @@ async function jsSearch(
   if (rootIsFile) candidates.push(root);
   else walk(root);
 
+  if (signal?.aborted) return { matches: results };
   const ignored = await gitIgnoredPaths(cwd, candidates, stateDir);
   for (const abs of candidates) {
-    if (results.length >= MAX_RESULTS) break;
+    if (signal?.aborted || results.length >= MAX_RESULTS) break;
     if (ignored.has(abs)) continue;
     // Defensive per-candidate check (a race can swap a path component after the
     // walk): refuse symlinks and any candidate whose real path differs from the
@@ -285,10 +310,12 @@ export const grepTool: Tool = {
 
       const rg = Bun.which("rg");
       const stateDir = kernelStateDir(ctx.workspace);
-      let results = rg ? await rgSearch(rg, pattern, root, globFilter, ctx.cwd, stateDir) : null;
+      let results = rg ? await rgSearch(rg, pattern, root, globFilter, ctx.cwd, stateDir, ctx.signal) : null;
       let incomplete: string | undefined;
       if (results === null) {
-        const js = await jsSearch(pattern, root, globFilter, ctx.cwd, stateDir);
+        if (ctx.signal.aborted) return fail("aborted");
+        const js = await jsSearch(pattern, root, globFilter, ctx.cwd, stateDir, ctx.signal);
+        if (ctx.signal.aborted) return fail("aborted");
         results = js.matches;
         incomplete = js.note;
       }
@@ -301,6 +328,7 @@ export const grepTool: Tool = {
       if (notices.length === 0) return { ok: true, output: body };
       return { ok: true, output: body === "" ? notices.join("\n") : `${body}\n${notices.join("\n")}` };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

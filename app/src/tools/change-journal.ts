@@ -82,6 +82,13 @@ export interface ChangeEntry {
   sessionId?: string;
   /** Absolute resolved path (what the effect landed on). */
   path: string;
+  /**
+   * The workspace whose journal owns this record. Callers set it from their
+   * ToolContext so an effect whose real target lies outside the workspace (a
+   * symlink target) still lands in the workspace journal (D-4), instead of the
+   * record being filed against the target's own directory.
+   */
+  workspace?: string;
   /** Workspace-relative path, for messages. */
   rel: string;
   /**
@@ -263,6 +270,13 @@ function workspaceFor(sessionId: string): string | undefined {
 
 function resolveWorkspace(sessionId: string, entry?: ChangeEntry): string | undefined {
   if (entry !== undefined) {
+    // An explicit workspace wins: the record belongs to the session's journal
+    // even when the effect's real path is outside that workspace (D-4).
+    if (typeof entry.workspace === "string" && entry.workspace !== "") {
+      const bound = realpathish(path.resolve(entry.workspace));
+      BINDINGS.set(sessionId, bound);
+      return bound;
+    }
     const derived = workspaceFromEntry(entry);
     if (derived !== undefined) {
       BINDINGS.set(sessionId, derived);

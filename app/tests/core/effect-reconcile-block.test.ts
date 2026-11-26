@@ -529,7 +529,23 @@ test("an active reconcile latch refuses unclassified effect paths but permits re
   for (const name of ["shell_session", "code_mode", "agent", "preview", "todo", "mcp__remote__write", "new_tool"]) {
     expect(effectReconcileBlockRefusal(workspace, sid, name, {})).toContain(`refusing ${name}`);
   }
-  for (const name of ["read", "grep", "glob", "repo_map", "ast_search", "tool_search", "memory_search"]) {
+  for (const name of [
+    "read",
+    "grep",
+    "glob",
+    "repo_map",
+    "ast_search",
+    "tool_search",
+    "memory_search",
+    "handoff_search",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_blame",
+    "ctx_inspect",
+    "history_snip_preview",
+    "verified_open",
+  ]) {
     expect(effectReconcileBlockRefusal(workspace, sid, name, {})).toBeUndefined();
   }
 });

@@ -163,6 +163,22 @@ describe("kernel shell argv route", () => {
       await kernel.close();
     }
   });
+
+  test("a transport error is a final shell refusal, not an absent route", async () => {
+    const kernel = {
+      mode: "trusted",
+      makeLease: async () => ({ leaseId: "lease-1", expiry: "2099-01-01T00:00:00.000Z" }),
+      executeEffect: async () => {
+        throw new Error("transport down");
+      },
+    } as unknown as KernelClient;
+    const out = await tryKernelShellRoute(kernel, workspace, "eff-down", { command: "echo hi" }, {
+      sessionId: "s-down",
+      admittedByLoop: true,
+    });
+    expect(out?.result.ok).toBe(false);
+    expect(out?.result.output).toContain("transport down");
+  });
 });
 
 describe("kernel apply_patch / ast_edit route", () => {

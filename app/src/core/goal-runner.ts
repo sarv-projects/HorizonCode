@@ -13,6 +13,7 @@
  */
 
 import type { Runtime } from "../contracts";
+import type { GoalEvaluator, GoalEvaluatorVerdict } from "./goal-evaluator";
 import { evaluateTerminationGate } from "./termination-gate";
 import { bold, cyan, dim, green, red, yellow } from "../tui/style";
 
@@ -20,6 +21,12 @@ export interface GoalRunOptions {
   maxRounds?: number;
   workspace: string;
   signal?: AbortSignal;
+  /**
+   * Generator / Evaluator Separation: when supplied, an independent evaluator
+   * reviews the round before the goal can be declared achieved. Absent = the
+   * original same-session gate behaviour, byte-identical.
+   */
+  evaluator?: GoalEvaluator;
 }
 
 export interface GoalRunResult {
@@ -101,7 +108,34 @@ export async function runAutonomousGoalLoop(
       workspace,
     });
 
-    if (gateResult.canTerminate) {
+    // Generator / Evaluator Separation: an independent evaluator must also
+    // pass before a goal can be declared achieved. The local gate stays as a
+    // necessary (not sufficient) condition; the evaluator never trusts the
+    // generator's own state or narration.
+    let evaluation: GoalEvaluatorVerdict | undefined = undefined;
+    if (opts.evaluator !== undefined) {
+      renderer.notice(dim(`[evaluator] Independent review of round ${round}...`));
+      try {
+        evaluation = await opts.evaluator.evaluate({
+          objective,
+          round,
+          changedPaths: changed,
+          gateFeedback: gateResult.feedback ?? gateResult.notice,
+        });
+      } catch (err) {
+        evaluation = {
+          verdict: "fail",
+          reasons: [`evaluator error: ${err instanceof Error ? err.message : String(err)}`],
+        };
+      }
+      renderer.notice(
+        evaluation.verdict === "pass"
+          ? green(`[evaluator] Independent review passed`)
+          : yellow(`[evaluator] Independent review withheld: ${evaluation.reasons.join("; ")}`),
+      );
+    }
+
+    if (gateResult.canTerminate && (evaluation === undefined || evaluation.verdict === "pass")) {
       renderer.notice(green(`✔ Verification Gate Passed: Syntax clean, Tests pass`));
       renderer.notice(bold(green(`\n★ GOAL ACHIEVED: `)) + objective);
 
@@ -110,7 +144,8 @@ export async function runAutonomousGoalLoop(
       }
       return { status: "achieved", objective, roundsRun: round };
     } else {
-      const reason = gateResult.feedback ?? gateResult.notice ?? "Verification incomplete";
+      const gateReason = gateResult.feedback ?? gateResult.notice ?? "Verification incomplete";
+      const reason = evaluation?.verdict === "fail" ? evaluation.reasons.join("; ") : gateReason;
       renderer.notice(yellow(`⚠ Round ${round} verification incomplete: ${gateResult.notice ?? reason}`));
       currentFeedback = reason;
     }

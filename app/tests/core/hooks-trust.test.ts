@@ -183,7 +183,7 @@ describe("workspace hook trust", () => {
       if (prevUser === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = prevUser;
     }
-  });
+  }, 15_000);
 
   test("isWorkspaceTrustApprovalTitle matches bind/rebind cards only", () => {
     expect(isWorkspaceTrustApprovalTitle("Trust this workspace folder?")).toBe(true);

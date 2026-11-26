@@ -79,6 +79,7 @@ export function sandboxNetnsProductSpawnOptIn(env: Record<string, string | undef
 export function productSpawnVethMode(env: Record<string, string | undefined>): "join" | "create" | "none" {
   if (sandboxExecVethJoinRequested(env)) return "join";
   if (sandboxExecVethCreateRequested(env)) return "create";
+  if (env.HZ_SANDBOX_VETH_CREATE !== undefined && envFlagOff(env.HZ_SANDBOX_VETH_CREATE)) return "none";
   const mode = env.HZ_SANDBOX_NETNS_SPAWN_VETH?.trim().toLowerCase();
   if (mode === "join") return "join";
   if (mode === "create") return "create";
@@ -164,7 +165,7 @@ export function assessSandboxNetnsProductSpawnWiring(
   }
   return {
     wired: spawn.wired,
-    detail: "product ROUTED proxy only (HZ_SANDBOX_NETNS_SPAWN_VETH=none) — no veth join/create auto wire",
+    detail: "product ROUTED proxy only (veth mode none or CREATE explicitly off) — no veth join/create auto wire",
   };
 }
 

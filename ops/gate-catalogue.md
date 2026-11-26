@@ -2,7 +2,7 @@
 
 > **What this file is:** the map from the 17 gate rows in `docs/24-feature-catalog.md` §3.5 (the 18 distinct gates counted in its §6.3) to what this repository can actually check. Companion to `ops/gates.sh`, the runner.
 >
-> **Two states, no third.** `runnable` means `ops/gates.sh` runs it, and the step is named. `declared-gap` means the gate is design-only: no surface exists to check it against, and the reason is stated. A gate is **never** marked runnable because something adjacent passes — a green runner says the six steps in §2 ran, and nothing about the design-only rows.
+> **Two states, no third.** `runnable` means `ops/gates.sh` runs it, and the step is named. `declared-gap` means the gate is design-only: no surface exists to check it against, and the reason is stated. A gate is **never** marked runnable because something adjacent passes — a green runner says the nine steps in §2 ran, and nothing about the design-only rows.
 >
 > Row order follows §3.5; `gate:file-size` / `gate:function-size` share one row there and are two gates here.
 
@@ -22,7 +22,7 @@
 | `gate:tool-declaration` | declared-gap | `Tool` (`app/src/contracts.ts`) declares name, description, parameters and `concurrencyClass`; effect class, capability ID, idempotency and renderers have no field to be missing from. |
 | `gate:receipt-coverage` | declared-gap | Every executed tool call is receipted centrally by the loop, but no tool declares an *observation path* — there is no declaration to fail. |
 | `gate:no-unknown-retry` | declared-gap | Nothing produces an `UNKNOWN` settlement yet, and nothing retries anything: the RC-7 vocabulary exists (`TerminalState`), but the effect path (and its reconciliation surface) the gate guards does not. |
-| `gate:kernel-pin` | declared-gap | The kernel binary is *discovered* (`HZ_KERNEL_BIN`, else the release or debug build under `kernel/target/`) — no digest, manifest or pin exists, so nothing can be stale or unpinned. |
+| `gate:kernel-pin` | declared-gap | `kernel/kernel.sha256` and `kernel/kernel.sha256.win32` pin the binary digest at runtime via `verifyKernelPin` (and `ops/gates.sh` exports `HZ_KERNEL_SHA256`), but no dedicated CI gate validates `ops/kernel-pin.toml` + signed release manifest yet (stale `app/kernel.sha256` tracked in `FULL-BACKLOG` §Z). |
 | `gate:cross-plane-abi` | declared-gap | There is no native addon and no ABI to version: the cross-plane is NDJSON over stdio. The closest shipped behaviour is refusal-finality (a kernel refusal is never routed around, `app/src/core/kernel.ts`) — posture evidence, not this gate. |
 | `gate:doc-status` | declared-gap | Status levels are maintained by hand (docs/28 §1); nothing parses the tables, and no claimed level names an executable evidence command that CI runs. |
 | `gate:dead-lane-fail-closed` | declared-gap | v0.1 has no optional lane with an on/off switch (the kernel-mode fallback is reported honestly with its reason, but it is a transport fallback, not a dead lane), so no disabled lane can be demanded to refuse. |
@@ -31,7 +31,7 @@
 
 ## 2. What `ops/gates.sh` runs today
 
-Eight gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-10 on branch `docs/handoff` (as root, `bash ops/gates.sh`): all eight gates passed, none skipped (`rust-kernel-suite` about 4 s, `kernel-selftest` 36 ms, `ts-typecheck` 0.3 s, `ts-suite` about 67 s, the three e2e steps about 0.1 to 0.2 s each, `startup-latency` 1.6 s). On 2026-11-09 the run stopped at `ts-suite` as root on 11 permission tests that cannot bind for uid 0; those tests now skip themselves by a behavioural probe (rulings 39 and 51), so the earlier fail-fast stop no longer occurs.
+Nine gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Historical 8-gate timing baseline measured 2026-11-10 on branch `docs/handoff` (as root, `bash ops/gates.sh`): `rust-kernel-suite` about 4 s, `kernel-selftest` 36 ms, `ts-typecheck` 0.3 s, `ts-suite` about 67 s, the three e2e steps about 0.1 to 0.2 s each, `startup-latency` 1.6 s; `ruling-ceiling` was added as the 9th gate. Re-verified 2026-11-25 in WSL: 9/9 passed (`rust-kernel-suite` 350/350, `ts-suite` 720+ test files). On 2026-11-09 the run stopped at `ts-suite` as root on 11 permission tests that cannot bind for uid 0; those tests now skip themselves by a behavioural probe (rulings 39 and 51), so the earlier fail-fast stop no longer occurs.
 
 | Step | What it proves | Existing evidence for it |
 |---|---|---|
@@ -43,8 +43,9 @@ Eight gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). 
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
 | `e2e-usage-error` | `./bin/hzcode --max-steps nope` exits 2 with the diagnostic naming the flag | docs/28 §3 ruling 15; docs/14 §3.2 (exit table) |
 | `startup-latency` | the median of 5 timed runs (after one untimed warm-up) of `hzcode --version` is at most 500 ms, and of one headless mock turn (spawn, kernel, glob call, receipt, exit) at most 1000 ms; every run must also exit 0 and print its expected text, so a crash is never "fast". Override with `HZ_LATENCY_VERSION_MS` / `HZ_LATENCY_TURN_MS`. Needs a millisecond clock (bash 5 or GNU date) and fails rather than guess without one. About 2 s of gate time | docs/28 ruling 72; the numbers are below |
+| `ruling-ceiling` | verifies the ruling count in `docs/28-implementation-status.md` §3 does not exceed the configured ceiling (970) | `ops/gates.sh` (`ruling-ceiling` step) |
 
-None of these eight *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
+None of these nine *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
 
 ### Startup-latency numbers
 

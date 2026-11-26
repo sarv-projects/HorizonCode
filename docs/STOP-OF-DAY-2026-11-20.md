@@ -2,7 +2,7 @@
 
 > **Goal: NOT COMPLETE.** LICENSE deferred ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)). Never claim shell-net egress **`enforced`**. Nothing is **RELEASED**.
 >
-> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **744**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). Deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md). Competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md).
+> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **970**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). Deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md). Competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md).
 >
 > **Recheck:** inventory through **735** + honesty **736** + viability **737** + follow-up **738** (ruling-ID cites, GOAL dedupe, steal-list spend alignment) + docs-consistency **739** (P1/P2 closure) + authority hardening & stability **740** + G1 wire projection & TUI chat bar validation & 8/8 gates **741** + smart key detection & interactive /model & auth diagnostics **742** + Three-Layer Termination Gate & First-Time Auth Wizard & R170 settle **743** + interactive TTY model picker & command palette & prefix autocomplete & prompt queue combiner & goal driver **744**.
 
@@ -83,16 +83,16 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 | **Human approval principal** | **PARTIAL** | Cryptographic human identity; kernel-bound UI attestation; policy-allow internal mint stamps |
 | **H-29 / H-30 / CB-6** | **PARTIAL** | Windows `--socket` / SO_PEERCRED detach; hot-swap without orphan teardown |
 | **H-31** | **PARTIAL** | Intermediate-component / non-Linux TOCTOU beyond **734** |
-| **Speculation** | **PARTIAL** | Segment ordering; hook parity; default-on |
-| **Multimodal / vision** | **PARTIAL** | Gemini/Ollama multipart; live provider E2E; mid-turn images |
-| **web_search** | **PARTIAL** | Kernel `net.search`; routed egress; budget metering |
-| **Token / LLM compaction** | **PARTIAL** | Per-message token trim; default-on LLM compact; invoice truth for `/tokens` |
-| **ask_user** | **PARTIAL** | Multi-select; timeout; dedicated clarify frame |
-| **Autonomy envelopes** | **PARTIAL** | OS blast-radius confinement (tiers exist **678**) |
-| **Symbol graph** | **PARTIAL** | Tree-sitter / semantic edges; default-on durable graph |
+| **Speculation** | **PARTIAL** | Segment ordering & hook parity (**879**); default-on |
+| **Multimodal / vision** | **PARTIAL** | Gemini/Ollama multipart (**872**) + mid-turn images (**874**) tested; live provider E2E |
+| **web_search** | **PARTIAL** | Budget metering & rate limit (**873**); kernel net.search; routed egress |
+| **Token / LLM compaction** | **PARTIAL** | Per-message token trim & head-tail pruner (**875**); default-on LLM compact; invoice truth for `/tokens` |
+| **ask_user** | **TESTED** | Multi-select & timeout (**870**) + dedicated clarify frame (**876**) |
+| **Autonomy envelopes** | **TESTED** | Blast-radius confinement & stage-and-exit (**871**; tiers **678**) |
+| **Symbol graph** | **PARTIAL** | Durable SQLite graph & semantic edges (**878**); tree-sitter AST |
 | **Eng Brain / AST (640)** | **PARTIAL** | Full AST call-graph; isolated cross-model critic session |
 | **Code Mode 2.0 (641)** | **PARTIAL** | WSL netns prove; full tool set; kernel route |
-| **Best-of-N** | **PARTIAL** | Kernel pool leases; reset-before-reuse; chooser variance; product UI |
+| **Best-of-N** | **PARTIAL** | Reset-before-reuse & score distribution (**877**); kernel pool leases; product UI |
 | **shell.exec / hz-sandbox-exec (660)** | **PARTIAL** | Wider unconfined allowlist; product shell-net never `enforced` |
 | **LICENSE** | **DEFERRED** | No root `LICENSE` — owner decision ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)) |
 
@@ -106,7 +106,7 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 | **C-11** | PARTIAL | Empirical difficulty-corpus calibration |
 | **C-12** | PARTIAL | Windows parent-walk prove; full R170 / live D-6 over pipe |
 | **C-13** | PARTIAL | Kernel-owned R170 (not SQLite fence alone) |
-| **D-3** | PARTIAL | Monotonic sleep-wake re-anchor; Windows births |
+| **D-3** | PARTIAL | Monotonic sleep-wake re-anchor tested (**881**); Windows births |
 | **F-4** | PARTIAL | Live invoice truth (+ shell-net egress) |
 | **G-1** | PARTIAL | Live-provider cost capture / invoice reconciliation |
 | **G-9** | PARTIAL | Full external if-bench corpus |

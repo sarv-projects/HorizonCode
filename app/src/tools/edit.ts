@@ -31,7 +31,178 @@ import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 import { noteToolContext } from "./repo-map-context";
+import {
+  applyVerifiedSelectionEdits,
+  isVerifiedSelectionEdit,
+  type VerifiedSelectionEdit,
+} from "./verified-selection";
 import { guardEffectivelyAllows } from "../core/guard-g1-wire";
+import { tunnelPermissionError } from "../core/guards/defect-tunnel";
+
+/* ------------------------ Post-edit LSP diagnostics ------------------------ */
+
+export const POST_EDIT_LSP_ENV = "HZ_POST_EDIT_LSP";
+export const POST_EDIT_LSP_MAX_ITEMS = 10;
+export const POST_EDIT_LSP_TIMEOUT_MS = 500;
+
+export interface PostEditLspDiagnostic {
+  file?: string;
+  path?: string;
+  line: number;
+  col?: number;
+  column?: number;
+  severity?: "error" | "warning" | "info" | "hint" | number | string;
+  message: string;
+}
+
+export type PostEditLspRawResult =
+  | readonly PostEditLspDiagnostic[]
+  | readonly string[]
+  | string
+  | {
+      diagnostics?: readonly PostEditLspDiagnostic[];
+      messages?: readonly string[];
+    }
+  | null
+  | undefined;
+
+export interface PostEditLspProvider {
+  diagnostics?: (
+    filePath: string,
+    opts?: { signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<PostEditLspRawResult> | PostEditLspRawResult;
+  getDiagnostics?: (
+    filePath: string,
+    opts?: { signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<PostEditLspRawResult> | PostEditLspRawResult;
+}
+
+type ToolContextWithLsp = ToolContext & {
+  lsp?: PostEditLspProvider;
+};
+
+function normalizeLspSeverity(sev: PostEditLspDiagnostic["severity"]): string {
+  if (sev === undefined || sev === null) return "";
+  if (typeof sev === "number") {
+    if (sev === 1) return "error";
+    if (sev === 2) return "warning";
+    if (sev === 3) return "info";
+    if (sev === 4) return "hint";
+    return "";
+  }
+  const s = String(sev).trim().toLowerCase();
+  return s === "" ? "" : s;
+}
+
+/**
+ * Format bounded post-edit LSP diagnostics (`file:line:col message`), capped at
+ * `maxItems` (default 10). Returns `""` when there are no diagnostics to report.
+ */
+export function formatPostEditLspDiagnostics(
+  raw: PostEditLspRawResult,
+  defaultFile: string,
+  maxItems = POST_EDIT_LSP_MAX_ITEMS,
+): string {
+  if (raw === null || raw === undefined) return "";
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return "";
+    return trimmed.startsWith("<lsp-diagnostics>") ? `\n${trimmed}` : `\n<lsp-diagnostics>\n${trimmed}\n</lsp-diagnostics>`;
+  }
+
+  const lines: string[] = [];
+  const pushDiag = (d: PostEditLspDiagnostic): void => {
+    const file = (d.file ?? d.path ?? defaultFile).trim() || defaultFile;
+    const line = Number.isFinite(d.line) ? Math.max(1, Math.floor(d.line)) : 1;
+    const colRaw = d.col ?? d.column;
+    const col = typeof colRaw === "number" && Number.isFinite(colRaw) ? Math.max(1, Math.floor(colRaw)) : 1;
+    const sev = normalizeLspSeverity(d.severity);
+    const body = String(d.message ?? "").replace(/\s+/g, " ").trim();
+    if (body === "") return;
+    lines.push(sev ? `${file}:${line}:${col} [${sev}] ${body}` : `${file}:${line}:${col} ${body}`);
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") {
+        const t = item.trim();
+        if (t !== "") lines.push(t);
+      } else if (item !== null && typeof item === "object") {
+        pushDiag(item as PostEditLspDiagnostic);
+      }
+    }
+  } else if (typeof raw === "object") {
+    const obj = raw as { diagnostics?: readonly PostEditLspDiagnostic[]; messages?: readonly string[] };
+    if (Array.isArray(obj.diagnostics)) {
+      for (const d of obj.diagnostics) {
+        if (d && typeof d === "object") pushDiag(d);
+      }
+    } else if (Array.isArray(obj.messages)) {
+      for (const m of obj.messages) {
+        if (typeof m === "string" && m.trim() !== "") lines.push(m.trim());
+      }
+    }
+  }
+
+  if (lines.length === 0) return "";
+  const cap = Math.max(1, Math.floor(maxItems));
+  const shown = lines.slice(0, cap);
+  if (lines.length > cap) {
+    shown.push(`... (+${lines.length - cap} more)`);
+  }
+  return `\n<lsp-diagnostics>\n${shown.join("\n")}\n</lsp-diagnostics>`;
+}
+
+/**
+ * Post-edit LSP diagnostics hook: runs ONLY after a successful file edit when
+ * `HZ_POST_EDIT_LSP !== "0"` and an LSP provider is attached to `ctx.lsp` (or
+ * `ctx.postEditDiagnosticsNotice`). Enforces a short timeout and degrades to a
+ * silent no-op on error, timeout, or missing provider.
+ */
+export async function collectPostEditLspDiagnostics(
+  ctx: ToolContext,
+  absPath: string,
+  rel: string,
+  opts?: { timeoutMs?: number; maxItems?: number; env?: Record<string, string | undefined> },
+): Promise<string> {
+  const env = opts?.env ?? process.env;
+  if (env[POST_EDIT_LSP_ENV] === "0") return "";
+
+  const lsp = (ctx as ToolContextWithLsp).lsp;
+  const providerFn =
+    typeof lsp?.diagnostics === "function"
+      ? (p: string, o: { signal?: AbortSignal; timeoutMs?: number }) => lsp.diagnostics!(p, o)
+      : typeof lsp?.getDiagnostics === "function"
+        ? (p: string, o: { signal?: AbortSignal; timeoutMs?: number }) => lsp.getDiagnostics!(p, o)
+        : undefined;
+
+  const fallbackNotice = !providerFn && typeof ctx.postEditDiagnosticsNotice === "function"
+    ? ctx.postEditDiagnosticsNotice
+    : undefined;
+
+  if (!providerFn && !fallbackNotice) return "";
+
+  const timeoutMs =
+    opts?.timeoutMs !== undefined && opts.timeoutMs > 0 ? opts.timeoutMs : POST_EDIT_LSP_TIMEOUT_MS;
+  const maxItems =
+    opts?.maxItems !== undefined && opts.maxItems > 0 ? opts.maxItems : POST_EDIT_LSP_MAX_ITEMS;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const queryPromise: Promise<PostEditLspRawResult> = providerFn
+      ? Promise.resolve(providerFn(absPath, { signal: ctx.signal, timeoutMs }))
+      : Promise.resolve(fallbackNotice!([absPath]));
+    const timeoutPromise = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), timeoutMs);
+    });
+    const raw = await Promise.race([queryPromise, timeoutPromise]);
+    return formatPostEditLspDiagnostics(raw, rel, maxItems);
+  } catch {
+    return "";
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -323,7 +494,16 @@ export type EditRung = (typeof EDIT_LADDER)[number];
 export const MAX_EDIT_REFLECTIONS = 1;
 
 /** Failed locate attempts per `session\0path`; cleared by a successful edit. */
+const MAX_REFLECTIONS_ENTRIES = 256;
 const reflections = new Map<string, number>();
+
+function setReflection(key: string, attempts: number): void {
+  if (!reflections.has(key) && reflections.size >= MAX_REFLECTIONS_ENTRIES) {
+    const oldest = reflections.keys().next();
+    if (!oldest.done) reflections.delete(oldest.value);
+  }
+  reflections.set(key, attempts);
+}
 
 function reflectionKey(ctx: ToolContext, resolved: string): string {
   return `${ctx.sessionId}\u0000${resolved}`;
@@ -617,6 +797,18 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
   }
 
+  const needsApproval = decision.decision === "ask" && !guardEffectivelyAllows(decision);
+  // Do not leak outside-workspace file existence/contents via readFile before user approval.
+  let approvedBeforeRead = false;
+  if (needsApproval && !target.inside) {
+    const approved = await ctx.approve(
+      { title: `Edit ${rel}`, detail: `anchored edit${targetNote}`, kind: "fs.write" },
+      action,
+    );
+    if (!approved) return fail("declined by user");
+    approvedBeforeRead = true;
+  }
+
   let before: string;
   let preimageSha256: string;
   try {
@@ -627,7 +819,6 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   } catch {
     return fail(`file not found: ${rel}`);
   }
-  const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
 
   const lf = toLfView(before);
   const model = fuzzyModel(before, lf.view);
@@ -652,7 +843,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     .filter((r, i, a) => r.shiftedFrom !== undefined && (i === 0 || r !== a[0]))
     .map((r) => `${r.shiftedFrom} -> ${r.line}`);
 
-  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
+  if (needsApproval && !approvedBeforeRead) {
     const approved = await ctx.approve(
       { title: `Edit ${rel}`, detail: `lines ${first.line}-${last.line} (anchored)${targetNote}`, kind: "fs.write" },
       action,
@@ -660,6 +851,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     if (!approved) return fail("declined by user");
   }
 
+  let checkpointNote = "";
   const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
     let actualSha256: string;
     try {
@@ -673,22 +865,152 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
           `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
       );
     }
+    checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     const outcome = await writeAtomic(real, after, ctx, real, wsBinding);
     if (isRefused(outcome)) return fail(outcome.refusal);
     if ((await readFile(real)).toString("utf8") !== after) {
       return fail(`verification failed: ${rel} does not match the intended content`);
     }
-    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
+    await recordChangeGuarded(ctx.sessionId, { path: real, workspace: ctx.workspace, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
     return undefined;
-  }).catch((e: unknown) => fail(msg(e)));
+  }).catch((e: unknown) => {
+    tunnelPermissionError(e);
+    return fail(msg(e));
+  });
   if (locked !== undefined) return locked;
 
   noteRead(ctx, real);
   const suffix = shifts.length > 0 ? ` (anchors shifted: ${shifts.join(", ")})` : "";
+  const lspNotice = await collectPostEditLspDiagnostics(ctx, real, rel);
   const lintFixNote = lintFixCommitSuffix(ctx, rel);
   return {
     ok: true,
-    output: `${checkpointNote}Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}${lintFixNote}`,
+    output: `${checkpointNote}Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}${lspNotice}${lintFixNote}`,
+  };
+}
+
+/**
+ * Verified-selection mode (Wave 2 / Track 2B): applies one or more
+ * `{ start_line, end_line, first_line, last_line, new_text }` edits atomically
+ * with fail-closed boundary quote verification, ±3 line shift absorption, and
+ * `@@refA-B@@` copy marker expansion. Invoked when `args.edits` is supplied
+ * without modifying `editTool`'s committed JSON schema snapshot.
+ */
+async function executeVerifiedSelection(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  if (typeof args.path !== "string" || args.path === "") return fail("path is required");
+  if (args.old !== undefined) return fail("edits and old are mutually exclusive: use one addressing mode");
+  if (args.start_anchor !== undefined) return fail("edits and start_anchor are mutually exclusive: use one addressing mode");
+  if (args.all !== undefined) return fail("all does not apply to verified-selection edits");
+  if (!Array.isArray(args.edits) || args.edits.length === 0) {
+    return fail("edits must be a non-empty array of verified-selection edits");
+  }
+  const edits: VerifiedSelectionEdit[] = [];
+  for (let i = 0; i < args.edits.length; i += 1) {
+    const item = args.edits[i];
+    if (!isVerifiedSelectionEdit(item)) {
+      return fail(`edits[${i}] must specify integer start_line, end_line and string first_line, last_line, new_text`);
+    }
+    edits.push(item);
+  }
+
+  const target = resolveRealTarget(ctx.cwd, args.path, ctx.workspace);
+  const resolved = target.requested;
+  const real = target.real;
+  const rel = relPath(ctx.cwd, resolved);
+  const targetNote = real === resolved ? "" : `; resolves to ${real}`;
+
+  const action: GuardAction = { kind: "fs.write", target: real };
+  const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+  if (isWorkspaceBindingError(wsBindingCap)) return fail(wsBindingCap.error);
+  const wsBinding = wsBindingCap;
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+  }
+
+  const needsApproval = decision.decision === "ask" && !guardEffectivelyAllows(decision);
+  let approvedBeforeRead = false;
+  if (needsApproval && !target.inside) {
+    const approved = await ctx.approve(
+      { title: `Edit ${rel}`, detail: `verified-selection (${edits.length} edit(s))${targetNote}`, kind: "fs.write" },
+      action,
+    );
+    if (!approved) return fail("declined by user");
+    approvedBeforeRead = true;
+  }
+
+  let before: string;
+  let preimageSha256: string;
+  try {
+    const buf = await readFile(real);
+    if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
+    before = buf.toString("utf8");
+    preimageSha256 = sha256Hex(before);
+  } catch {
+    return fail(`file not found: ${rel}`);
+  }
+
+  const applied = applyVerifiedSelectionEdits(before, edits);
+  if (applied.ok === false) {
+    return fail(`${applied.error} (${rel}; no edit applied)`);
+  }
+  const after = applied.content;
+
+  if (needsApproval && !approvedBeforeRead) {
+    const approved = await ctx.approve(
+      { title: `Edit ${rel}`, detail: `${applied.applied.length} verified-selection edit(s)${targetNote}`, kind: "fs.write" },
+      action,
+    );
+    if (!approved) return fail("declined by user");
+  }
+
+  let checkpointNote = "";
+  const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
+    let actualSha256: string;
+    try {
+      actualSha256 = sha256Hex((await readFile(real)).toString("utf8"));
+    } catch {
+      actualSha256 = "unreadable";
+    }
+    if (actualSha256 !== preimageSha256) {
+      return fail(
+        `HZ_PRECONDITION_FAILED: edit refused: preimage changed: ${rel} ` +
+          `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
+      );
+    }
+    checkpointNote = dirtyCheckpointPrefix(ctx, rel);
+    const outcome = await writeAtomic(real, after, ctx, real, wsBinding);
+    if (isRefused(outcome)) return fail(outcome.refusal);
+    if ((await readFile(real)).toString("utf8") !== after) {
+      return fail(`verification failed: ${rel} does not match the intended content`);
+    }
+    await recordChangeGuarded(ctx.sessionId, {
+      path: real,
+      workspace: ctx.workspace,
+      rel,
+      before,
+      afterSha256: sha256Hex(after),
+      at: Date.now(),
+      tool: "edit",
+    });
+    return undefined;
+  }).catch((e: unknown) => {
+    tunnelPermissionError(e);
+    return fail(msg(e));
+  });
+  if (locked !== undefined) return locked;
+
+  noteRead(ctx, real);
+  reflections.delete(reflectionKey(ctx, real));
+  const shifted = applied.applied
+    .filter((a) => a.shift !== 0)
+    .map((a) => `${a.originalStartLine}-${a.originalEndLine} -> ${a.resolvedStartLine}-${a.resolvedEndLine}`);
+  const shiftSuffix = shifted.length > 0 ? ` (shifted: ${shifted.join(", ")})` : "";
+  const lspNotice = await collectPostEditLspDiagnostics(ctx, real, rel);
+  const lintFixNote = lintFixCommitSuffix(ctx, rel);
+  return {
+    ok: true,
+    output: `${checkpointNote}Applied ${applied.applied.length} verified-selection edit(s) in ${rel}${shiftSuffix}${lspNotice}${lintFixNote}`,
   };
 }
 
@@ -719,6 +1041,7 @@ export const editTool: Tool = {
     try {
       // B-2: record the edit target as "files in context".
       noteToolContext(ctx.sessionId, args);
+      if (args.edits !== undefined) return await executeVerifiedSelection(args, ctx);
       if (args.start_anchor !== undefined) return await executeAnchored(args, ctx);
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
       if (typeof args.old !== "string") return fail("old is required");
@@ -745,6 +1068,18 @@ export const editTool: Tool = {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
 
+      const needsApproval = decision.decision === "ask" && !guardEffectivelyAllows(decision);
+      // Do not leak outside-workspace file existence/contents via readFile before user approval.
+      let approvedBeforeRead = false;
+      if (needsApproval && !target.inside) {
+        const approved = await ctx.approve(
+          { title: `Edit ${rel}`, detail: `edit outside workspace${targetNote}`, kind: "fs.write" },
+          action,
+        );
+        if (!approved) return fail("declined by user");
+        approvedBeforeRead = true;
+      }
+
       let before: string;
       let preimageSha256: string;
       try {
@@ -755,7 +1090,6 @@ export const editTool: Tool = {
       } catch {
         return fail(`file not found: ${rel}`);
       }
-      const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
 
       // CRLF safety: match against the LF VIEW the model sees. The old/new
       // strings are normalised to LF too (models emit LF; this is defensive
@@ -791,7 +1125,7 @@ export const editTool: Tool = {
         // reflection slot is unspent, and only ever to a UNIQUE match.
         const key = reflectionKey(ctx, real);
         const attempts = (reflections.get(key) ?? 0) + 1;
-        reflections.set(key, attempts);
+        setReflection(key, attempts);
         const fuzzyDisabled = attempts > MAX_EDIT_REFLECTIONS;
 
         // The fuzzy rungs match on the LF view's lines, carried by a model that
@@ -833,7 +1167,7 @@ export const editTool: Tool = {
 
       const replacements = matches > 0 ? (all ? matches : 1) : 1;
 
-      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
+      if (needsApproval && !approvedBeforeRead) {
         const approved = await ctx.approve(
           {
             title: `Edit ${rel}`,
@@ -848,6 +1182,7 @@ export const editTool: Tool = {
       // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
       // section per target file, taken AFTER approval. A second process that changed
       // the file first is caught by the sha256 check below, never clobbered.
+      let checkpointNote = "";
       const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
         // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
         // the write — a file changed during the guard/approval window is a
@@ -866,6 +1201,8 @@ export const editTool: Tool = {
           );
         }
 
+        checkpointNote = dirtyCheckpointPrefix(ctx, rel);
+
         // The effect: an atomic replacement (temp file + fsync + rename, ./atomic-write.ts)
         // through a descriptor re-verified against the kernel state directory before a
         // byte is written (same check, and same symlink policy, as `write` — see the
@@ -876,8 +1213,10 @@ export const editTool: Tool = {
         const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
+        // D-4: journal the real target (see write.ts).
         await recordChangeGuarded(ctx.sessionId, {
-          path: resolved,
+          path: real,
+          workspace: ctx.workspace,
           rel,
           before,
           afterSha256: sha256Hex(after),
@@ -886,7 +1225,10 @@ export const editTool: Tool = {
         });
 
         return undefined;
-      }).catch((e: unknown) => fail(msg(e)));
+      }).catch((e: unknown) => {
+        tunnelPermissionError(e);
+        return fail(msg(e));
+      });
       if (locked !== undefined) return locked;
 
       // The session has now read this file (twice: the preimage and the
@@ -895,12 +1237,14 @@ export const editTool: Tool = {
 
       reflections.delete(reflectionKey(ctx, real));
       const suffix = rung === "exact" ? "" : ` (matched via ${rung})`;
+      const lspNotice = await collectPostEditLspDiagnostics(ctx, real, rel);
       const lintFixNote = lintFixCommitSuffix(ctx, rel);
       return {
         ok: true,
-        output: `${checkpointNote}Replaced ${replacements} occurrence(s) in ${rel}${suffix}${lintFixNote}`,
+        output: `${checkpointNote}Replaced ${replacements} occurrence(s) in ${rel}${suffix}${lspNotice}${lintFixNote}`,
       };
     } catch (e) {
+      tunnelPermissionError(e);
       return fail(msg(e));
     }
   },

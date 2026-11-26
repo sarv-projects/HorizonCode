@@ -69,3 +69,28 @@ export function reconcileBlockScrollbackNoticeKey(view: EffectReconcileBlockLatc
   const latchBit = view.latched ? "1" : "0";
   return `${latchBit}\0${view.mode}\0${view.reason ?? ""}\0${paths.join("\0")}\0${pending}`;
 }
+
+/**
+ * High-visibility persistent warning banner row for fullscreen alt-screen TUI
+ * whenever `unknownCount > 0` or an R170 reconcile-block latch is active (Track A4).
+ */
+export function formatFullscreenLatchBanner(
+  unknownCount: number,
+  reconcileBlock?: EffectReconcileBlockLatchView,
+): string | undefined {
+  const count = Math.max(0, Math.floor(unknownCount || 0));
+  const blockActive =
+    reconcileBlock !== undefined &&
+    reconcileBlock.mode !== "off" &&
+    (reconcileBlock.latched || Boolean(reconcileBlock.observePendingActive));
+  if (count === 0 && !blockActive) return undefined;
+  if (count > 0) {
+    return `\u26a0 R170 LATCH ACTIVE (${count} UNKNOWN) \u2014 run /reconcile to inspect or recover`;
+  }
+  const scope = reconcileBlock?.latched
+    ? reconcileBlock.mode === "resource"
+      ? "resource block"
+      : "mutate block"
+    : "observe pending";
+  return `\u26a0 R170 LATCH ACTIVE (${scope}) \u2014 run /reconcile to inspect or recover`;
+}
